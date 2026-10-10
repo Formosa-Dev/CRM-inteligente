@@ -1,6 +1,6 @@
 import { db } from "@/db";
-import { products, conversations, leads, agentConfig, orders, chatMessages } from "@/db/schema";
-import { sql, gte, desc, count, eq, lt, and, or, isNull } from "drizzle-orm";
+import { products, leads, orders } from "@/db/schema";
+import { sql, gte, desc, eq, lt, and, or } from "drizzle-orm";
 import { resolveClientNamesBatch } from "@/lib/lead-utils";
 
 import { DashboardClient } from "./dashboard-client";

@@ -96,11 +96,9 @@ export async function POST(
 
     let text = message.text?.trim() || "";
     let contentAttributes: MediaAttachment[] | undefined;
-    let isMedia = false;
 
     // ── Voice / Audio → transcribe with Whisper ──
     if (!text && (message.voice || message.audio)) {
-      isMedia = true;
       const vFile = message.voice || message.audio;
       if (vFile) {
         try {
@@ -126,7 +124,6 @@ export async function POST(
 
     // ── Photo → Vision analysis ──
     if (!text && message.photo && message.photo.length > 0) {
-      isMedia = true;
       const photo = message.photo[message.photo.length - 1];
       const caption = message.caption?.trim() || "";
       try {
@@ -146,7 +143,6 @@ export async function POST(
 
     // ── Document / Video ──
     if (!text && (message.document || message.video)) {
-      isMedia = true;
       const doc = message.document;
       const vid = message.video;
       const mediaItem = (doc || vid)!;

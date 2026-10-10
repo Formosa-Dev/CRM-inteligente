@@ -84,7 +84,6 @@ function ActionCardComponent({
   const styles = CARD_STYLES[card.color] ?? CARD_STYLES.red;
 
   async function handleAction(itemId: string | number, action: string, item: (typeof card.items)[0]) {
-    const key = `${itemId}-${action}`;
     setLoadingItems((prev) => ({
       ...prev,
       [itemId]: { ...(prev[itemId] || {}), [action]: true },

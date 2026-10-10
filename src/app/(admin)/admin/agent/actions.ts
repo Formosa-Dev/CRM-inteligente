@@ -5,7 +5,6 @@ import { db } from "@/db";
 import { agentConfig } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { auth } from "@/auth";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { encrypt } from "@/lib/encryption";
 import { invalidateAIConfigCache } from "@/lib/ai/config";

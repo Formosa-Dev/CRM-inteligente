@@ -165,7 +165,7 @@ export default function AgentConfigForm({
     { zona: "norte", disponible: true, tiempo: "25-35 min", costo: 0 },
     { zona: "sur", disponible: true, tiempo: "30-40 min", costo: 0 },
   ]);
-  const [newZona, setNewZona] = useState({ zona: "", tiempo: "", costo: 0 });
+
   const [isCooking, setIsCooking] = useState(config.isCooking ?? true);
   const [hamburguesasSinStock, setHamburguesasSinStock] = useState(config.hamburguesasSinStock ?? false);
   const [stockPanDocenas, setStockPanDocenas] = useState(config.stockPanDocenas ?? 0);
@@ -1270,7 +1270,7 @@ export default function AgentConfigForm({
                 <div className="flex flex-col">
                   <Label htmlFor="isCooking">Cocina operativa</Label>
                   <p className="text-xs text-muted-foreground">
-                    Si está desactivado, el agente responde "Hoy no :/" y no toma pedidos
+                    Si está desactivado, el agente responde &quot;Hoy no :/&quot; y no toma pedidos
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -1323,7 +1323,7 @@ export default function AgentConfigForm({
                   <span className="text-sm text-muted-foreground">docenas disponibles</span>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Si el cliente pide más de esto, el agente dice "Tengo X doc nomás amigo"
+                  Si el cliente pide más de esto, el agente dice &quot;Tengo X doc nomás amigo&quot;
                 </p>
               </div>
 
@@ -1367,7 +1367,7 @@ export default function AgentConfigForm({
                   defaultValue={config.tiempoEspera ?? ""}
                 />
                 <p className="text-xs text-muted-foreground">
-                  El agente usa este tiempo al confirmar pedidos. Ej: "En 30-40 min lo tenes amigo"
+                  El agente usa este tiempo al confirmar pedidos. Ej: &quot;En 30-40 min lo tenes amigo&quot;
                 </p>
               </div>
 
@@ -1384,7 +1384,7 @@ export default function AgentConfigForm({
                   className="resize-none"
                 />
                 <p className="text-xs text-muted-foreground">
-                  El agente usa este texto + la hora actual para saber cuándo los productos están disponibles. Ej: Cliente pregunta "¿A qué hora tienen pan?" → el agente responde según esto.
+                  El agente usa este texto + la hora actual para saber cuándo los productos están disponibles. Ej: Cliente pregunta &quot;¿A qué hora tienen pan?&quot; → el agente responde según esto.
                 </p>
               </div>
             </CardContent>
@@ -1410,6 +1410,7 @@ export default function AgentConfigForm({
               <div className="flex items-start gap-4">
                 <div className="w-24 h-24 rounded-xl overflow-hidden bg-muted/40 border border-border flex items-center justify-center shrink-0">
                   {menuImageHamburguesas ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- preview de imagen subida (blob/data URL); next/image no optimiza fuentes locales arbitrarias
                     <img src={menuImageHamburguesas} alt="Menu hamburguesas" className="w-full h-full object-cover" />
                   ) : (
                     <span className="text-3xl text-foreground/20">🍔</span>
@@ -1453,6 +1454,7 @@ export default function AgentConfigForm({
               <div className="flex items-start gap-4">
                 <div className="w-24 h-24 rounded-xl overflow-hidden bg-muted/40 border border-border flex items-center justify-center shrink-0">
                   {menuImagePan ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- preview de imagen subida (blob/data URL); next/image no optimiza fuentes locales arbitrarias
                     <img src={menuImagePan} alt="Menu pan" className="w-full h-full object-cover" />
                   ) : (
                     <span className="text-3xl text-foreground/20">🍞</span>
@@ -1547,7 +1549,7 @@ export default function AgentConfigForm({
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Antes de esta hora, el agente dice: "En este turno gestionamos los pedidos mediante Uber"
+                  Antes de esta hora, el agente dice: &quot;En este turno gestionamos los pedidos mediante Uber&quot;
                 </p>
               </div>
 

@@ -3,7 +3,6 @@
 import { db } from "@/db";
 import { orders, leads } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { auth } from "@/auth";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { revalidatePath } from "next/cache";
 import { notifyNewOrder } from "@/lib/telegram/notifier";

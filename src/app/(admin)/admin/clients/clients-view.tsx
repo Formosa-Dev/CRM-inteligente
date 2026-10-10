@@ -9,25 +9,8 @@ import type { ClientSummary } from "./actions";
 import { updateClient } from "./actions";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Edit, X, Save } from "lucide-react";
+import { X, Save } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-
-function formatDate(d: Date | null): string {
-  if (!d) return "—";
-  const date = new Date(d);
-  const now = new Date();
-  const diff = now.getTime() - date.getTime();
-  const days = Math.floor(diff / 86400000);
-
-  if (days === 0) return "Hoy";
-  if (days === 1) return "Ayer";
-  if (days < 7) return `Hace ${days} días`;
-
-  return date.toLocaleDateString("es-AR", {
-    day: "2-digit",
-    month: "2-digit",
-  });
-}
 
 function leadStatusBadge(status: string | null): { label: string; cls: string } | null {
   if (!status) return null;

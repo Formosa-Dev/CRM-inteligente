@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { checkRateLimit } from "@/lib/infra/rate-limit";
-import { eq, and, gte, lte, desc, or, ilike, sql } from "drizzle-orm";
+import { eq, and, gte, lte, desc, or, ilike } from "drizzle-orm";
 import { db } from "@/db";
 import { leads } from "@/db/schema";
 import { extractRefCode } from "@/lib/attribution";

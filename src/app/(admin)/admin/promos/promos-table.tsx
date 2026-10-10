@@ -95,6 +95,7 @@ function PromoForm({
             {uploading && <p className="text-xs text-gold-bright mt-1">Subiendo...</p>}
             {imageUrl && (
               <div className="mt-2 flex items-center gap-2">
+                {/* eslint-disable-next-line @next/next/no-img-element -- preview de imagen subida (blob/data URL); next/image no optimiza fuentes locales arbitrarias */}
                 <img src={imageUrl} alt="Preview" className="w-16 h-16 object-cover rounded" />
                 <span className="text-[10px] text-foreground/30 truncate">{imageUrl}</span>
               </div>
@@ -169,6 +170,7 @@ export function PromosTable({ promos }: { promos: PromoRow[] }) {
               {p.description && <p className="text-xs text-foreground/50">{p.description}</p>}
               <div className="flex items-center justify-between">
                 {p.customPrice && <span className="text-sm font-mono text-gold-bright">${Number(p.customPrice).toLocaleString("es-AR")}</span>}
+                {/* eslint-disable-next-line @next/next/no-img-element -- thumbnail de URL externa arbitraria; convertir a next/image exige remotePatterns y cambia el layout */}
                 {p.imageUrl && <img src={p.imageUrl} className="w-10 h-10 object-cover rounded" alt="" />}
               </div>
               <div className="flex gap-2 justify-end">

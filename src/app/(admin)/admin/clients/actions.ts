@@ -2,10 +2,10 @@
 
 import { db } from "@/db";
 import { orders, leads } from "@/db/schema";
-import { desc, count, sql, and, or, ilike, eq } from "drizzle-orm";
+import { desc, count, sql, eq } from "drizzle-orm";
 import { auth } from "@/auth";
 import { requireAdmin } from "@/lib/auth/require-admin";
-import { revalidatePath, revalidateTag } from "next/cache";
+import { revalidatePath } from "next/cache";
 import { normalizePhone } from "@/lib/phone-utils";
 
 const PAGE_SIZE = 30;
@@ -176,7 +176,7 @@ export async function updateClient(
     revalidatePath("/admin/conversations/[id]", "page");
 
     return { success: true };
-  } catch (e) {
+  } catch {
     return { success: false, error: "Error al actualizar" };
   }
 }
@@ -209,7 +209,7 @@ export async function deleteLead(
     });
 
     return { success: true };
-  } catch (e) {
+  } catch {
     return { success: false, error: "Error al eliminar" };
   }
 }

@@ -8,11 +8,10 @@ import {
   isMessageDuplicate,
   getConversationMessages,
   notifyCustomerDeliveryArrived,
-  forwardLocationToDelivery,
   type MediaAttachment,
 } from "@/lib/channels/router";
 import { captureLeadIfNew } from "@/lib/whatsapp/lead-capture";
-import { runWhatsAppAgent, resolveAgentRouting, type PendingMedia } from "@/lib/whatsapp/agent";
+import { runWhatsAppAgent, resolveAgentRouting } from "@/lib/whatsapp/agent";
 import { toSessionContext, type RoutingDecision } from "@/lib/whatsapp/session-policy";
 import { resolveHandoffTransport } from "@/lib/whatsapp/human-handoff";
 import { sendEscalationEmail } from "@/lib/whatsapp/tools/escalation-email";
@@ -120,9 +119,6 @@ async function handleEcho(
       console.warn("[webhook:echo] Missing phone numbers in echo payload");
       return NextResponse.json({ ok: true }, { status: 200 });
     }
-
-    // Normalizar teléfono para operaciones DB (findOrCreateConversation normaliza internamente)
-    const phone = normalizePhone(customerPhone);
 
     // 3. Extraer el contenido del mensaje
     const msgType = (msg.type as string) || "text";
@@ -273,13 +269,13 @@ async function handleEcho(
                           .limit(1);
 
                         if (stored?.contentAttributes) {
-                          const attrs = stored.contentAttributes as any[];
+                          const attrs = stored.contentAttributes;
                           if (attrs.length > 0) attrs[0].transcription = transcription;
                           await db
                             .update(cmTable)
                             .set({
                               content: `[Audio]: ${transcription}`,
-                              contentAttributes: attrs as any,
+                              contentAttributes: attrs,
                             })
                             .where(eq(cmTable.id, storedMsgId));
                         }

@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 
     // Filter by category (any valid category)
     if (category) {
-      conditions.push(eq(products.category, category as any));
+      conditions.push(eq(products.category, category as (typeof products.$inferSelect)["category"]));
     }
 
     const items = await db
