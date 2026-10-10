@@ -1,9 +1,8 @@
 import { db } from "@/db";
 import { products } from "@/db/schema";
 import { eq, and, asc, isNotNull } from "drizzle-orm";
-import { agentConfig } from "@/db/schema";
-import { getArgentinaMinutes, getArgentinaDayIndex, getArgentinaHour, getArgentinaDayName } from "@/lib/argentina-time";
-import { getStatusSemantic, isActiveStatus } from "@/lib/whatsapp/status-utils";
+import { getArgentinaMinutes, getArgentinaDayIndex, getArgentinaHour } from "@/lib/argentina-time";
+import { getStatusSemantic } from "@/lib/whatsapp/status-utils";
 import { assertSessionContext, type SessionContext } from "./session-policy";
 import { getBusinessInfo } from "@/lib/business";
 
@@ -80,7 +79,7 @@ export async function getCorePrompt(): Promise<string> {
     if (config?.whatsappSystemPrompt && config.whatsappSystemPrompt.trim().length > 0) {
       customSystemPrompt = config.whatsappSystemPrompt.trim();
     }
-  } catch (err) {
+  } catch {
     console.warn("[prompt-builder] agent_config table not available");
   }
 
@@ -166,7 +165,7 @@ export async function getMenuData(): Promise<string> {
 }
 
 export async function getBusinessHours(): Promise<string> {
-  let horas = `HORARIOS: Usa getBusinessHours para consultar los horarios actualizados.`;
+  const horas = `HORARIOS: Usa getBusinessHours para consultar los horarios actualizados.`;
   let zonas = "";
   let statusLine = "";
 
@@ -192,7 +191,6 @@ export async function getBusinessHours(): Promise<string> {
       // Esto va PRIMERO porque aplica incluso si el día actual está "cerrado".
       // Ej: Sábado 08:00→Domingo 04:00. A la 1 AM del Domingo → Sábado sigue abierto.
       let isOpenNow = false;
-      let activeDay = today;
       let activeDayName = todayName;
       let activeOpenTime = today?.openTime;
       let activeCloseTime = today?.closeTime;
@@ -206,7 +204,6 @@ export async function getBusinessHours(): Promise<string> {
         if (yCloseMin < yOpenMin && nowMin < yCloseMin) {
           // El día anterior tenía turno nocturno que cubre esta madrugada
           isOpenNow = true;
-          activeDay = yesterday;
           activeDayName = yesterdayName;
           activeOpenTime = yesterday.openTime;
           activeCloseTime = yesterday.closeTime;
@@ -226,7 +223,6 @@ export async function getBusinessHours(): Promise<string> {
             isOpenNow = nowMin < closeMin;
           }
           if (isOpenNow) {
-            activeDay = today;
             activeDayName = todayName;
             activeOpenTime = today.openTime;
             activeCloseTime = today.closeTime;
@@ -254,7 +250,7 @@ export async function getBusinessHours(): Promise<string> {
       } else if (today && !today.open) {
         // Día calendario cerrado (ej: Domingo)
         const todayIndex = dayNames.indexOf(todayName);
-        const nextOpen = days.find((d, i) => {
+        const nextOpen = days.find((d) => {
           const dayIndex = dayNames.indexOf(d.day);
           return d.open && dayIndex > todayIndex;
         }) || openDays[0];
@@ -338,7 +334,7 @@ El pan mayorista (B2B) SÍ está disponible, vendé normal.`);
       const dayNames = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
       const nowHour = getArgentinaHour();
       const todayName = dayNames[getArgentinaDayIndex()];
-      const today = days.find((h: any) => h.day === todayName);
+      const today = days.find((h) => h.day === todayName);
 
       if (today?.open) {
         const openHour = parseInt(today.openTime.split(":")[0], 10);
@@ -402,9 +398,9 @@ El pan mayorista (B2B) SÍ está disponible y es lo que se vende ahora.`);
       // Obtener closeTime de business_hours para detectar si cruza medianoche
       const days = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
       const todayName = days[getArgentinaDayIndex()];
-      let businessHoursData: any[] | null = null;
+      let businessHoursData: { day?: string; openTime?: string; closeTime?: string }[] | null = null;
       try {
-        businessHoursData = config.businessHours as any[] | null;
+        businessHoursData = config.businessHours as { day?: string; openTime?: string; closeTime?: string }[] | null;
       } catch {
         // ignorar
       }
@@ -412,7 +408,7 @@ El pan mayorista (B2B) SÍ está disponible y es lo que se vende ahora.`);
       let closeHourNum = 4; // fallback default
       let openHourNum = 6;
       if (businessHoursData) {
-        const today = businessHoursData.find((h: any) => h.day === todayName);
+        const today = businessHoursData.find((h) => h.day === todayName);
         if (today) {
           closeHourNum = parseInt(String(today.closeTime).split(":")[0], 10);
           openHourNum = parseInt(String(today.openTime).split(":")[0], 10);
@@ -480,7 +476,7 @@ El pan mayorista (B2B) SÍ está disponible y es lo que se vende ahora.`);
 // Layer 4: Context is injected per conversation in agent.ts
 
 // Build complete system prompt
-export async function buildSystemPrompt(conversationId?: number, customerContext?: {
+export interface CustomerContext {
   name?: string;
   phone?: string;
   address?: string | null;
@@ -488,13 +484,15 @@ export async function buildSystemPrompt(conversationId?: number, customerContext
   detectedLine?: "b2c" | "b2b";
   notes?: string | null;
   preferences?: string[];
-  orderHistory?: any[];
-  pendingOrder?: { id: number; items: any; orderType: string | null; address: string | null; paymentStatus?: string | null };
-  lastOrder?: { id: number; status: string | null; paymentStatus: string | null; orderType: string | null; items: any; address?: string | null; statusSemantic?: string };
+  orderHistory?: { id?: number; status?: string | null; items?: unknown }[];
+  pendingOrder?: { id: number; items?: unknown; orderType: string | null; address: string | null; paymentStatus?: string | null };
+  lastOrder?: { id: number; status: string | null; paymentStatus: string | null; orderType: string | null; items?: unknown; address?: string | null; statusSemantic?: string };
   currentCart?: { productName: string; quantity: number; variant?: string | null; notes?: string | null }[];
   currentHour?: number;
   previousContext?: string;
-}, antiLoopDirective?: string, nonCommercialDirective?: string, sessionFacts?: SessionContext): Promise<string> {
+}
+
+export async function buildSystemPrompt(conversationId?: number, customerContext?: CustomerContext, antiLoopDirective?: string, nonCommercialDirective?: string, sessionFacts?: SessionContext): Promise<string> {
   const layer1 = await getCorePrompt();
   const layer2 = await getMenuData();
   const layer3 = await getBusinessHours();
@@ -534,19 +532,19 @@ export async function buildSystemPrompt(conversationId?: number, customerContext
     if (customerContext.orderHistory && customerContext.orderHistory.length > 0) {
       context += `\n📦 PEDIDOS ANTERIORES:`;
       for (const order of customerContext.orderHistory.slice(-3)) {
-        const items = Array.isArray(order.items) ? order.items.map((i: any) => `${i.quantity || 1}x ${i.name || "?"}`).join(", ") : "ver detalle";
+        const items = Array.isArray(order.items) ? order.items.map((i: { quantity?: number; name?: string }) => `${i.quantity || 1}x ${i.name || "?"}`).join(", ") : "ver detalle";
         context += `\n• #${order.id} (${order.status || "?"}): ${items}`;
       }
     }
     // 🟢 PEDIDO ACTUAL: inyectado en CADA turno para que el agente NO lo olvide
     if (customerContext.pendingOrder) {
       const p = customerContext.pendingOrder;
-      const items = Array.isArray(p.items) ? p.items.map((i: any) => `${i.quantity || 1}x ${i.name || "?"}`).join(", ") : "ver detalle";
+      const items = Array.isArray(p.items) ? p.items.map((i: { quantity?: number; name?: string }) => `${i.quantity || 1}x ${i.name || "?"}`).join(", ") : "ver detalle";
       context += `\n\n🟢 PEDIDO ACTIVO (PENDIENTE #${p.id}): ${items} | Tipo: ${p.orderType || "?"}${p.address ? ` | Direccion: ${p.address}` : ""}${p.paymentStatus ? ` | Pago: ${p.paymentStatus}` : ""}`;
       context += `\nNota: El cliente tiene un pedido ACTIVO (pending). Si pide algo nuevo, createOrder el actual primero.`;
     } else if (customerContext.lastOrder) {
       const lo = customerContext.lastOrder;
-      const items = Array.isArray(lo.items) ? lo.items.map((i: any) => `${i.quantity || 1}x ${i.name || "?"}`).join(", ") : "ver detalle";
+      const items = Array.isArray(lo.items) ? lo.items.map((i: { quantity?: number; name?: string }) => `${i.quantity || 1}x ${i.name || "?"}`).join(", ") : "ver detalle";
       const statusDesc = lo.statusSemantic || getStatusSemantic(lo.status || "", lo.orderType, lo.address, lo.id);
       context += `\n\n📦 ÚLTIMO PEDIDO (#${lo.id}): ${items} | Estado: ${lo.status || "?"} | Pago: ${lo.paymentStatus || "?"}`;
 

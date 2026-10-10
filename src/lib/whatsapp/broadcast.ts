@@ -1,6 +1,6 @@
 import { db } from "@/db";
-import { leads, conversations, agentConfig } from "@/db/schema";
-import { eq, and, gt, or, ilike, desc, gte, isNotNull } from "drizzle-orm";
+import { leads, conversations } from "@/db/schema";
+import { eq, and, or, ilike, desc, gte, isNotNull } from "drizzle-orm";
 import { sendText, sendImage } from "@/lib/ycloud";
 import { findOrCreateConversation } from "@/lib/channels/router";
 import { insertMessage } from "@/lib/channels/router";
@@ -167,7 +167,7 @@ export async function broadcastText(
   for (let i = 0; i < recipients.length; i++) {
     const r = recipients[i];
     const phone = r.phone.startsWith("+") ? r.phone : `+${r.phone}`;
-    let result: BroadcastResult = { phone: r.phone, name: r.name, success: false };
+    const result: BroadcastResult = { phone: r.phone, name: r.name, success: false };
 
     try {
       // 1. Enviar WhatsApp

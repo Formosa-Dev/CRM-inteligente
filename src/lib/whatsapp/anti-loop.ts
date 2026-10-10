@@ -108,7 +108,7 @@ export async function analyzeConversationState(
   try {
     await db
       .update(conversations)
-      .set({ conversationMetadata: newMeta as any })
+      .set({ conversationMetadata: newMeta as (typeof conversations.$inferSelect)["conversationMetadata"] })
       .where(eq(conversations.id, conversationId));
   } catch {
     // non-fatal

@@ -38,7 +38,7 @@ export function createSendDocumentTool(_conversationId: number, _customerPhone: 
       caption: z.string().optional().describe("Texto opcional que acompaña el documento"),
       fileName: z.string().optional().describe("Nombre del archivo que verá el cliente (ej: menu-muzzarella.pdf)"),
     }),
-    execute: async ({ documentUrl, caption, fileName }) => {
+    execute: async ({ documentUrl, caption, fileName: _fileName }) => {
       return JSON.stringify({
         _media: true,
         type: "document",

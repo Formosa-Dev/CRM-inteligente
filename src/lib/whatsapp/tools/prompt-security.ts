@@ -44,7 +44,7 @@ export interface InjectionResult {
 export function sanitizeInput(message: string): string {
   // Ya no removemos backticks (los clientes los usan naturalmente)
   // Solo removemos caracteres de control obvios
-  let sanitized = message
+  const sanitized = message
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "") // solo chars de control
     .trim();
   

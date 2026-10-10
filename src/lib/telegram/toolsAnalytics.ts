@@ -1,8 +1,8 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { db } from "@/db";
-import { orders, leads } from "@/db/schema";
-import { and, gte, lte, desc, eq, ne } from "drizzle-orm";
+import { orders } from "@/db/schema";
+import { and, gte, lte, eq, ne } from "drizzle-orm";
 import { resolveClientNamesBatch } from "@/lib/lead-utils";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

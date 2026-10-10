@@ -1,4 +1,4 @@
-import { sql, eq, and, gte, desc, count } from "drizzle-orm";
+import { sql, gte, desc, count } from "drizzle-orm";
 import { db } from "@/db";
 import { leads } from "@/db/schema";
 

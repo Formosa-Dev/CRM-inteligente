@@ -17,7 +17,7 @@ export async function notifyNewOrder(order: OrderNotification): Promise<void> {
   if (!config.enabled || config.allowedChatIds.length === 0) return;
 
   const items = Array.isArray(order.items) 
-    ? order.items.map((i: any) => `${i.quantity || 1}x ${i.name || "Item"}`).join(", ")
+    ? order.items.map((i: { quantity?: number; name?: string }) => `${i.quantity || 1}x ${i.name || "Item"}`).join(", ")
     : "Ver detalle";
 
   const resolvedName = await resolveClientName(order.phoneNumber || "", order.customerName || "Desconocido");

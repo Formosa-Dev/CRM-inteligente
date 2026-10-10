@@ -1,6 +1,6 @@
 import type { Variants } from "framer-motion";
 
-export function reducedMotionVariant(original: Variants): Variants {
+export function reducedMotionVariant(_original: Variants): Variants {
   return {
     hidden: { opacity: 0 },
     visible: { opacity: 1, transition: { duration: 0.01 } },

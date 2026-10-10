@@ -19,7 +19,7 @@ function sleep(ms: number): Promise<void> {
  */
 export function splitIntoBubbles(text: string): string[] {
   // Clean up markdown artifacts + internal markers for WhatsApp
-  let cleaned = text
+  const cleaned = text
     .replace(/\[INTERNAL_[^\]]*\]/g, "")  // [INTERNAL_*] markers
     .replace(/\*\*([^*]*)\*\*/g, "$1")   // **bold** → bold (allow empty)
     .replace(/\*([^*]+)\*/g, "$1")       // *italic* → italic

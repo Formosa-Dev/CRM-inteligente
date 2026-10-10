@@ -87,7 +87,7 @@ export const checkProductStockTool = tool({
         const matching = await db
           .select({ id: products.id })
           .from(products)
-          .where(productName ? eq(products.name, productName) : undefined as any)
+          .where(eq(products.name, productName))
           .limit(1);
         if (matching.length > 0) {
           conditions.push(eq(products.id, matching[0].id));

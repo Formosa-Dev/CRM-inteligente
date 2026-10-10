@@ -2,7 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { db } from "@/db";
 import { products, promotions } from "@/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { PRODUCT_IMAGE_BY_NAME } from "@/lib/constants";
 
 function formatProductPrice(price: string | null) {

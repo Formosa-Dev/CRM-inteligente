@@ -38,7 +38,7 @@ export const getMenuTool = tool({
         .where(eq(agentConfig.id, 1))
         .limit(1);
       if (cfg?.sinStock && !category) {
-        conditions.push(eq(products.category, "pan_mayorista" as any));
+        conditions.push(eq(products.category, "pan_mayorista"));
       }
     } catch {
       // non-fatal

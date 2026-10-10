@@ -76,7 +76,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([])
 
   useEffect(() => {
-    setItems(loadCart())
+    // Async para evitar setState sincrónico en el efecto y mismatch de hidratación
+    const restore = window.setTimeout(() => setItems(loadCart()), 0)
+    return () => window.clearTimeout(restore)
   }, [])
 
   useEffect(() => {
