@@ -7,12 +7,12 @@ async function main() {
   console.log('=== ELIMINANDO TAMBIEN DIRECCIONES ===\n');
 
   // Eliminar direcciones asociadas a ese telefono
-  const addrs = await sql`DELETE FROM addresses WHERE phone = ${phone}`;
+  await sql`DELETE FROM addresses WHERE phone = ${phone}`;
   console.log('Direcciones eliminadas');
 
   // Verificar Customers (si existe tabla customers)
   try {
-    const cust = await sql`DELETE FROM customers WHERE phone = ${phone}`;
+    await sql`DELETE FROM customers WHERE phone = ${phone}`;
     console.log('Customers eliminados');
   } catch {
     console.log('No hay tabla customers, ok');
@@ -25,7 +25,7 @@ async function main() {
   console.log('\n=== VERIFICACION COMPLETA ===');
   for (const table of tables) {
     try {
-      const r = await sql(`SELECT COUNT(*)::int as c FROM ${table} WHERE phone = '${phone}' OR customer_phone = '${phone}' OR phone_number = '${phone}'`);
+      await sql(`SELECT COUNT(*)::int as c FROM ${table} WHERE phone = '${phone}' OR customer_phone = '${phone}' OR phone_number = '${phone}'`);
       // No podemos usar tagged template con table name dinamico, usamos raw
     } catch {}
   }

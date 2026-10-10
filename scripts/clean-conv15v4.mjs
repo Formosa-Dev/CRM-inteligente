@@ -7,7 +7,7 @@ async function main() {
   console.log('Antes:', antes[0].c, 'mensajes');
 
   // Borrar mensajes del 31/5 desde las 03:10 en adelante
-  const del = await sql`DELETE FROM chat_messages 
+  await sql`DELETE FROM chat_messages 
     WHERE conversation_id = 15 
     AND created_at >= '2026-05-31T03:10:00-03:00'`;
 

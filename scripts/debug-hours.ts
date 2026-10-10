@@ -1,5 +1,4 @@
 import { db } from "../src/db";
-import { agentConfig } from "../src/db/schema";
 import { eq } from "drizzle-orm";
 
 const days = ["Domingo", "Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado"];
