@@ -53,7 +53,7 @@ export function ConversationSidebar({
 
       return matchesSearch && matchesFilter;
     });
-  }, [conversations, search, filter]);
+  }, [conversations, search, filter, sellerPhones]);
 
   return (
     <div

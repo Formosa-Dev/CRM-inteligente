@@ -16,8 +16,10 @@ function Avatar({ className, ...props }: React.ComponentProps<"div">) {
 
 function AvatarImage({ className, ...props }: React.ComponentProps<"img">) {
   return (
+    // eslint-disable-next-line @next/next/no-img-element -- primitiva tipo Radix: recibe src arbitrario vía props y depende del fallback nativo de <img>
     <img
       data-slot="avatar-image"
+      alt=""
       className={cn("aspect-square h-full w-full object-cover", className)}
       {...props}
     />

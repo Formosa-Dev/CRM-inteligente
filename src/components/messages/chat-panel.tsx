@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, Phone, MoreVertical, UserCheck, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";

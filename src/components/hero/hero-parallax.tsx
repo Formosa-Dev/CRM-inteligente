@@ -1,29 +1,34 @@
 "use client";
 
-import { useState, useEffect, type ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { useScroll, useTransform, motion, type MotionValue } from "framer-motion";
 import { BackgroundCycle } from "./background-cycle";
 import { BG_IMAGES } from "@/lib/constants";
 
+function getParallaxSnapshot() {
+  return (
+    window.matchMedia("(min-width: 768px)").matches &&
+    !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+function subscribeParallax(onChange: () => void) {
+  const mq = window.matchMedia("(min-width: 768px)");
+  const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+  mq.addEventListener("change", onChange);
+  prefersReduced.addEventListener("change", onChange);
+  return () => {
+    mq.removeEventListener("change", onChange);
+    prefersReduced.removeEventListener("change", onChange);
+  };
+}
+
 export function HeroParallax({ children }: { children: ReactNode }) {
-  const [parallaxEnabled, setParallaxEnabled] = useState(false);
-
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 768px)");
-    const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)");
-
-    setParallaxEnabled(mq.matches && !prefersReduced.matches);
-
-    const update = () =>
-      setParallaxEnabled(mq.matches && !prefersReduced.matches);
-
-    mq.addEventListener("change", update);
-    prefersReduced.addEventListener("change", update);
-    return () => {
-      mq.removeEventListener("change", update);
-      prefersReduced.removeEventListener("change", update);
-    };
-  }, []);
+  const parallaxEnabled = useSyncExternalStore(
+    subscribeParallax,
+    getParallaxSnapshot,
+    () => false,
+  );
 
   const { scrollY } = useScroll();
   const yRaw = useTransform(scrollY, [0, 500], [0, 30]);
