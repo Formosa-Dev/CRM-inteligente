@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useSearchParams } from "next/navigation";
 import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
 import { ArrowLeft, ArrowUpRight, Minus, Plus, Search, ShoppingBag } from "lucide-react";
 import { CatalogImage } from "@/components/products/catalog-image";
@@ -9,18 +10,35 @@ import { CatalogDialog } from "@/components/storefront/catalog-dialog";
 import { EditorialHeading, editorialEase, editorialSpring, useEditorialMotion } from "@/components/storefront/motion";
 import { CheckoutForm } from "@/components/cart/checkout-form";
 import { getCatalogProductImage } from "@/lib/catalog-images";
+import { cartKey, useCart } from "@/lib/cart/cart-context";
 import { useBusiness } from "@/lib/hooks/use-business";
 
 type Product = { id: number; name: string; price: string | null; promoPrice?: string | null; isPromo?: boolean; imageUrl: string | null; category: string; description: string | null; comingSoon?: boolean; stock?: number | null };
 type Promo = { id: number; name: string; description: string | null; imageUrl: string | null; customPrice: string | null; items: { productId: number; productName: string; quantity: number }[] | null };
 type Selection = { type: "product"; data: Product } | { type: "promo"; data: Promo };
-type CartLine = { type: "product" | "promo"; id: number; quantity: number };
 const CATEGORIES = [
   { key: "promos", label: "Promociones" }, { key: "hamburguesa", label: "Hamburguesas" },
   { key: "acompanamiento", label: "Para acompañar" }, { key: "bebidas", label: "Bebidas" },
   { key: "alcohol", label: "Alcohol" }, { key: "empanadas", label: "Empanadas" },
   { key: "tragos_vip", label: "Tragos V.I.P." }, { key: "pan_mayorista", label: "Pan mayorista" },
 ];
+// Legacy / marketing deep-link values mapped onto the canonical category keys.
+const CATEGORY_ALIASES: Record<string, string> = {
+  hamburguesas: "hamburguesa", hamburguesa: "hamburguesa", burgers: "hamburguesa",
+  promo: "promos", promos: "promos", promociones: "promos",
+  acompanamientos: "acompanamiento", acompanar: "acompanamiento", "para_acompanar": "acompanamiento",
+  bebida: "bebidas", bebidas: "bebidas",
+  empanada: "empanadas", empanadas: "empanadas",
+  trago: "tragos_vip", tragos: "tragos_vip", vip: "tragos_vip",
+  pan: "pan_mayorista", mayorista: "pan_mayorista", "pan_mayorista": "pan_mayorista",
+  alcoholes: "alcohol", alcohol: "alcohol",
+};
+function canonicalCategory(value: string | null): string | null {
+  if (!value) return null;
+  const slug = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const canonical = CATEGORY_ALIASES[slug] ?? slug;
+  return CATEGORIES.some(category => category.key === canonical) ? canonical : null;
+}
 const money = (value: number) => `$${value.toLocaleString("es-AR")}`;
 const keyOf = (item: Selection) => `${item.type}-${item.data.id}`;
 function priceOf(item: Selection) {
@@ -48,53 +66,57 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
   const business = useBusiness();
   const brandName = business?.name || "";
   const brandTagline = business?.tagline || "cocina propia";
-  const [activeCategory, setActiveCategory] = useState(promos.length ? "promos" : products[0]?.category ?? "hamburguesa");
+  const searchParams = useSearchParams();
+  // Derived straight from the URL so a deep link renders the right category on
+  // the first paint (no post-mount flash) and stays shareable.
+  const requestedCategory = useMemo(() => canonicalCategory(searchParams.get("category")), [searchParams]);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [cart, setCart] = useState<CartLine[]>([]);
-  const [hydrated, setHydrated] = useState(false);
   const [detail, setDetail] = useState<Selection | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
-  useEffect(() => {
-    const restore = window.setTimeout(() => {
-      try {
-        const saved: unknown = JSON.parse(localStorage.getItem("muzapp-digital-cart") || "[]");
-        if (Array.isArray(saved)) setCart(saved.filter((line): line is CartLine => line && ["product", "promo"].includes(line.type) && Number.isSafeInteger(line.id) && line.id > 0 && Number.isSafeInteger(line.quantity) && line.quantity > 0 && line.quantity <= 99).slice(0, 40));
-      } catch { /* start with an empty cart */ }
-      setHydrated(true);
-    }, 0);
-    return () => window.clearTimeout(restore);
-  }, []);
-  useEffect(() => { if (hydrated) { try { localStorage.setItem("muzapp-digital-cart", JSON.stringify(cart)); } catch { /* usable without storage */ } } }, [cart, hydrated]);
+  const { items: cartItems, addItem, removeItem, updateQuantity } = useCart();
+
   const selections = useMemo<Selection[]>(() => [...promos.map(data => ({ type: "promo" as const, data })), ...products.map(data => ({ type: "product" as const, data }))], [products, promos]);
   const categories = CATEGORIES.filter(c => c.key === "promos" ? promos.length : products.some(p => p.category === c.key));
+  const fallbackCategory = promos.length ? "promos" : products[0]?.category ?? "hamburguesa";
+  const activeCategory = selectedCategory ?? requestedCategory ?? fallbackCategory;
+
+  // A deep link should land on its category, not the hero.
   useEffect(() => {
-    const requestedCategory = new URLSearchParams(window.location.search).get("category");
-    if (requestedCategory && categories.some(category => category.key === requestedCategory)) {
-      setActiveCategory(requestedCategory);
-    }
-  }, [categories]);
+    if (!requestedCategory) return;
+    const target = document.getElementById("carta");
+    if (!target) return;
+    const id = window.setTimeout(() => target.scrollIntoView({ block: "start" }), 120);
+    return () => window.clearTimeout(id);
+  }, [requestedCategory]);
+
   const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   const visible = selections.filter(item => query.trim() ? normalize(`${item.data.name} ${item.data.description ?? ""}`).includes(normalize(query.trim())) : item.type === "promo" ? activeCategory === "promos" : item.data.category === activeCategory);
-  const resolvedCart = cart.flatMap(line => {
-    const selected = selections.find(s => s.type === line.type && s.data.id === line.id);
+  const resolvedCart = useMemo(() => cartItems.flatMap(line => {
+    const selected = selections.find(s => s.type === line.type && String(s.data.id) === line.product.id);
     return selected ? [{ selected, quantity: line.quantity }] : [];
-  });
-  const hasUnavailable = resolvedCart.length !== cart.length || resolvedCart.some(item => !available(item.selected));
+  }), [cartItems, selections]);
+  const hasUnavailable = resolvedCart.length !== cartItems.length || resolvedCart.some(item => !available(item.selected));
   const total = resolvedCart.reduce((sum, item) => sum + Math.round(priceOf(item.selected) * 100) * item.quantity, 0) / 100;
-  const count = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const count = cartItems.reduce((sum, line) => sum + line.quantity, 0);
+  const quantity = (item: Selection) => cartItems.find(line => line.type === item.type && line.product.id === String(item.data.id))?.quantity ?? 0;
   function updateItem(item: Selection, delta: number) {
-    setCart(previous => {
-      const existing = previous.find(line => line.type === item.type && line.id === item.data.id);
-      const max = item.type === "product" ? Math.min(99, item.data.stock ?? 99) : 99;
-      if (delta > 0 && (!available(item) || (existing?.quantity ?? 0) >= max)) return previous;
-      if (!existing) return delta > 0 ? [...previous, { type: item.type, id: item.data.id, quantity: 1 }] : previous;
-      return previous.map(line => line === existing ? { ...line, quantity: line.quantity + delta } : line).filter(line => line.quantity > 0);
-    });
+    const current = quantity(item);
+    const max = item.type === "product" ? Math.min(99, item.data.stock ?? 99) : 99;
+    const key = cartKey(item.type, item.data.id);
+    if (delta > 0) {
+      if (!available(item) || current >= max) return;
+      addItem({ id: String(item.data.id), name: item.data.name.trim(), price: priceOf(item) }, 1, { type: item.type, imageUrl: imageOf(item), toast: false });
+    } else if (current > 1) {
+      updateQuantity(key, current - 1);
+    } else if (current === 1) {
+      removeItem(key);
+    }
   }
-  const quantity = (item: Selection) => cart.find(line => line.type === item.type && line.id === item.data.id)?.quantity ?? 0;
   const controls = (item: Selection) => available(item) ? <QuantityControl quantity={quantity(item)} onAdd={() => updateItem(item, 1)} onRemove={() => updateItem(item, -1)} max={item.type === "product" ? Math.min(99, item.data.stock ?? 99) : 99} /> : <span className="menu-unavailable">{item.type === "product" && item.data.comingSoon ? "Próximamente" : priceOf(item) ? "No disponible" : "Precio a consultar"}</span>;
-  const heading = query.trim() ? "Tu búsqueda" : categories.find(c => c.key === activeCategory)?.label ?? "La carta";
+  const heading = query.trim() ? "Tu búsqueda" : CATEGORIES.find(c => c.key === activeCategory)?.label ?? "La carta";
   const hero = products.find(p => p.category === "hamburguesa" && getCatalogProductImage(p)) ?? products.find(p => getCatalogProductImage(p));
+  const checkoutLines = resolvedCart.filter(item => available(item.selected)).map(item => ({ type: item.selected.type, id: item.selected.data.id, quantity: item.quantity }));
 
   return <LayoutGroup id="digital-menu"><div className="digital-menu">
     <div className="paint-veil" aria-hidden="true" />
@@ -115,7 +137,7 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
           <figcaption><span>De nuestra cocina</span><strong>{hero.name}</strong></figcaption>
         </motion.figure>}
       </section>
-      <nav className="menu-category-nav" aria-label="Categorías de la carta" id="carta"><div>{categories.map((category, i) => <button type="button" key={category.key} style={{ "--i": i } as CSSProperties} aria-pressed={activeCategory === category.key && !query} onClick={(event) => { setActiveCategory(category.key); setQuery(""); event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reduced ? "instant" : "smooth" }); }}>
+      <nav className="menu-category-nav" aria-label="Categorías de la carta" id="carta"><div>{categories.map((category, i) => <button type="button" key={category.key} style={{ "--i": i } as CSSProperties} aria-pressed={activeCategory === category.key && !query} onClick={(event) => { setSelectedCategory(category.key); setQuery(""); event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reduced ? "instant" : "smooth" }); }}>
         {category.label}{activeCategory === category.key && !query && <motion.span className="menu-category-indicator" layoutId="category-indicator" transition={reduced ? { duration: 0 } : editorialSpring} />}
       </button>)}</div></nav>
       <section className="menu-content">
@@ -147,9 +169,9 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
       <div className="menu-cart-content"><p className="menu-eyebrow">Un buen momento empieza acá</p><h2>Tu pedido.</h2>
         {!count ? <div className="menu-empty"><ShoppingBag size={30} /><p>¿Qué te gustaría probar?</p><button className="menu-add-button" onClick={() => setCartOpen(false)}>Explorar la carta</button></div> : <>
           <div className="menu-cart-lines"><AnimatePresence initial={false}>{resolvedCart.map(({ selected, quantity: qty }) => <motion.div layout={!reduced} key={keyOf(selected)} className="menu-cart-line" exit={{ opacity: 0, height: 0, margin: 0, paddingTop: 0, paddingBottom: 0 }} transition={{ duration: reduced ? 0 : .2 }}><div className="menu-cart-thumb"><CatalogImage src={imageOf(selected)} alt={selected.data.name} sizes="64px" /></div><div className="menu-cart-line-copy"><h3>{selected.data.name}</h3><p>{money(priceOf(selected) * qty)}</p></div><QuantityControl quantity={qty} onAdd={() => updateItem(selected, 1)} onRemove={() => updateItem(selected, -1)} /></motion.div>)}</AnimatePresence></div>
-          {hasUnavailable && <p role="alert" className="checkout-error">Hay productos que ya no están disponibles. <button type="button" onClick={() => setCart(cart.filter(line => selections.some(s => s.type === line.type && s.data.id === line.id && available(s))))}>Quitarlos del pedido</button></p>}
+          {hasUnavailable && <p role="alert" className="checkout-error">Hay productos que ya no están disponibles. <button type="button" onClick={() => resolvedCart.filter(item => !available(item.selected)).forEach(item => removeItem(cartKey(item.selected.type, item.selected.data.id)))}>Quitarlos del pedido</button></p>}
           <div className="menu-cart-total"><div><span>Subtotal</span><small>Envío a coordinar</small></div><motion.strong key={total} initial={reduced ? false : { opacity: .3, y: 8 }} animate={{ opacity: 1, y: 0 }}>{money(total)}</motion.strong></div>
-          {!hasUnavailable && <CheckoutForm key={cart.map(line => `${line.type}:${line.id}:${line.quantity}`).join(",")} items={cart} />}
+          {!hasUnavailable && <CheckoutForm key={cartItems.map(line => `${cartKey(line.type, line.product.id)}:${line.quantity}`).join(",")} items={checkoutLines} />}
         </>}
       </div>
     </CatalogDialog>}</AnimatePresence>

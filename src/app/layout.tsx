@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Poppins, Playfair_Display, Inter, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { MetaPixelProvider } from "@/components/meta/meta-pixel-provider";
+import { CartProvider } from "@/lib/cart/cart-context";
 import { getBusinessInfo } from "@/lib/business";
 
 const poppins = Poppins({
@@ -55,7 +56,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col bg-background text-foreground overflow-x-hidden">
         <MetaPixelProvider />
-        {children}
+        <CartProvider>{children}</CartProvider>
       </body>
     </html>
   );

@@ -10,6 +10,33 @@ function webReference(requestId: string) {
   return `Referencia WEB:${requestId}`;
 }
 
+type OrderRow = {
+  id: number;
+  phoneNumber: string | null;
+  customerName: string | null;
+  items: unknown;
+  notes: string | null;
+};
+
+/**
+ * Best-effort rollback of stock reservations taken before a failure. The rows
+ * were decremented conditionally, so adding them back only undoes our own work.
+ */
+async function releaseStock(reserved: Array<[number, number]>) {
+  for (const [productId, qty] of reserved) {
+    try {
+      await db.execute(sql`UPDATE products SET stock = stock + ${qty} WHERE id = ${productId}`);
+    } catch { /* leave the reservation — a manual reconcile is safer than a failed undo */ }
+  }
+}
+
+/**
+ * Persists a web order without an interactive transaction: the neon-http driver
+ * that backs `db` does not support `db.transaction()` (it throws), which used to
+ * surface as a generic 503 for every checkout. Idempotency is enforced by a
+ * conditional INSERT keyed on the request reference, and stock is decremented
+ * with a conditional UPDATE that compensates on any downstream failure.
+ */
 export async function submitCheckout(input: CheckoutInput): Promise<CheckoutReceipt> {
   const key = webOrderKey(input.requestId);
   const fingerprint = `web-payload:${createHash("sha256").update(JSON.stringify({ ...input, items: [...input.items].sort((a, b) => `${a.type}:${a.id}`.localeCompare(`${b.type}:${b.id}`)) })).digest("hex")}`;
@@ -35,37 +62,45 @@ export async function submitCheckout(input: CheckoutInput): Promise<CheckoutRece
   const reference = webReference(input.requestId);
   const matchReference = and(eq(orders.phoneNumber, input.phone), like(orders.notes, `%${reference}%`));
 
-  // Advisory lock on the requestId: a concurrent duplicate submission waits for
-  // the first transaction to commit, then sees the already-inserted order
-  // instead of inserting a second one.
-  const lockKey = `web:${input.requestId}`;
-  const order = await db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+  const finalize = (order: OrderRow): CheckoutReceipt => {
+    // A requestId is bound to its exact payload+phone; anything else is a replay.
+    if (!order || !order.notes?.includes(fingerprint) || order.phoneNumber !== input.phone) throw new CheckoutError("Esta confirmación ya fue usada para otro pedido. Volvé a revisar tu carrito.");
+    const items = order.items as PricedItem[];
+    const total = items.reduce((sum, item) => sum + Math.round(item.unitPrice * 100) * item.quantity, 0) / 100;
+    const message = [
+      `Hola! Soy ${order.customerName}. Confirmé el pedido #${order.id} en la carta digital.`, "",
+      ...items.map(item => `• ${item.quantity}× ${item.name} — $${(item.unitPrice * item.quantity).toLocaleString("es-AR")}`), "",
+      `Subtotal: $${total.toLocaleString("es-AR")}. Envío a coordinar.`,
+      "Quiero coordinar entrega o retiro y pago.", `Referencia WEB:${input.requestId}`,
+    ].join("\n");
+    return { orderId: order.id, total, whatsappUrl: `https://wa.me/${destination}?text=${encodeURIComponent(message)}` };
+  };
 
-    const [existing] = await tx.select({
-      id: orders.id,
-      phoneNumber: orders.phoneNumber,
-      customerName: orders.customerName,
-      items: orders.items,
-      notes: orders.notes,
-    }).from(orders).where(matchReference).limit(1);
-    if (existing) return existing;
+  // Fast path: a retry (or double submit) of an already-persisted order.
+  const [existing] = await db.select({
+    id: orders.id,
+    phoneNumber: orders.phoneNumber,
+    customerName: orders.customerName,
+    items: orders.items,
+    notes: orders.notes,
+  }).from(orders).where(matchReference).limit(1);
+  if (existing) return finalize(existing);
 
-    const [catalog, offers] = await Promise.all([tx.select().from(products), tx.select().from(promotions)]);
-    let priced: ReturnType<typeof priceCheckout>;
-    try { priced = priceCheckout(input.items, catalog, offers, noBurgers); }
-    catch (error) { throw new CheckoutError(error instanceof Error ? error.message : "Revisá los productos."); }
+  const [catalog, offers] = await Promise.all([db.select().from(products), db.select().from(promotions)]);
+  let priced: ReturnType<typeof priceCheckout>;
+  try { priced = priceCheckout(input.items, catalog, offers, noBurgers); }
+  catch (error) { throw new CheckoutError(error instanceof Error ? error.message : "Revisá los productos."); }
 
-    // Atomic stock decrement inside the same transaction — a concurrent order
-    // for the same product cannot oversell: `stock >= qty` fails under
-    // contention and the whole order rolls back. NULL stock means unlimited.
+  // Conditional stock decrement. `stock IS NULL` means unlimited — no reservation.
+  const reserved: Array<[number, number]> = [];
+  try {
     for (const [productId, qty] of priced.demand) {
-      const updated = await tx.execute(sql`
+      const updated = await db.execute(sql`
         UPDATE products SET stock = stock - ${qty}
         WHERE id = ${productId} AND stock IS NOT NULL AND stock >= ${qty}
       `);
-      if (updated.rowCount === 0) {
-        const [p] = await tx
+      if ((updated.rowCount ?? 0) === 0) {
+        const [p] = await db
           .select({ name: products.name, stock: products.stock })
           .from(products)
           .where(eq(products.id, productId))
@@ -73,36 +108,48 @@ export async function submitCheckout(input: CheckoutInput): Promise<CheckoutRece
         if (p && p.stock !== null) {
           throw new CheckoutError(`${p.name} no tiene disponibilidad para esa cantidad.`, 409);
         }
+      } else {
+        reserved.push([productId, qty]);
       }
     }
+  } catch (error) {
+    await releaseStock(reserved);
+    throw error;
+  }
 
-    const notes = `Pedido web (${WEB_ORDER_TAG}; ${key}; ${fingerprint}). ${reference}. Coordinar entrega y pago por WhatsApp.`;
-    const [created] = await tx.insert(orders).values({
-      phoneNumber: input.phone,
-      customerName: input.customerName,
-      orderType: priced.orderType,
-      items: priced.items,
-      notes,
-      status: "pending",
-    }).returning({
+  const notes = `Pedido web (${WEB_ORDER_TAG}; ${key}; ${fingerprint}). ${reference}. Coordinar entrega y pago por WhatsApp.`;
+  let created: OrderRow | undefined;
+  try {
+    // Idempotent INSERT: a concurrent request that already stored this
+    // reference wins, and this statement becomes a no-op.
+    const inserted = await db.execute(sql`
+      INSERT INTO orders (phone_number, customer_name, order_type, items, notes, status)
+      SELECT ${input.phone}, ${input.customerName}, ${priced.orderType}::order_type, ${JSON.stringify(priced.items)}::jsonb, ${notes}, 'pending'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM orders WHERE phone_number = ${input.phone} AND notes LIKE ${`%${reference}%`}
+      )
+      RETURNING id, phone_number, customer_name, items, notes
+    `);
+    created = (inserted.rows?.[0] as unknown as OrderRow | undefined);
+  } catch (error) {
+    await releaseStock(reserved);
+    throw error;
+  }
+
+  if (!created) {
+    // Lost the race: another request owns the reservation, so release ours.
+    await releaseStock(reserved);
+    const [again] = await db.select({
       id: orders.id,
       phoneNumber: orders.phoneNumber,
       customerName: orders.customerName,
       items: orders.items,
       notes: orders.notes,
-    });
-    return created;
-  });
-  if (!order || !order.notes?.includes(fingerprint) || order.phoneNumber !== input.phone) throw new CheckoutError("Esta confirmación ya fue usada para otro pedido. Volvé a revisar tu carrito.");
-  const items = order.items as PricedItem[];
-  const total = items.reduce((sum, item) => sum + Math.round(item.unitPrice * 100) * item.quantity, 0) / 100;
-  const message = [
-    `Hola! Soy ${order.customerName}. Confirmé el pedido #${order.id} en la carta digital.`, "",
-    ...items.map(item => `• ${item.quantity}× ${item.name} — $${(item.unitPrice * item.quantity).toLocaleString("es-AR")}`), "",
-    `Subtotal: $${total.toLocaleString("es-AR")}. Envío a coordinar.`,
-    "Quiero coordinar entrega o retiro y pago.", `Referencia WEB:${input.requestId}`,
-  ].join("\n");
-  return { orderId: order.id, total, whatsappUrl: `https://wa.me/${destination}?text=${encodeURIComponent(message)}` };
+    }).from(orders).where(matchReference).limit(1);
+    if (!again) throw new CheckoutError("No pudimos confirmar el pedido. Reintentá en unos segundos.", 503);
+    return finalize(again);
+  }
+  return finalize(created);
 }
 
 export async function findReferencedWebOrder(reference: string, phone: string) {
