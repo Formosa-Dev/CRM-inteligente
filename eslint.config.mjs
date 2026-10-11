@@ -27,6 +27,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Worktrees locales anidados (p.ej. .kilo/worktrees/*): no son fuente del
+    // proyecto y contaminaban el lint con el estado viejo de cada checkout.
+    ".kilo/**",
   ]),
 ]);
 
