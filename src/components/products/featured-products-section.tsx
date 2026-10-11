@@ -23,8 +23,8 @@ type ProductFromAPI = {
 export function FeaturedProductsSection() {
   const [linea, setLinea] = useState<"pollo" | "carne">("pollo");
   const [products, setProducts] = useState<ProductFromAPI[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+  const [, setLoading] = useState(true);
+  const [, setError] = useState(false);
 
   useEffect(() => {
     async function fetchProducts() {

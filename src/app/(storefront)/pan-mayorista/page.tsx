@@ -68,7 +68,7 @@ const benefits = [
 
 export default function PanMayoristaPage() {
   const [products, setProducts] = useState<ProductFromAPI[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
 
   useEffect(() => {
     async function fetchProducts() {

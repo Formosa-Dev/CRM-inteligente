@@ -25,6 +25,13 @@ interface EditItem {
   price: number;
 }
 
+interface RawOrderItem {
+  name?: string;
+  quantity?: number;
+  price?: number | string;
+  unitPrice?: number | string;
+}
+
 export function OrderEditModal({ order, open, onClose }: OrderEditModalProps) {
   const [customerName, setCustomerName] = useState(order.customerName || "");
   const [phoneNumber, setPhoneNumber] = useState(order.phoneNumber || "");
@@ -37,22 +44,29 @@ export function OrderEditModal({ order, open, onClose }: OrderEditModalProps) {
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
 
+  // Reset del formulario al abrir o cambiar de pedido (ajuste de estado en render)
+  const [prevOpenOrder, setPrevOpenOrder] = useState<{ open: boolean; order: OrderRow } | null>(null);
+  if (open !== prevOpenOrder?.open || order !== prevOpenOrder.order) {
+    setPrevOpenOrder({ open, order });
+    if (open) {
+      const currentItems = Array.isArray(order.items) ? order.items.map((i: RawOrderItem) => ({
+        name: i.name || "",
+        quantity: i.quantity || 1,
+        price: Number(i.price ?? i.unitPrice ?? 0),
+      })) : [];
+      setItems(currentItems);
+      setCustomerName(order.customerName || "");
+      setPhoneNumber(order.phoneNumber || "");
+      setAddress(order.address || "");
+      setNotes(order.notes || "");
+      setDeliveryFee(Number(order.deliveryFee) || 0);
+      setPaymentStatus(order.paymentStatus || "pending");
+      setDone(false);
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
-    // Cargar items actuales
-    const currentItems = Array.isArray(order.items) ? order.items.map((i: any) => ({
-      name: i.name || "",
-      quantity: i.quantity || 1,
-      price: Number(i.price ?? i.unitPrice ?? 0),
-    })) : [];
-    setItems(currentItems);
-    setCustomerName(order.customerName || "");
-    setPhoneNumber(order.phoneNumber || "");
-    setAddress(order.address || "");
-    setNotes(order.notes || "");
-    setDeliveryFee(Number(order.deliveryFee) || 0);
-    setPaymentStatus(order.paymentStatus || "pending");
-    setDone(false);
 
     // Cargar productos disponibles
     fetch("/api/products?available=true")

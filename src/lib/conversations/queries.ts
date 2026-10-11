@@ -3,7 +3,6 @@ import {
   getConversations,
   getMessages,
   sendReply,
-  getConversation,
   type GetConversationsParams,
 } from "@/app/(admin)/admin/conversations/actions";
 import type { ConversationSummary, ChatMessage, CustomerProfile, OrderSummary } from "@/types/chat";
@@ -59,7 +58,7 @@ export function useConversations(params: GetConversationsParams) {
       };
     },
     // Smart polling: 5s si hay activas, 30s si idle, pausa en hidden
-    refetchInterval: (query) => {
+    refetchInterval: (_query) => {
       if (typeof document !== "undefined" && document.hidden) return false;
       return 5000;
     },
@@ -79,7 +78,7 @@ export function useMessages(conversationId: number | null) {
       return mapToMessages(rows as unknown as Record<string, unknown>[]);
     },
     enabled: !!conversationId,
-    refetchInterval: (query) => {
+    refetchInterval: (_query) => {
       if (typeof document !== "undefined" && document.hidden) return false;
       if (!conversationId) return false;
       return 3000;

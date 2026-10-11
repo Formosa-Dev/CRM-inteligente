@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { orders, orderStatusEnum, conversations } from "@/db/schema";
+import { orders, conversations } from "@/db/schema";
 import { eq, desc, and, count, ilike, or } from "drizzle-orm";
 import { auth } from "@/auth";
 import { requireAdmin } from "@/lib/auth/require-admin";
@@ -16,7 +16,7 @@ const PAGE_SIZE = 30;
  * Programa un follow-up para 30 minutos después de la entrega.
  * Usa setTimeout con un tope de 30 min reales.
  */
-async function scheduleFollowUp(orderId: number, phoneNumber: string, customerName: string | null) {
+async function scheduleFollowUp(orderId: number, _phoneNumber: string, _customerName: string | null) {
   try {
     const now = new Date();
     const hour = now.getHours();
@@ -25,8 +25,6 @@ async function scheduleFollowUp(orderId: number, phoneNumber: string, customerNa
       console.log(`[followup] Skipped for order #${orderId} — outside business hours (${hour}:00)`);
       return;
     }
-
-    const followupText = `Holaa, ¿todo bien con el pedido? No te olvides de etiquetarnos en ig porfa 🙌`;
 
     // setTimeout de 30 minutos (1800000 ms) — pero no esperamos si es serverless
     // En su lugar, marcamos followupSent como false y usamos un endpoint cron.
@@ -212,7 +210,7 @@ export async function updateOrderStatus(
 
     revalidatePath("/admin/orders");
     return { success: true, message: "Estado actualizado" };
-  } catch (e) {
+  } catch {
     return { success: false, message: "Error al actualizar" };
   }
 }
@@ -310,7 +308,7 @@ export async function markPaidAndDelivered(
 
     revalidatePath("/admin/orders");
     return { success: true, message: "Pagado y entregado" };
-  } catch (e) {
+  } catch {
     return { success: false, message: "Error al actualizar" };
   }
 }
@@ -327,7 +325,7 @@ export async function deleteOrder(
     await db.delete(orders).where(eq(orders.id, orderId));
     revalidatePath("/admin/orders");
     return { success: true };
-  } catch (e) {
+  } catch {
     return { success: false, error: "Error al eliminar" };
   }
 }
@@ -368,7 +366,7 @@ export const updateOrder = async (
     revalidatePath("/admin/clients");
     revalidatePath("/admin");
     return { success: true };
-  } catch (e) {
+  } catch {
     return { success: false, error: "Error al actualizar" };
   }
 };

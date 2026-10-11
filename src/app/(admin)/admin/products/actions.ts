@@ -4,11 +4,14 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { products } from "@/db/schema";
 import { productSchema } from "@/lib/validations/product";
-import { eq, asc, sql } from "drizzle-orm";
+import { eq, asc, and, sql } from "drizzle-orm";
 import { auth } from "@/auth";
 import { requireAdmin } from "@/lib/auth/require-admin";
 
 const PAGE_SIZE = 30;
+
+type ProductCategory = (typeof products.$inferSelect)["category"];
+type ProductLine = (typeof products.$inferSelect)["line"];
 
 export type ProductsResponse = {
   products: Array<{
@@ -17,8 +20,8 @@ export type ProductsResponse = {
     description: string | null;
     price: string | null;
     imageUrl: string | null;
-    category: "hamburguesa" | "acompanamiento" | "pan_mayorista" | "tragos_vip" | "bebidas";
-    line: "pollo" | "carne" | "clasica" | "pan" | "tragos" | "bebidas";
+    category: ProductCategory;
+    line: ProductLine;
     stock: number | null;
     available: boolean;
     comingSoon: boolean;
@@ -43,22 +46,22 @@ export async function fetchProducts(params: {
 
   const conditions: ReturnType<typeof eq>[] = [];
   if (params.category && params.category !== "all") {
-    conditions.push(eq(products.category, params.category as any));
+    conditions.push(eq(products.category, params.category as ProductCategory));
   }
   if (params.line && params.line !== "all") {
-    conditions.push(eq(products.line, params.line as any));
+    conditions.push(eq(products.line, params.line as ProductLine));
   }
 
-  const where = conditions.length > 0 ? conditions.reduce((a, b) => sql`${a} AND ${b}` as any) : undefined;
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
 
   const total = conditions.length > 0
-    ? (await db.select({ count: sql<number>`count(*)` }).from(products).where(where as any))[0]?.count ?? 0
+    ? (await db.select({ count: sql<number>`count(*)` }).from(products).where(where))[0]?.count ?? 0
     : (await db.select({ count: sql<number>`count(*)` }).from(products))[0]?.count ?? 0;
 
   const items = await db
     .select()
     .from(products)
-    .where(where as any)
+    .where(where)
     .orderBy(asc(products.sortOrder), asc(products.name))
     .limit(PAGE_SIZE)
     .offset(offset);
@@ -70,8 +73,8 @@ export async function fetchProducts(params: {
       description: p.description,
       price: p.price,
       imageUrl: p.imageUrl,
-      category: p.category as any,
-      line: p.line as any,
+      category: p.category,
+      line: p.line,
       stock: p.stock,
       available: p.available,
       comingSoon: p.comingSoon,

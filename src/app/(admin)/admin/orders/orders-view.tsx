@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { fadeUpSmall, staggerContainer } from "@/lib/animation-variants";
-import { updateOrderStatus, notifyCustomer, deleteOrder, updateOrder, markPaidAndDelivered, type OrderRow } from "./actions";
+import { updateOrderStatus, notifyCustomer, deleteOrder, markPaidAndDelivered, type OrderRow, type OrderStatus } from "./actions";
 import { computeOrderTotal } from "@/lib/client-utils";
 import { OrderEditModal } from "./order-edit-modal";
 import { Badge } from "@/components/ui/badge";
@@ -65,7 +65,6 @@ function orderTypeBadge(type: string | null): { label: string; cls: string; Icon
 
 function OrderCard({
   order,
-  onStatusChange,
   onDelete,
 }: {
   order: OrderRow;
@@ -87,7 +86,7 @@ function OrderCard({
     const next = NEXT_STATUS[order.status];
     if (!next) return;
     setChanging(true);
-    await updateOrderStatus(order.id, next as any);
+    await updateOrderStatus(order.id, next as OrderStatus);
     setChanging(false);
   }, [order.id, order.status]);
 
@@ -362,7 +361,7 @@ export function OrdersView({
   }, [navigate, currentStatus, currentType, search]);
 
   const onStatusChange = useCallback(
-    async (id: number, _newStatus: string) => {
+    async (_id: number, _newStatus: string) => {
       router.refresh();
     },
     [router]

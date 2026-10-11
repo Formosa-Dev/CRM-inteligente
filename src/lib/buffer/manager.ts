@@ -198,13 +198,6 @@ setInterval(() => {
   for (const [key, entry] of inMemoryDedup.entries()) {
     if (entry.ts < cutoff) inMemoryDedup.delete(key);
   }
-  // Cleanup stale processed content entries (> 5 min)
-  const staleCutoff = Date.now() - 300_000;
-  for (const [key] of lastProcessedContent.entries()) {
-    // Keys include channel:userid — no timestamp, so just clear old ones
-    // if they haven't been updated recently (we don't store update time,
-    // so just clear on the 30s interval as best-effort)
-  }
   if (lastProcessedContent.size > 1000) {
     // Emergency cleanup if map grows unbounded
     lastProcessedContent.clear();

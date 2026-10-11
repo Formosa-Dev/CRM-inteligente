@@ -140,7 +140,6 @@ export async function insertMessage(
   const preview = content.slice(0, 250);
 
   let msg: { id: number };
-  let wasDuplicate = false;
 
   try {
     [msg] = await db
@@ -153,10 +152,10 @@ export async function insertMessage(
         platformMessageId: platformMessageId || null,
       })
       .returning({ id: chatMessages.id });
-  } catch (err: any) {
+  } catch (err: unknown) {
     // P0001 / 23505 = unique_violation on platform_message_id
     // If this is a duplicate platformMessageId, return the existing message ID
-    if (platformMessageId && err?.code === "23505") {
+    if (platformMessageId && (err as { code?: string } | null)?.code === "23505") {
       const [existing] = await db
         .select({ id: chatMessages.id })
         .from(chatMessages)

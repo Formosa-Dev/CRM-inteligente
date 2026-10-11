@@ -1,4 +1,4 @@
-import { generateText, stepCountIs } from "ai";
+import { generateText, stepCountIs, type ModelMessage } from "ai";
 import { extractWebOrderReference, checkoutPhone } from "@/lib/checkout/contract";
 import { findReferencedWebOrder } from "@/lib/checkout/service";
 import type { OpenAILanguageModelChatOptions } from "@ai-sdk/openai";
@@ -39,9 +39,8 @@ import {
   getActivePromosTool,
 } from "./tools";
 import { detectInjection } from "./tools/prompt-security";
-import { buildSystemPrompt, DEFAULT_SYSTEM_PROMPT } from "./prompt-builder";
+import { buildSystemPrompt, DEFAULT_SYSTEM_PROMPT, type CustomerContext } from "./prompt-builder";
 import { assertSessionContext, type SessionContext } from "./session-policy";
-import { getArgentinaHour } from "@/lib/argentina-time";
 import { getAIConfig, getMainChatModel, isOpenAIBaseUrl } from "@/lib/ai/config";
 import { getStatusSemantic } from "./status-utils";
 
@@ -186,13 +185,13 @@ export async function runWhatsAppAgent({
 
   // 🔧 BUILD DYNAMIC PROMPT (V6 + customer context)
   let system: string;
-  let customerContext: { name?: string; phone?: string; address?: string | null; savedAddresses?: string[]; detectedLine?: "b2c" | "b2b"; notes?: string | null; preferences?: string[]; orderHistory?: any[]; pendingOrder?: { id: number; items: any; orderType: string | null; address: string | null; paymentStatus?: string | null }; lastOrder?: { id: number; status: string | null; paymentStatus: string | null; orderType: string | null; items: any; statusSemantic?: string }; currentCart?: { productName: string; quantity: number; variant?: string | null; notes?: string | null }[]; currentHour?: number; previousContext?: string } | undefined;
+  let customerContext: CustomerContext | undefined;
   
   try {
     // Cargar contexto del cliente (nombre, historial de pedidos)
     const { db } = await import("@/db");
     const { conversations: convTable, orders } = await import("@/db/schema");
-    const { eq, desc, and } = await import("drizzle-orm");
+    const { eq, desc } = await import("drizzle-orm");
     
     if (conversationId > 0) {
       const [conv] = await db
@@ -505,7 +504,7 @@ export async function runWhatsAppAgent({
     });
 
     // Log modelo real usado por la API (cross-check)
-    console.log(`[agent] ✅ generateText success — API model: ${JSON.stringify((result as any).response?.model || "unknown")}, tools called: ${(result.toolResults || []).length}`);
+    console.log(`[agent] ✅ generateText success — API model: ${JSON.stringify((result.response as { model?: string }).model || "unknown")}, tools called: ${(result.toolResults || []).length}`);
 
     const rawText = result.text || "";
     const finalText = rawText.replace(/\[INTERNAL_[^\]]*\]/g, "").trim();
@@ -592,7 +591,7 @@ const isHallucination = isHallucinationA || isHallucinationB || isHallucinationC
       if (result.toolResults && result.toolResults.length > 0) {
         try {
           // Construir mensaje completo: originales + tool calls + tool results
-          const allMessages = [...retryMessages, ...result.response.messages] as any;
+          const allMessages: ModelMessage[] = [...retryMessages, ...result.response.messages];
           
           const textResult = await generateText({
             model: aiModel,

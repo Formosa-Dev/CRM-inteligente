@@ -40,6 +40,7 @@ export function LinkPreview({ url }: LinkPreviewProps) {
     >
       {data.image && (
         <div className="w-20 h-20 flex-shrink-0 bg-muted/40">
+          {/* eslint-disable-next-line @next/next/no-img-element -- imagen OG de dominio externo arbitrario; next/image requeriría remotePatterns abierto y pierde el fallback onError */}
           <img
             src={data.image}
             alt=""

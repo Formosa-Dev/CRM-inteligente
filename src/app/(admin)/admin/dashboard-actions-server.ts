@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { agentConfig, chatMessages } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
 

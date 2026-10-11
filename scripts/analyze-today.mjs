@@ -14,7 +14,6 @@ async function main() {
   let convCount = 0;
   let ownerMsgs = 0;
   let botMsgs = 0;
-  let unidentified = new Set();
   
   for (const m of msgs) {
     if (m.conversation_id !== currentConv) {

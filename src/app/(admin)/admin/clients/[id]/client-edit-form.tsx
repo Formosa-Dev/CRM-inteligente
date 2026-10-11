@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { Edit, X, Save, RefreshCw } from "lucide-react";
+import { Edit, X, Save } from "lucide-react";
 import { updateClient } from "../actions";
 
 interface LeadData {
@@ -23,12 +22,11 @@ interface LeadData {
 }
 
 export function ClientEditForm({ lead }: { lead: LeadData | null }) {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [name, setName] = useState(lead?.name ?? "");
-  const [phone, setPhone] = useState(lead?.phone ?? "");
+  const [phone] = useState(lead?.phone ?? "");
   const [email, setEmail] = useState(lead?.email ?? "");
   const [address, setAddress] = useState(lead?.address ?? "");
   const [notes, setNotes] = useState(lead?.notes ?? "");

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports -- script de migracion CommonJS: el package no es type:module, convertirlo a ESM lo romperia */
 const { neon } = require("@neondatabase/serverless");
 
 const sql = neon(process.env.DATABASE_URL);

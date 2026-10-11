@@ -56,14 +56,17 @@ export function CreateOrderModal({ open, onClose, clientName, clientPhone }: Cre
   const [leads, setLeads] = useState<LeadOption[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
-  const [loadingLeads, setLoadingLeads] = useState(false);
+  const [, setLoadingLeads] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
 
-  useEffect(() => {
+  // Sincronizar nombre/teléfono cuando cambian las props (ajuste de estado en render)
+  const [prevClient, setPrevClient] = useState<{ name?: string; phone?: string } | null>(null);
+  if (prevClient === null || prevClient.name !== clientName || prevClient.phone !== clientPhone) {
+    setPrevClient({ name: clientName, phone: clientPhone });
     setCustomerName(clientName || "");
     setCustomerPhone(clientPhone || "");
-  }, [clientName, clientPhone]);
+  }
 
   useEffect(() => {
     fetch("/api/products?available=true")
@@ -84,7 +87,7 @@ export function CreateOrderModal({ open, onClose, clientName, clientPhone }: Cre
       const res = await fetch(url);
       const data = await res.json();
       const list = Array.isArray(data) ? data : (data.leads || []);
-      setLeads(list.map((l: any) => ({
+      setLeads(list.map((l: LeadOption & { totalOrders?: number }) => ({
         name: l.name || "Sin nombre",
         phone: l.phone || "",
         status: l.status || "new",
@@ -99,7 +102,10 @@ export function CreateOrderModal({ open, onClose, clientName, clientPhone }: Cre
 
   // Cargar leads al abrir
   useEffect(() => {
-    if (open) searchLeads("");
+    if (!open) return;
+    // Async: searchLeads actualiza estado de carga, no debe correr sincrónico en el efecto
+    const t = window.setTimeout(() => searchLeads(""), 0);
+    return () => window.clearTimeout(t);
   }, [open, searchLeads]);
 
   // Close dropdown on outside click
@@ -113,7 +119,10 @@ export function CreateOrderModal({ open, onClose, clientName, clientPhone }: Cre
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  useEffect(() => {
+  // Reset del formulario al cerrar (ajuste de estado en render)
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (!open) {
       setItems([]);
       setAddress("");
@@ -122,7 +131,7 @@ export function CreateOrderModal({ open, onClose, clientName, clientPhone }: Cre
       setOrderType("hamburguesas");
       setSearchTerm("");
     }
-  }, [open]);
+  }
 
   // Búsqueda con debounce (server-side)
   useEffect(() => {
@@ -314,6 +323,7 @@ export function CreateOrderModal({ open, onClose, clientName, clientPhone }: Cre
                             className="flex items-start gap-3 w-full rounded-lg bg-muted/40 hover:bg-primary/5 border border-border hover:border-primary/30 px-3 py-2.5 text-left transition-colors"
                           >
                             {promo.imageUrl && (
+                              // eslint-disable-next-line @next/next/no-img-element -- thumbnail de URL externa arbitraria; next/image requeriría remotePatterns y cambia el layout
                               <img src={promo.imageUrl} alt={promo.name}
                                 className="w-12 h-12 rounded-lg object-cover shrink-0" />
                             )}

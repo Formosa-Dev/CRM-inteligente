@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useActionState, useEffect, useCallback } from "react";
+import { useState, useTransition, useActionState, useEffect, useEffectEvent, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
@@ -37,23 +37,12 @@ import {
   toggleProductAvailability,
   createProduct,
   updateProduct,
+  type ProductsResponse,
 } from "./actions";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Product = {
-  id: number;
-  name: string;
-  description: string | null;
-  price: string | null;
-  imageUrl: string | null;
-  category: "hamburguesa" | "acompanamiento" | "pan_mayorista" | "tragos_vip" | "bebidas";
-  line: "pollo" | "carne" | "clasica" | "pan" | "tragos" | "bebidas";
-  stock: number | null;
-  available: boolean;
-  comingSoon: boolean;
-  sortOrder: number;
-};
+type Product = ProductsResponse["products"][number];
 
 interface ProductsTableProps {
   initialProducts: Product[];
@@ -160,12 +149,18 @@ function ProductForm({ product, onClose }: ProductFormProps) {
 
   const [state, dispatch, isPending] = useActionState(formAction, null);
 
+  // useEffectEvent lee los valores más recientes de isEdit/onClose/router sin
+  // incluirlos como deps: el efecto solo corre cuando cambia `state`.
+  const notifySuccess = useEffectEvent(() => {
+    toast.success(isEdit ? "Producto actualizado" : "Producto creado");
+    router.refresh();
+    onClose();
+  });
+
   useEffect(() => {
     if (!state) return;
     if (state.success) {
-      toast.success(isEdit ? "Producto actualizado" : "Producto creado");
-      router.refresh();
-      onClose();
+      notifySuccess();
     } else if (state.error) {
       toast.error(state.error);
     }
@@ -194,6 +189,7 @@ function ProductForm({ product, onClose }: ProductFormProps) {
         <div className="flex items-start gap-4">
           <div className="w-20 h-20 rounded-xl overflow-hidden bg-muted/40 border border-border flex items-center justify-center shrink-0">
             {imagePreview ? (
+              // eslint-disable-next-line @next/next/no-img-element -- preview de imagen subida (blob/data URL); next/image no optimiza fuentes locales arbitrarias
               <img src={imagePreview} alt="Preview" className="w-full h-full object-cover" />
             ) : (
               <span className="text-2xl text-foreground/20">📸</span>
@@ -254,7 +250,7 @@ function ProductForm({ product, onClose }: ProductFormProps) {
       <div className="flex items-center justify-between rounded-md border p-3 transition-colors hover:bg-muted/20">
         <div className="flex flex-col gap-0.5">
           <Label htmlFor="comingSoon" className="cursor-pointer">Próximamente</Label>
-          <span className="text-xs text-muted-foreground">Muestra el producto como "próximamente disponible"</span>
+          <span className="text-xs text-muted-foreground">Muestra el producto como &quot;próximamente disponible&quot;</span>
         </div>
         <Switch id="comingSoon" checked={comingSoon} onCheckedChange={setComingSoon} />
       </div>

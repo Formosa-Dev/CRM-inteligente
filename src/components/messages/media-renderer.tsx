@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Play, Mic, Download, Image as ImageIcon } from "lucide-react";
+import { FileText, Mic, Download, Image as ImageIcon } from "lucide-react";
 import type { MediaAttachment } from "@/types/chat";
 
 interface MediaRendererProps {

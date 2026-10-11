@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useRef, useSyncExternalStore } from "react";
 
 interface TiltValues {
   rotateX: number;
@@ -12,15 +12,21 @@ interface UseTiltOptions {
   resetOnLeave?: boolean;
 }
 
+function subscribeHoverCapability(onChange: () => void) {
+  const mq = window.matchMedia("(hover: hover)");
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+
 export function useTilt(options: UseTiltOptions = {}) {
   const { maxAngle = 8, resetOnLeave = true } = options;
   const ref = useRef<HTMLDivElement>(null);
   const [tilt, setTilt] = useState<TiltValues>({ rotateX: 0, rotateY: 0 });
-  const [isHoverDevice, setIsHoverDevice] = useState(false);
-
-  useEffect(() => {
-    setIsHoverDevice(window.matchMedia("(hover: hover)").matches);
-  }, []);
+  const isHoverDevice = useSyncExternalStore(
+    subscribeHoverCapability,
+    () => window.matchMedia("(hover: hover)").matches,
+    () => false,
+  );
 
   const onMouseMove = useCallback(
     (e: React.MouseEvent) => {

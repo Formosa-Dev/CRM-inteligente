@@ -1,11 +1,11 @@
 import { db } from "@/db";
 import { orders, leads } from "@/db/schema";
-import { eq, desc, and, sql } from "drizzle-orm";
-import { calculateClientStats, formatCurrency } from "@/lib/client-utils";
+import { eq, desc } from "drizzle-orm";
+import { calculateClientStats } from "@/lib/client-utils";
 import { normalizePhone } from "@/lib/phone-utils";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Phone, MapPin, ShoppingBag, MessageSquare, Star, Tag, Plus, Edit } from "lucide-react";
+import { ArrowLeft, Phone, MapPin, ShoppingBag, MessageSquare, Star, Tag } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { CreateOrderModalWrapperClient } from "../create-order-modal-wrapper-client";
 import { ClientEditForm } from "./client-edit-form";

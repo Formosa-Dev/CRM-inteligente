@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { db } from "@/db";
-import { agentConfig, products, orders as ordersTable } from "@/db/schema";
+import { products, orders as ordersTable } from "@/db/schema";
 import { eq, and, desc } from "drizzle-orm";
 
 // --- HELPERS ---
@@ -33,7 +33,7 @@ export const checkDeliveryTool = tool({
     zona: z.string().optional().describe("Zona o barrio (ej: centro, norte, sur)"),
     direccion: z.string().optional().describe("Dirección exacta"),
   }),
-  execute: async ({ zona, direccion }) => {
+  execute: async ({ zona, direccion: _direccion }) => {
     const deliveryZones = await getDeliveryZonesFromDB();
     const zonaNormalizada = (zona || "centro").toLowerCase();
     
@@ -117,7 +117,7 @@ export const listAvailableProductsTool = tool({
     const conditions = [eq(products.available, true)];
     
     if (linea) {
-      conditions.push(eq(products.line, linea as any));
+      conditions.push(eq(products.line, linea));
     }
     
     const items = await db

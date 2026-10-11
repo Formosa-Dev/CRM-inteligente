@@ -242,13 +242,13 @@ async function persistDescription(
       .limit(1);
 
     if (msg?.contentAttributes) {
-      const attrs = msg.contentAttributes as Array<Record<string, unknown>>;
+      const attrs = msg.contentAttributes;
       if (attrs.length > 0) {
         attrs[0].description = description;
         await db
           .update(chatMessages)
           .set({
-            contentAttributes: attrs as any,
+            contentAttributes: attrs,
             content: `[Imagen]: ${formatForAgent(description)}`,
           })
           .where(eq(chatMessages.id, messageId));

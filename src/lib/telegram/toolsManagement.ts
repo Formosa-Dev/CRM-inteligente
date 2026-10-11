@@ -2,9 +2,15 @@ import { tool } from "ai";
 import { z } from "zod";
 import { db } from "@/db";
 import { leads, orders, agentConfig, conversations, chatMessages, products } from "@/db/schema";
-import { eq, desc, ilike, or, gte, lte, count, and, asc, sql } from "drizzle-orm";
+import { eq, desc, ilike, or, gte, lte, count, and, asc, sql, type Column, type SQL } from "drizzle-orm";
+import type { PgTable } from "drizzle-orm/pg-core";
 import { normalizePhone } from "@/lib/phone-utils";
 import { getArgentinaDayIndex } from "@/lib/argentina-time";
+
+// Formatos soportados de agent_config.business_hours: array por día (admin UI)
+// u objeto legacy { enabled, days, open, close }
+type BusinessHoursEntry = { day?: string; open?: boolean; openTime?: string; closeTime?: string };
+type BusinessHoursData = BusinessHoursEntry[] | { enabled?: boolean; days?: string; open?: string; close?: string };
 
 // ─── manageManagement: Tools de gestión interna ──────────────────────────────
 
@@ -322,16 +328,16 @@ export const getBusinessHoursTool = tool({
       return "No hay horarios configurados todavía.";
     }
 
-    const data = config.businessHours as any;
+    const data = config.businessHours as BusinessHoursData;
 
     // Soporte para ambos formatos: array (admin UI) y objeto legacy
-    let days: string[], openTime: string, closeTime: string, isEnabled: boolean;
+    let days: (string | undefined)[], openTime: string, closeTime: string, isEnabled: boolean;
 
     if (Array.isArray(data)) {
       // Formato array: [{ day: "Lunes", openTime: "05:00", ... }]
-      const abiertos = data.filter((d: any) => d.open !== false);
+      const abiertos = data.filter((d) => d.open !== false);
       if (abiertos.length === 0) return "Los horarios automáticos están desactivados.";
-      days = abiertos.map((d: any) => d.day);
+      days = abiertos.map((d) => d.day);
       openTime = abiertos[0]?.openTime || "—";
       closeTime = abiertos[0]?.closeTime || "—";
       isEnabled = true;
@@ -456,7 +462,7 @@ export const getConversationsTool = tool({
     limit: z.number().optional().default(10).describe("Cantidad de conversaciones a mostrar (max 20)"),
   }),
   execute: async ({ limit }) => {
-    const { conversations: convTable, chatMessages } = await import("@/db/schema");
+    const { conversations: convTable } = await import("@/db/schema");
     const rows = await db
       .select({
         id: convTable.id,
@@ -543,17 +549,20 @@ export const queryDataTool = tool({
       // `users` (password hashes) and `agent_config` (ycloudApiKey,
       // metaAccessToken) are excluded — the LLM context must never see
       // credentials even via prompt injection.
-      const tableMap: Record<string, any> = {
+      const tableMap: Record<string, PgTable> = {
         conversations, leads, orders, products, chatMessages,
       };
 
       const tbl = tableMap[table];
       if (!tbl) return `Tabla "${table}" no disponible para consulta directa.`;
 
+      // Acceso dinámico a columnas por nombre (filtros declarativos del tool)
+      const cols = tbl as unknown as Record<string, Column>;
+
       // Build WHERE conditions
-      const conditions: any[] = [];
+      const conditions: SQL[] = [];
       for (const f of filters || []) {
-        const col = tbl[f.column as keyof typeof tbl];
+        const col = cols[f.column];
         if (!col) continue; // skip unknown columns
 
         if (f.operator === "eq") conditions.push(eq(col, f.value));
@@ -566,11 +575,8 @@ export const queryDataTool = tool({
       }
 
       // Default order
-      const orderCol = orderBy
-        ? (tbl[orderBy as keyof typeof tbl] || desc(tbl.createdAt || tbl.id))
-        : desc(tbl.createdAt || tbl.id);
       const orderFn = orderDir === "asc" ? asc : desc;
-      const finalOrder = orderBy ? orderFn(tbl[orderBy as keyof typeof tbl]) : desc(tbl.createdAt || tbl.id);
+      const finalOrder = orderBy ? orderFn(cols[orderBy]) : desc(cols.createdAt || cols.id);
 
       const rows = await db
         .select()
@@ -583,7 +589,7 @@ export const queryDataTool = tool({
 
       // Format results as compact text
       const headers = Object.keys(rows[0]).slice(0, 8); // max 8 columns
-      return rows.map((row: any) => {
+      return rows.map((row: Record<string, unknown>) => {
         return headers.map((h) => {
           const val = row[h];
           if (val === null || val === undefined) return "";
@@ -592,8 +598,8 @@ export const queryDataTool = tool({
           return String(val).slice(0, 80);
         }).filter(Boolean).join(" | ");
       }).join("\n");
-    } catch (e: any) {
-      return `Error al consultar: ${e.message || "desconocido"}`;
+    } catch (e: unknown) {
+      return `Error al consultar: ${(e as Error).message || "desconocido"}`;
     }
   },
 });
@@ -627,7 +633,7 @@ export const getBusinessSummaryTool = tool({
       ``,
       `👨‍🍳 Cocina: ${config?.isCooking ? "✅ Abierta" : "❌ Cerrada"}`,
       `🍔 Hamburguesas: ${config?.hamburguesasSinStock ? "❌ Sin stock" : "✅ Con stock"}`,
-      `⏰ Horarios: ${config?.businessHours ? `${(config.businessHours as any).days || "?"} ${(config.businessHours as any).open || "?"}-${(config.businessHours as any).close || "?"}` : "No configurados"}`,
+      `⏰ Horarios: ${config?.businessHours ? `${(config.businessHours as { days?: string; open?: string; close?: string }).days || "?"} ${(config.businessHours as { open?: string }).open || "?"}-${(config.businessHours as { close?: string }).close || "?"}` : "No configurados"}`,
       `📦 Pedidos pendientes: ${pendingOrders?.count || 0}`,
       `📅 Pedidos hoy: ${todayOrders?.count || 0}`,
       `🆕 Leads hoy: ${newLeads?.count || 0}`,
@@ -780,10 +786,11 @@ export const getCustomerFullProfileTool = tool({
     if (clientOrders.length > 0) {
       sections.push(`\n📦 PEDIDOS (${clientOrders.length}):`);
       for (const o of clientOrders.slice(0, 5)) {
-        const items = o.items as { name?: string; quantity?: number }[] | null;
+        const items = o.items as { name?: string; quantity?: number; unitPrice?: number | string; price?: number | string }[] | null;
         const summary = items?.slice(0, 2).map(i => `${i.quantity || 1}x ${i.name || ""}`).join(", ") || "";
         const delivery = o.deliveryFee && Number(o.deliveryFee) > 0 ? ` + $${Number(o.deliveryFee)} delivery` : "";
-        sections.push(`• #${o.id} ${o.status}: ${summary} — $${(o.items as any[])?.reduce?.((s: number, i: any) => s + (i.quantity || 0) * (i.unitPrice || i.price || 0), 0) || 0}${delivery}`);
+        const total = items?.reduce((s, i) => s + (i.quantity || 0) * Number(i.unitPrice || i.price || 0), 0) || 0;
+        sections.push(`• #${o.id} ${o.status}: ${summary} — $${total}${delivery}`);
       }
     } else {
       sections.push(`\n📦 Sin pedidos (es lead, no cliente)`);

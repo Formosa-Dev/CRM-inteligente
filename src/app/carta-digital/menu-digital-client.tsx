@@ -89,7 +89,6 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
     const id = window.setTimeout(() => target.scrollIntoView({ block: "start" }), 120);
     return () => window.clearTimeout(id);
   }, [requestedCategory]);
-
   const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   const visible = selections.filter(item => query.trim() ? normalize(`${item.data.name} ${item.data.description ?? ""}`).includes(normalize(query.trim())) : item.type === "promo" ? activeCategory === "promos" : item.data.category === activeCategory);
   const resolvedCart = useMemo(() => cartItems.flatMap(line => {

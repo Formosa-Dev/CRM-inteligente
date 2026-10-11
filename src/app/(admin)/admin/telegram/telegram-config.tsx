@@ -37,7 +37,7 @@ type Props = {
 };
 
 export function TelegramConfigClient({ initialStatus }: Props) {
-  const [status, setStatus] = useState(initialStatus);
+  const [status] = useState(initialStatus);
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
 
