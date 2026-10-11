@@ -1,6 +1,6 @@
 "use client"
 
-import { useCart } from "@/lib/cart/cart-context"
+import { useCart, cartKey } from "@/lib/cart/cart-context"
 import { CheckoutForm } from "./checkout-form"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { CatalogImage } from "@/components/products/catalog-image"
@@ -44,7 +44,7 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
         onDragDismiss={onClose}
         className={
           isMobile
-            ? "flex max-h-[85svh] w-full flex-col overflow-y-auto p-5 pt-0"
+            ? "flex max-h-[85svh] w-full flex-col overflow-y-auto px-5 pt-0"
             : "flex w-full flex-col overflow-y-auto p-5 sm:max-w-md"
         }
       >
@@ -72,12 +72,12 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
             <div className="flex-1 space-y-1 overflow-y-auto py-4">
               {items.map((item) => (
                 <div
-                  key={item.product.id}
+                  key={cartKey(item.type, item.product.id)}
                   className="group flex items-center gap-3 rounded-lg p-2 transition-colors hover:bg-muted/50"
                 >
                   <div className="relative h-12 w-14 shrink-0 overflow-hidden rounded-md">
                     <CatalogImage
-                      src={getCatalogProductImage({ id: item.product.id, name: item.product.name })}
+                      src={getCatalogProductImage({ id: item.product.id, name: item.product.name, imageUrl: item.imageUrl })}
                       alt={item.product.name}
                       sizes="56px"
                     />
@@ -92,12 +92,13 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-1">
+                  <div className="flex shrink-0 items-center gap-1">
                     <Button
                       variant="ghost"
-                      size="icon-xs"
+                      size="icon-sm"
+                      className="size-11 shrink-0 sm:size-7"
                       onClick={() =>
-                        updateQuantity(item.product.id, item.quantity - 1)
+                        updateQuantity(cartKey(item.type, item.product.id), item.quantity - 1)
                       }
                     >
                       <Minus className="size-3" aria-label="Quitar una unidad" />
@@ -107,25 +108,26 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
                     </span>
                     <Button
                       variant="ghost"
-                      size="icon-xs"
+                      size="icon-sm"
+                      className="size-11 shrink-0 sm:size-7"
                       onClick={() =>
-                        updateQuantity(item.product.id, item.quantity + 1)
+                        updateQuantity(cartKey(item.type, item.product.id), item.quantity + 1)
                       }
                     >
                       <Plus className="size-3" aria-label="Agregar una unidad" />
                     </Button>
                   </div>
 
-                  <p className="w-16 text-right text-sm font-medium tabular-nums">
+                  <p className="hidden w-16 text-right text-sm font-medium tabular-nums sm:block">
                     ${(item.product.price * item.quantity).toLocaleString("es-AR")}
                   </p>
 
                   <Button
                     variant="ghost"
-                    size="icon-xs"
-                    onClick={() => removeItem(item.product.id)}
+                    size="icon-sm"
+                    onClick={() => removeItem(cartKey(item.type, item.product.id))}
                     aria-label={`Eliminar ${item.product.name}`}
-                    className="opacity-70 hover:opacity-100 transition-opacity"
+                    className="size-11 shrink-0 opacity-70 hover:opacity-100 transition-opacity sm:size-7"
                   >
                     <Trash2 className="size-3 text-destructive" />
                   </Button>
@@ -155,7 +157,7 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
                     onClick={() =>
                       items
                         .filter((i) => !checkoutable.includes(i))
-                        .forEach((i) => removeItem(i.product.id))
+                        .forEach((i) => removeItem(cartKey(i.type, i.product.id)))
                     }
                   >
                     Quitarlos del pedido
@@ -164,7 +166,7 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
               )}
 
               {!hasStale && (
-                <CheckoutForm key={items.map(i => `${i.product.id}:${i.quantity}`).join(",")} items={checkoutable.map(i => ({ type: "product", id: Number(i.product.id), quantity: i.quantity }))} />
+                <CheckoutForm key={items.map(i => `${cartKey(i.type, i.product.id)}:${i.quantity}`).join(",")} items={checkoutable.map(i => ({ type: i.type, id: Number(i.product.id), quantity: i.quantity }))} />
               )}
 
               <div className="flex justify-center">

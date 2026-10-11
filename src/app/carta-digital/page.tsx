@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { products, promotions } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { Suspense } from "react";
 import { MenuDigitalClient } from "./menu-digital-client";
 
 export const metadata = {
@@ -25,9 +26,11 @@ export default async function CartaDigitalPage() {
     .where(eq(promotions.active, true));
 
   return (
-    <MenuDigitalClient
-      products={items}
-      promos={activePromos}
-    />
+    <Suspense>
+      <MenuDigitalClient
+        products={items}
+        promos={activePromos}
+      />
+    </Suspense>
   );
 }
