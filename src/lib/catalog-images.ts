@@ -7,6 +7,32 @@ type CatalogProduct = {
 };
 
 /**
+ * Visual treatment for a catalog asset:
+ * - `cutout`: transparency-preserving product render that must float over the
+ *   card frame (contain, no crop, no opaque rectangular panel).
+ * - `photo`: photographic asset (JPEG/WebP) that fills the frame with cover.
+ */
+export type MediaTreatment = "cutout" | "photo";
+
+const CUTOUT_ASSETS = new Set<string>([
+  ...Object.values(PRODUCT_IMAGE_MAP),
+  ...Object.values(PRODUCT_IMAGE_BY_NAME),
+]);
+
+/**
+ * Classifies an image semantically instead of by filename: bundled product
+ * renders and transparency-capable PNGs are cutouts; everything else (JPEG,
+ * WebP, uploaded photography) keeps the cover treatment.
+ */
+export function resolveMediaTreatment(src?: string | null): MediaTreatment {
+  const value = src?.trim();
+  if (!value) return "photo";
+  if (CUTOUT_ASSETS.has(value)) return "cutout";
+  const path = value.split(/[?#]/)[0].toLowerCase();
+  return path.endsWith(".png") ? "cutout" : "photo";
+}
+
+/**
  * Normaliza URLs históricas y actuales guardadas en la base.
  * Cloudinary devuelve URLs absolutas; instalaciones anteriores pueden tener
  * rutas relativas a /public, /uploads o /assets.
