@@ -52,11 +52,11 @@ export function ClientGallery() {
     : blurIn;
 
   return (
-    <section className="py-20 sm:py-24 px-4 bg-background relative">
+    <section className="px-4 py-14 sm:py-20 bg-background relative">
       <div className="max-w-7xl mx-auto">
         {/* Heading */}
         <motion.div
-          className="text-center mb-14"
+          className="text-center mb-10"
           initial="hidden"
           whileInView="visible"
           viewport={{ once: true }}

@@ -2,17 +2,15 @@
 
 import { motion } from "framer-motion";
 import { ChevronRight, Smartphone } from "lucide-react";
-import { HeroSection } from "@/components/hero/hero-section";
-import { FeaturedProductsSection } from "@/components/products/featured-products-section";
+import Link from "next/link";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { AnimatedStatCard } from "@/components/ui/animated-stat-card";
 import { fadeUp } from "@/lib/animation-variants";
-import Link from "next/link";
+import { LandingHero } from "@/components/home/landing-hero";
+import { LandingMenu } from "@/components/home/landing-menu";
 import { ClientGallery } from "@/components/home/client-gallery";
 import { BreadShowcase } from "@/components/home/bread-showcase";
 import { DeliveryCTA } from "@/components/home/delivery-cta";
-import { EmpanadasShowcase } from "@/components/home/empanadas-showcase";
-import { ParallaxDivider } from "@/components/layout/parallax-divider";
 import { Marquee } from "@/components/motion/marquee";
 import { useBusiness } from "@/lib/hooks/use-business";
 
@@ -36,23 +34,41 @@ export default function HomePage() {
   const marqueeItems = business?.tagline
     ? [...MARQUEE_ITEMS, business.tagline]
     : MARQUEE_ITEMS;
+
   return (
     <>
       <div className="paint-veil" aria-hidden="true" />
-      <HeroSection />
+      <LandingHero />
 
       <Marquee items={marqueeItems} />
 
-      <FeaturedProductsSection />
+      {/* One scrollable menu: real catalog grouped into anchored sections. */}
+      <LandingMenu />
 
-      <ParallaxDivider image="/assets/images/background/2.png" />
-
-      <section className="py-20 sm:py-24 px-4 bg-background relative overflow-hidden">
-        <div className="orb-glow orb-1" style={{ width: "450px", height: "450px", background: "radial-gradient(circle, rgba(212,160,23,0.08), transparent 70%)", top: "-10%", right: "-5%" }} />
-        <div className="orb-glow orb-2" style={{ width: "350px", height: "350px", background: "radial-gradient(circle, rgba(232,113,42,0.06), transparent 70%)", bottom: "-15%", left: "-5%" }} />
-        <div className="max-w-5xl mx-auto relative z-10">
+      <section className="relative overflow-hidden bg-background px-4 py-14 sm:py-20">
+        <div
+          className="orb-glow orb-1"
+          style={{
+            width: "450px",
+            height: "450px",
+            background: "radial-gradient(circle, rgba(212,160,23,0.08), transparent 70%)",
+            top: "-10%",
+            right: "-5%",
+          }}
+        />
+        <div
+          className="orb-glow orb-2"
+          style={{
+            width: "350px",
+            height: "350px",
+            background: "radial-gradient(circle, rgba(232,113,42,0.06), transparent 70%)",
+            bottom: "-15%",
+            left: "-5%",
+          }}
+        />
+        <div className="relative z-10 mx-auto max-w-5xl">
           <GlassPanel>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-10 items-center">
+            <div className="grid grid-cols-1 items-center gap-10 md:grid-cols-2">
               <motion.div
                 className="flex flex-col gap-5"
                 variants={fadeUp}
@@ -63,30 +79,29 @@ export default function HomePage() {
                 <span className="text-xs font-semibold uppercase tracking-[0.3em] text-primary">
                   Sobre Nosotros
                 </span>
-                <h2 className="text-3xl sm:text-4xl font-black text-foreground leading-tight font-heading">
-                  Más que una{" "}
-                  <em className="marker-gold">hamburguesa</em>
+                <h2 className="font-heading text-3xl font-black leading-tight text-foreground sm:text-4xl">
+                  Más que una <em className="marker-gold">hamburguesa</em>
                 </h2>
-                <p className="text-foreground/65 leading-relaxed">
+                <p className="leading-relaxed text-foreground/65">
                   {business?.description ||
                     `En ${business?.name ?? "nuestra cocina"} creemos que cada ingrediente importa. Trabajamos con productores locales, elaboramos nuestro propio pan y preparamos cada hamburguesa al momento. Sin compromiso. Sin atajos.`}
                 </p>
-                <p className="text-foreground/65 leading-relaxed">
+                <p className="leading-relaxed text-foreground/65">
                   También proveemos pan artesanal a restaurantes y cocinas que, como nosotros, no se conforman con lo mediocre.
                 </p>
-                <div className="flex gap-4 mt-2">
+                <div className="mt-2 flex flex-wrap gap-4">
                   <Link
-                    href="/hamburguesas"
+                    href="/carta-digital"
                     className="btn-gold shine-sweep inline-flex items-center justify-center px-6 py-3 text-sm font-bold uppercase tracking-widest"
                   >
-                    Ver Menú
+                    Ver la carta
                   </Link>
-                  <Link
-                    href="/pan-mayorista"
-                    className="btn-outline-gold shine-sweep px-6 py-3 text-sm uppercase tracking-widest"
+                  <a
+                    href="#menu"
+                    className="btn-outline-gold shine-sweep inline-flex items-center justify-center px-6 py-3 text-sm uppercase tracking-widest"
                   >
-                    Pan Mayorista
-                  </Link>
+                    Explorar el menú
+                  </a>
                 </div>
               </motion.div>
 
@@ -100,24 +115,34 @@ export default function HomePage() {
         </div>
       </section>
 
-      <ParallaxDivider image="/assets/images/background/3.png" height="45vh" overlay={0.6}>
-        <p
-          className="text-xl sm:text-2xl font-black text-foreground text-center max-w-xl mx-auto px-6 leading-snug font-heading"
-          style={{ textShadow: "0 2px 12px rgba(0,0,0,0.7)" }}
-        >
-          &quot;Cada mordida cuenta una historia.{" "}
-          <span className="text-primary">La <em>nuestra</em> empieza con ingredientes reales.&quot;</span>
-        </p>
-      </ParallaxDivider>
+      <section className="bg-background px-4 py-12 sm:py-16">
+        <div className="mx-auto max-w-2xl text-center">
+          <span className="mx-auto mb-6 block h-px w-24 bg-gradient-to-br from-gold via-gold-bright to-gold-ember" />
+          <p className="font-heading text-xl font-black leading-snug text-foreground sm:text-2xl">
+            &quot;Cada mordida cuenta una historia.{" "}
+            <span className="text-primary">
+              La <em>nuestra</em> empieza con ingredientes reales.&quot;
+            </span>
+          </p>
+        </div>
+      </section>
 
       <ClientGallery />
       <BreadShowcase />
-      <EmpanadasShowcase />
 
-      {/* Digital Menu CTA */}
-      <section className="py-16 px-4 bg-background relative overflow-hidden">
-        <div className="orb-glow orb-1" style={{ width: "400px", height: "400px", background: "radial-gradient(circle, rgba(212,160,23,0.07), transparent 70%)", top: "-20%", left: "10%" }} />
-        <div className="max-w-3xl mx-auto text-center relative z-10">
+      {/* Single dedicated full-catalog CTA route. */}
+      <section className="relative overflow-hidden bg-background px-4 py-14 sm:py-20">
+        <div
+          className="orb-glow orb-1"
+          style={{
+            width: "400px",
+            height: "400px",
+            background: "radial-gradient(circle, rgba(212,160,23,0.07), transparent 70%)",
+            top: "-20%",
+            left: "10%",
+          }}
+        />
+        <div className="relative z-10 mx-auto max-w-3xl text-center">
           <motion.div
             className="flex flex-col items-center gap-4"
             variants={fadeUp}
@@ -125,25 +150,29 @@ export default function HomePage() {
             whileInView="visible"
             viewport={{ once: true }}
           >
-            <h2 className="text-2xl sm:text-3xl font-black font-heading text-gold-gradient">
+            <h2 className="font-heading text-2xl font-black text-gold-gradient sm:text-3xl">
               Carta <em>Digital</em>
             </h2>
-            <p className="text-foreground/60 max-w-md leading-relaxed">
+            <p className="max-w-md leading-relaxed text-foreground/60">
               Deslizá todos nuestros productos, armá tu pedido y enviá directo por WhatsApp. Rápido y sin vueltas.
             </p>
             <a href="/carta-digital" className="cta-card w-full max-w-md text-left">
-              <span className="cta-card-icon"><Smartphone size={20} aria-hidden="true" /></span>
+              <span className="cta-card-icon">
+                <Smartphone size={20} aria-hidden="true" />
+              </span>
               <span className="flex-1">
-                <span className="block text-[17px] font-bold leading-tight">Abrir Carta Digital</span>
+                <span className="block text-[17px] font-bold leading-tight">
+                  Abrir Carta Digital
+                </span>
                 <span className="block text-xs opacity-70">Pedí directo por WhatsApp</span>
               </span>
-              <span className="cta-card-chevron"><ChevronRight size={20} aria-hidden="true" /></span>
+              <span className="cta-card-chevron">
+                <ChevronRight size={20} aria-hidden="true" />
+              </span>
             </a>
           </motion.div>
         </div>
       </section>
-
-      <ParallaxDivider image="/assets/images/background/b4.png" height="40vh" />
 
       <DeliveryCTA />
     </>

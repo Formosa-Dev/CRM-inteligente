@@ -29,8 +29,8 @@ export function BreadShowcase() {
     : clipReveal;
 
   return (
-    <section className="py-20 sm:py-24 px-4 bg-background relative">
-      <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-16 items-center">
+    <section className="px-4 py-14 sm:py-20 bg-background relative">
+      <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-10 items-center">
         {/* LEFT — Text */}
         <motion.div
           className="flex flex-col gap-6"

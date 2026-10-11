@@ -1,0 +1,123 @@
+"use client";
+
+import Link from "next/link";
+import { motion } from "framer-motion";
+import { ArrowRight } from "lucide-react";
+import { CatalogImage } from "@/components/products/catalog-image";
+import { staggerContainer } from "@/lib/animation-variants";
+import { useEditorialMotion } from "@/components/storefront/motion";
+
+export type LandingPromo = {
+  id: number;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  price: number | null;
+  items: { productId: number; productName: string; quantity: number }[];
+};
+
+/**
+ * Promotions surfaced from the real promotions table. These are not part of
+ * the shared cart checkout (which only accepts catalog product ids), so the
+ * section links into /carta-digital where the promo can be ordered.
+ */
+export function PromosSection({ promos }: { promos: LandingPromo[] }) {
+  const { reveal } = useEditorialMotion();
+  if (promos.length === 0) return null;
+
+  return (
+    <section
+      id="promos"
+      className="scroll-mt-24 border-t border-border/60 px-4 py-12 sm:py-16"
+    >
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-4 sm:mb-8">
+          <div>
+            <span className="text-xs font-semibold uppercase tracking-[0.3em] text-primary">
+              Aprovechá
+            </span>
+            <h2 className="mt-2 font-heading text-2xl font-black leading-tight text-foreground sm:text-3xl">
+              Promos <em className="text-gold-gradient">para compartir</em>
+            </h2>
+            <p className="mt-2 max-w-xl text-sm leading-relaxed text-foreground/55">
+              Combos pensados para reuniones, cumpleaños y eventos.
+            </p>
+          </div>
+
+          <Link
+            href="/carta-digital?category=promos"
+            className="btn-outline-gold inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold uppercase tracking-widest"
+          >
+            Ver más
+            <ArrowRight size={15} aria-hidden="true" />
+          </Link>
+        </div>
+
+        <motion.div
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5"
+          variants={staggerContainer}
+          initial="hidden"
+          whileInView="visible"
+          viewport={{ once: true, margin: "-60px" }}
+        >
+          {promos.map((promo) => (
+            <motion.article
+              key={promo.id}
+              variants={reveal}
+              className="card-gold-glow flex flex-col overflow-hidden rounded-2xl border border-border bg-card sm:flex-row"
+            >
+              <Link
+                href="/carta-digital?category=promos"
+                aria-label={`Ver ${promo.name} en la carta`}
+                className="relative block aspect-[4/3] overflow-hidden bg-muted/30 sm:aspect-auto sm:w-2/5 sm:shrink-0"
+              >
+                <CatalogImage
+                  src={promo.imageUrl}
+                  alt={promo.name}
+                  sizes="(max-width: 640px) 90vw, 30vw"
+                />
+              </Link>
+
+              <div className="flex flex-1 flex-col gap-2 p-4">
+                <h3 className="font-heading text-lg font-bold leading-tight text-foreground">
+                  {promo.name}
+                </h3>
+                {promo.description && (
+                  <p className="text-xs leading-relaxed text-foreground/55 sm:text-sm">
+                    {promo.description}
+                  </p>
+                )}
+                {promo.items.length > 0 && (
+                  <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-foreground/45">
+                    {promo.items.map((item) => (
+                      <li key={`${promo.id}-${item.productId}`}>
+                        <span className="tabular-nums text-foreground/70">
+                          {item.quantity}×
+                        </span>{" "}
+                        {item.productName}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="mt-auto flex items-center justify-between gap-2 border-t border-border/60 pt-3">
+                  <strong className="font-heading text-lg font-bold tabular-nums text-primary">
+                    {promo.price && promo.price > 0
+                      ? `$${promo.price.toLocaleString("es-AR")}`
+                      : "Consultar"}
+                  </strong>
+                  <Link
+                    href="/carta-digital?category=promos"
+                    className="btn-gold inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-wider"
+                  >
+                    Ver en la carta
+                    <ArrowRight size={13} aria-hidden="true" />
+                  </Link>
+                </div>
+              </div>
+            </motion.article>
+          ))}
+        </motion.div>
+      </div>
+    </section>
+  );
+}
