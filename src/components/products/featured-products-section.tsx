@@ -69,10 +69,10 @@ export function FeaturedProductsSection() {
   const filteredProducts = burgers.filter((p) => p.line === activeLinea);
 
   return (
-    <section className="py-20 sm:py-24 px-4 bg-background relative">
+    <section className="py-14 sm:py-24 px-4 bg-background relative">
       <div className="max-w-7xl mx-auto">
         <motion.div
-          className="flex flex-col items-center text-center gap-4 mb-12"
+          className="flex flex-col items-center text-center gap-4 mb-8 sm:mb-12"
           variants={fadeUp}
           initial="hidden"
           whileInView="visible"

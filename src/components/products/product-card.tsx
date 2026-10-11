@@ -12,7 +12,7 @@ export function ProductCard({ product }: { product: Product; index?: number }) {
   const { addItem } = useCart();
   const { reveal } = useEditorialMotion();
   const canOrder = !product.comingSoon && product.price !== null && product.price > 0 && product.stock !== 0;
-  return <motion.article variants={reveal} className="bg-card border border-border rounded-xl overflow-hidden flex flex-col">
+  return <motion.article variants={reveal} className="product-card bg-card border border-border rounded-xl overflow-hidden flex flex-col">
     <Link href={`/hamburguesas/${product.id}`} className="menu-item-preview" aria-label={`Ver ${product.name}`}>
       <CatalogImage src={getCatalogProductImage(product)} alt={product.name} sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw" />
       <span className="menu-preview-arrow"><ArrowUpRight size={20} /></span>
