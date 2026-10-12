@@ -93,6 +93,19 @@ export async function buildTelegramPrompt(): Promise<string> {
     // non-fatal
   }
 
+  // ── Sesión de caja abierta ──
+  try {
+    const { getOpenSession } = await import("@/lib/cash/session");
+    const session = await getOpenSession();
+    if (session) {
+      sections.push(
+        `═══ CAJA ═══\nSesión de caja #${session.id} abierta desde ${session.openedAt.toLocaleString("es-AR")}. Usá getCashStatus para el estado actual.`
+      );
+    }
+  } catch {
+    // non-fatal — el módulo/tabla de caja puede no existir todavía
+  }
+
   // ── Menú de productos ──
   try {
     const items = await db
