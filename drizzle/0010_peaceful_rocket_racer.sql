@@ -1,0 +1,1 @@
+ALTER TABLE "agent_config" ADD COLUMN "whatsapp_style_profile" text;

@@ -56,10 +56,13 @@ export type AgentRoutingKind =
   | "blocked"
   | "duplicate";
 
+// Nombre del humano del negocio (identidad del despliegue, no del repo).
+const OWNER_NAME = process.env.BUSINESS_OWNER_NAME?.trim() || "una persona del equipo";
+
 export const FIXED_ACK_REPLY = "Holaa ¿todo bien?";
 export const FIXED_CLARIFICATION_REPLY =
   "¿Me contás qué necesitás del negocio? Si querés pedir o consultar precios, decime.";
-export const HANDOFF_REPLY = "Ahí te paso con Leandro, yo estoy para cosas del negocio.";
+export const HANDOFF_REPLY = `Ahí te paso con ${OWNER_NAME}, yo estoy para cosas del negocio.`;
 
 export function resolveAgentRouting(kind: AgentRoutingKind): {
   invokeLLM: boolean;
@@ -173,7 +176,7 @@ export async function runWhatsAppAgent({
 
       if (wasPrevNonCommercial && currentType === "non_commercial") {
         // 2+ mensajes no-comerciales consecutivos → transferir a humano
-        nonCommercialDirective = "🚫 NO COMERCIAL: El cliente NO está haciendo un pedido ni consulta del negocio. Respondé: 'Ahí te paso con Leandro, yo estoy para cosas del negocio' y ejecutá transferToHuman.";
+        nonCommercialDirective = `🚫 NO COMERCIAL: El cliente NO está haciendo un pedido ni consulta del negocio. Respondé: 'Ahí te paso con ${OWNER_NAME}, yo estoy para cosas del negocio' y ejecutá transferToHuman.`;
       } else {
         // Primer mensaje no-comercial/saludo → responder amable sin vender
         nonCommercialDirective = "🚫 NO COMERCIAL: Este mensaje no parece ser sobre el negocio. Respondé amable 'Holaa ¿todo bien?' SIN ofrecer menú, SIN arrancar flujo de venta, SIN preguntar qué quiere.";
@@ -574,7 +577,7 @@ const isHallucination = isHallucinationA || isHallucinationB || isHallucinationC
     if (isHallucination) {
       console.error(`[agent] 💀 MODEL HALLUCINATION survived after ${MAX_HALLUCINATION_RETRIES+1} attempts — returning fallback response`);
       return {
-        text: "Te consulto con Leandro sobre las promos y te paso las imágenes en un toque.",
+        text: `Te consulto con ${OWNER_NAME} sobre las promos y te paso las imágenes en un toque.`,
         pendingMedia: [],
       };
     }
@@ -616,7 +619,7 @@ const isHallucination = isHallucinationA || isHallucinationB || isHallucinationC
     
     } catch (error) {
       console.error("[agent] Error running WhatsApp agent:", error);
-      return { text: "Disculpá, tuve un problema técnico. Escribí 'hablar con humano' si querés que te atienda Leandro personalmente.", pendingMedia: [] };
+      return { text: `Disculpá, tuve un problema técnico. Escribí 'hablar con humano' si querés que te atienda ${OWNER_NAME} personalmente.`, pendingMedia: [] };
     }
   }
 

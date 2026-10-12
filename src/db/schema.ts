@@ -124,6 +124,7 @@ export const agentConfig = pgTable("agent_config", {
   telegramEnabled: boolean("telegram_enabled").notNull().default(false),
   // ─── WhatsApp Agent (Editable desde UI) ────────────────────────
   whatsappSystemPrompt: text("whatsapp_system_prompt"),
+  whatsappStyleProfile: text("whatsapp_style_profile"),
   whatsappInstructions: text("whatsapp_instructions"),
   whatsappPromociones: text("whatsapp_promociones"),
   productionHours: text("production_hours"),

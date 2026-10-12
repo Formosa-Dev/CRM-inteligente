@@ -890,7 +890,9 @@ test("fixed, handoff, blocked and duplicate paths never reach LLM or tools", () 
   assert.equal(handoff.invokeLLM, false);
   assert.equal(handoff.useTools, false);
   assert.equal(handoff.fixedReply, HANDOFF_REPLY);
-  assert.match(HANDOFF_REPLY, /Leandro/);
+  // El nombre del humano sale de BUSINESS_OWNER_NAME (identidad del despliegue),
+  // nunca hardcodeado: "una persona del equipo" si la env no está seteada.
+  assert.match(HANDOFF_REPLY, /Ahí te paso con .+, yo estoy para cosas del negocio\./);
 
   for (const silent of ["blocked", "duplicate"] as const) {
     const decision = resolveAgentRouting(silent);
@@ -1726,4 +1728,34 @@ test("every new motion keyframe is honored in both reduced-motion blocks", () =>
   for (const sel of [".orb-float::before", ".cta-card::before", ".cta-card::after", ".cta-card-chevron svg", ".menu-category-nav button"]) {
     assert.ok(globalRm.includes(sel), `missing ${sel} in global RM block`);
   }
+});
+
+test("sales style profile lives in DB layer and base prompt carries no business literals", () => {
+  // La capa de estilo se inyecta desde agent_config (cada despliegue genera la
+  // suya vía scripts/learn-style.ts); el prompt base del repo queda agnóstico:
+  // sin alias de pago ni nombre del humano hardcodeados.
+  const pb = readFileSync("src/lib/whatsapp/prompt-builder.ts", "utf8");
+  assert.match(pb, /export async function getStyleProfile\(\)/);
+  assert.match(pb, /whatsappStyleProfile/);
+  assert.match(pb, /await getStyleProfile\(\)/);
+
+  const schema = readFileSync("src/db/schema.ts", "utf8");
+  assert.match(schema, /whatsappStyleProfile:\s*text\("whatsapp_style_profile"\)/);
+
+  const seed = readFileSync("docs/chat-analysis/style-profile.md", "utf8");
+  assert.match(seed, /<!-- STYLE-PROFILE:BEGIN -->/);
+  assert.match(seed, /<!-- STYLE-PROFILE:END -->/);
+
+  const gen = readFileSync("scripts/learn-style.ts", "utf8");
+  assert.match(gen, /whatsappStyleProfile/);
+  assert.match(gen, /REGLAS PARA EL AGENTE DE VENTAS/);
+
+  const migrations = readFileSync("drizzle/0010_peaceful_rocket_racer.sql", "utf8");
+  assert.match(migrations, /whatsapp_style_profile/i);
+
+  const basePrompt = pb.slice(pb.indexOf("export const DEFAULT_SYSTEM_PROMPT"));
+  assert.doesNotMatch(basePrompt, /LEMON|Leandro|Patiño/);
+
+  const agent = readFileSync("src/lib/whatsapp/agent.ts", "utf8");
+  assert.doesNotMatch(agent, /['"`][^'"`]*\bLeandro\b|LEMON|Patiño/);
 });

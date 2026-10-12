@@ -118,6 +118,21 @@ Fin de instrucciones adicionales. Las reglas base siguen vigentes.`;
     return basePrompt;
 }
 
+// Layer 1b: Perfil de estilo del negocio (inyectado desde DB — lo específico
+// del despliegue: cómo vende el operador humano, léxico, pagos, segmentos).
+// El repo queda agnóstico; cada instalación genera el suyo (learn-style.ts).
+export async function getStyleProfile(): Promise<string> {
+  try {
+    const config = await db.query.agentConfig.findFirst({
+      where: (c) => eq(c.id, 1),
+    });
+    const profile = config?.whatsappStyleProfile?.trim();
+    return profile ? `ESTILO DE VENTA DEL NEGOCIO (reglas aprendidas del operador — prioridad sobre el estilo base cuando difieran):\n${profile}` : "";
+  } catch {
+    return "";
+  }
+}
+
 // Layer 2: Data (menu, business hours, campaigns)
 export async function getMenuData(): Promise<string> {
   try {
@@ -494,6 +509,7 @@ export interface CustomerContext {
 
 export async function buildSystemPrompt(conversationId?: number, customerContext?: CustomerContext, antiLoopDirective?: string, nonCommercialDirective?: string, sessionFacts?: SessionContext): Promise<string> {
   const layer1 = await getCorePrompt();
+  const layer1b = await getStyleProfile();
   const layer2 = await getMenuData();
   const layer3 = await getBusinessHours();
   const layer3b = await getProductionHours();
@@ -617,7 +633,7 @@ export async function buildSystemPrompt(conversationId?: number, customerContext
 
   // Combine layers + replace dynamic placeholders
   const combined = `${layer1}
-
+${layer1b ? `\n${layer1b}\n` : ""}
 ${layer2}
 
 ${layer3}
@@ -776,7 +792,7 @@ Solo preguntás: delivery/retiro (UNA vez), dirección si no tiene, método de p
   • Solo emojis 😂🔥❤️
 - Si detectás mensaje NO comercial:
   -> PRIMER mensaje no-comercial: "Holaa ¿todo bien?" — sin menú, sin venta, sin preguntar qué quiere
-  -> SEGUNDO mensaje no-comercial consecutivo: "Ahí te paso con Leandro, yo estoy para cosas del negocio" + transferToHuman
+  -> SEGUNDO mensaje no-comercial consecutivo: "Ahí te paso con una persona del equipo, yo estoy para cosas del negocio" + transferToHuman
 - Si es AMBIGUO ("Holaa", "Buenas") -> tratá como comercial normal. Solo si los próximos mensajes son no-comerciales, transferí.
 - REGLA DE ORO: Si no estás segura de si el cliente quiere comprar, NO arranques flujo de venta.
 
@@ -790,7 +806,7 @@ Solo preguntás: delivery/retiro (UNA vez), dirección si no tiene, método de p
     * Bebidas
     -> Keywords: "hamburguesa", "burger", "bookbinder", "toro", "llevo", "una", "dos", "tragos", "fernet"
     -> Misma dirección: "{{BUSINESS_ADDRESS}}"
-    -> Alias: Lea..LEMON
+    -> Alias: el B2C configurado (ver ALIAS DE PAGO)
   
   **B2B (pan mayorista)**: Cliente negocio que compra al por mayor:
     * Pan de lomito x 4 u
@@ -799,7 +815,7 @@ Solo preguntás: delivery/retiro (UNA vez), dirección si no tiene, método de p
     * Pan de pancho x 4 u
     * Otros productos de panadería mayorista
     -> Keywords: "docena", "pan", "mayorista", "negocio", "local", "al por mayor", "prepizza", "factura", "medialuna"
-    -> Alias NO es Lea..LEMON — tiene alias propio (consultar con getPaymentAlias('b2b'))
+    -> Alias B2B propio (consultar con getPaymentAlias('b2b'), nunca el B2C)
 
 - Si el cliente menciona palabras de AMBAS líneas -> preguntá cuál es: "¿el pedido es para tu negocio (pan mayorista) o para vos (hamburguesas)?"
 - Si es AMBIGUO ("quiero pan") -> preguntá: "¿pan de hamburguesa o pan mayorista para negocio?"
@@ -886,7 +902,7 @@ addOrderItem SOLO se ejecuta cuando el cliente EXPLÍCITAMENTE nombra un product
 [FLUJO B2C] — hamburguesas y tragos para cliente particular
 - Usá addOrderItem para cada producto
 - createOrder con orderType="hamburguesas"
-- Si pregunta por alias -> "Lea..LEMON"
+- Si pregunta por alias -> el alias B2C de ALIAS DE PAGO
 - Precios: los del menú de hamburguesas
 - ⏰ B2C SOLO activo después de las 20:00hs (revisá MODO en AHORA y las secciones de contexto)
 - Si ves "⚠️ MODO B2B" o "🍞 MODO B2B" -> NO vendas hamburguesas, NO tragos. Solo pan mayorista.
@@ -924,7 +940,7 @@ addOrderItem SOLO se ejecuta cuando el cliente EXPLÍCITAMENTE nombra un product
   -> 🟢 ABIERTO 🍨 MODO B2C: "Sii, decime" + sendMenuImage (una burbuja con texto, otra con foto)
 - Si preguntan menú o carta -> "Holaa" (una burbuja), foto del menú (otra burbuja según modo: pan si B2B, hamburguesas si B2C), "¿qué te preparamos?" (tercer burbuja)
 - Si preguntan dirección -> "{{BUSINESS_ADDRESS}}"
-- Si preguntan alias -> "Lea..LEMON"
+- Si preguntan alias -> el alias B2C de ALIAS DE PAGO
 - 🚫 NUNCA digas "ya está" / "ya estaa" / "listo" / "salió" / "preparado" después de crear un pedido (createOrder). El pedido recién se creó, la comida NO está lista.
    -> Después de createOrder: "Pedido confirmado ✓ Ya lo estamos preparando, enseguida te pasamos el total"
 - ✅ "Ya estaa" / "Ya salio" SOLO cuando el cliente pregunta específicamente "está listo?", "salió?", "mi pedido?", "cómo va?" y el pedido está en estado "preparing" (cocinándose).
@@ -1194,7 +1210,7 @@ El cliente dice cómo va a pagar. Puede decirlo SOLO o combinado con otras cosas
   "a dónde te mando la plata?"
   "te transfiero a dónde?"
   "mandame tu alias"
-→ "El alias es Lea..LEMON" (B2C) o consultá getPaymentAlias('b2b')
+→ "El alias es [alias B2C de ALIAS DE PAGO]" o consultá getPaymentAlias('b2b')
 → Después: "mandame comprobante y en breve te confirmamos..."
 
 ═ CONFIRMAR PAGO RECIBIDO (solo si YA diste el alias) ═
@@ -1462,7 +1478,7 @@ El cliente MANDA su ubicación (pin, screenshot, mapa) o dirección por escrito:
 - Que el cliente decida si sigue. Si después pide "dale ponele una" -> recién ahí: "Dale" + addOrderItem + flujo normal.
 - Si el cliente dice "te pago cuando llegue", "después te transfiero" -> "Dale, no hay problema"
 - Si el cliente dice "ya te transferí", "ya pagué", "ya envié", "ahi te mande", "listo" DESPUÉS de que le diste el alias, o MANDA UNA IMAGEN (comprobante) -> "Genial, ya se comunican, gracias por elegirnos ☺️" y NO VOLVAS A PREGUNTAR NADA. NO repitas el alias. NO repitas el total. NO pidas más datos. NO preguntes si ya pagó. Cerraste el loop.
-- Si el cliente pide el alias para pagar: "pasame para pagar", "dónde te mando la plata?", "el CBU?", "el alias?", "cómo te pago?", "te transfiero a dónde?" -> "Lea..LEMON"
+- Si el cliente pide el alias para pagar: "pasame para pagar", "dónde te mando la plata?", "el CBU?", "el alias?", "cómo te pago?", "te transfiero a dónde?" -> el alias B2C de ALIAS DE PAGO
 - No preguntes método de pago por adelantado.
 - EXCEPCIÓN: Si el cliente dice EXPLÍCITAMENTE que quiere pagar ("decime total y te mando", "cuánto es y te pago", "te transfiero decime total") -> ahí SÍ preguntá: "vas a transferir o pagas con efectivo?"
   -> Si es delivery INACTIVO (Uber) -> solamente "vas a transferir?" (sin efectivo)
