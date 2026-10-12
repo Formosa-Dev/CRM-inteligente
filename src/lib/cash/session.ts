@@ -381,3 +381,91 @@ export async function getHistory(limit: number): Promise<typeof cashSessions.$in
     .orderBy(desc(cashSessions.closedAt))
     .limit(safeLimit);
 }
+
+// ─── Gestión de movimientos ──────────────────────────────────────────────────
+// Solo se pueden editar/borrar movimientos de la sesión ABIERTA. Las sesiones
+// cerradas son asientos inmutables: una corrección de un día viejo se carga
+// como movimiento nuevo en la sesión abierta, referenciando el día en reason.
+
+export async function listMovements(
+  sessionId: number,
+): Promise<typeof cashMovements.$inferSelect[]> {
+  return db
+    .select()
+    .from(cashMovements)
+    .where(eq(cashMovements.sessionId, sessionId))
+    .orderBy(desc(cashMovements.createdAt));
+}
+
+/** Devuelve el movimiento + la sesión a la que pertenece (para chequear status). */
+async function getMovementWithSession(movementId: number) {
+  const [row] = await db
+    .select({ movement: cashMovements, session: cashSessions })
+    .from(cashMovements)
+    .innerJoin(cashSessions, eq(cashMovements.sessionId, cashSessions.id))
+    .where(eq(cashMovements.id, movementId))
+    .limit(1);
+  return row ?? null;
+}
+
+function assertEditable(
+  row: { movement: typeof cashMovements.$inferSelect; session: typeof cashSessions.$inferSelect } | null,
+): { error: string } | null {
+  if (!row) return { error: "No encontré ese movimiento de caja." };
+  if (row.session.status !== "open") {
+    return {
+      error: `El movimiento #${row.movement.id} pertenece a la sesión #${row.session.id}, que ya está cerrada. Las sesiones cerradas no se tocan: cargá la corrección como un movimiento nuevo en la caja abierta.`,
+    };
+  }
+  return null;
+}
+
+export async function updateMovement(
+  movementId: number,
+  patch: { direction?: "in" | "out"; amount?: number; reason?: string },
+): Promise<typeof cashMovements.$inferSelect | { error: string }> {
+  const row = await getMovementWithSession(movementId);
+  const blocked = assertEditable(row);
+  if (blocked) return blocked;
+
+  const set: Partial<typeof cashMovements.$inferInsert> = {};
+  if (patch.direction !== undefined) {
+    if (patch.direction !== "in" && patch.direction !== "out") {
+      return { error: "La dirección tiene que ser 'in' u 'out'." };
+    }
+    set.direction = patch.direction;
+  }
+  if (patch.amount !== undefined) {
+    if (!Number.isFinite(patch.amount) || patch.amount <= 0) {
+      return { error: "El monto tiene que ser un número mayor a 0." };
+    }
+    set.amount = patch.amount.toFixed(2);
+  }
+  if (patch.reason !== undefined) {
+    if (!patch.reason.trim()) {
+      return { error: "El motivo no puede quedar vacío." };
+    }
+    set.reason = patch.reason.trim();
+  }
+  if (Object.keys(set).length === 0) {
+    return { error: "No me pasaste nada para actualizar (amount, reason o direction)." };
+  }
+
+  const [updated] = await db
+    .update(cashMovements)
+    .set(set)
+    .where(eq(cashMovements.id, movementId))
+    .returning();
+  return updated;
+}
+
+export async function deleteMovement(
+  movementId: number,
+): Promise<{ deleted: true; id: number } | { error: string }> {
+  const row = await getMovementWithSession(movementId);
+  const blocked = assertEditable(row);
+  if (blocked) return blocked;
+
+  await db.delete(cashMovements).where(eq(cashMovements.id, movementId));
+  return { deleted: true, id: movementId };
+}

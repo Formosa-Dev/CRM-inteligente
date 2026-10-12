@@ -14,6 +14,9 @@ import {
   getSnapshot,
   closeSession,
   getHistory,
+  listMovements,
+  updateMovement,
+  deleteMovement,
   type CashSnapshot,
   type CloseResult,
 } from "@/lib/cash/session";
@@ -172,9 +175,65 @@ export const getCashHistory = tool({
   },
 });
 
+// ─── getCashMovements ────────────────────────────────────────────────────────
+export const getCashMovements = tool({
+  description:
+    "Listar los MOVIMIENTOS de efectivo de la caja abierta, con su ID. Usar antes de corregir o borrar un movimiento (el ID identifica cuál). PREGUNTAS: 'qué movimientos cargué?', 'mostrame las salidas de caja'.",
+  inputSchema: z.object({}),
+  execute: async () => {
+    const s = await ensureOpenSession();
+    const rows = await listMovements(s.id);
+    if (!rows.length) return `Caja #${s.id}: todavía no hay movimientos cargados.`;
+    const lines = rows.map((m) => {
+      const sign = m.direction === "in" ? "➕" : "➖";
+      return `#${m.id} ${sign} ${fmtMoney(Number(m.amount))} — ${m.reason} (${fmtDateTime(m.createdAt)})`;
+    });
+    return `Movimientos de la caja abierta #${s.id}:\n${lines.join("\n")}`;
+  },
+});
+
+// ─── updateCashMovement ──────────────────────────────────────────────────────
+export const updateCashMovement = tool({
+  description:
+    "CORREGIR un movimiento de efectivo de la caja abierta por su ID (monto, motivo o dirección). Solo sesión abierta: los movimientos de días cerrados no se editan. PREGUNTAS: 'el movimiento 3 era 900 no 800', 'corregí el motivo de la salida 2'.",
+  inputSchema: z.object({
+    movementId: z.number().int().positive().describe("ID del movimiento (lo da getCashMovements)"),
+    amount: z.number().positive().optional().describe("Nuevo monto en pesos"),
+    reason: z.string().trim().min(1).optional().describe("Nuevo motivo"),
+    direction: z.enum(["in", "out"]).optional().describe("Nueva dirección"),
+  }),
+  execute: async ({ movementId, amount, reason, direction }) => {
+    const result = await updateMovement(movementId, { amount, reason, direction });
+    if ("error" in result) {
+      return `No se pudo corregir: ${result.error}`;
+    }
+    const label = result.direction === "in" ? "entrada" : "salida";
+    return `✅ Movimiento #${result.id} corregido: ${label} de ${fmtMoney(Number(result.amount))} — ${result.reason}`;
+  },
+});
+
+// ─── deleteCashMovement ──────────────────────────────────────────────────────
+export const deleteCashMovement = tool({
+  description:
+    "BORRAR un movimiento de efectivo de la caja abierta por su ID (se cargó mal o duplicado). Solo sesión abierta: los movimientos de días cerrados no se borran, la corrección se carga como movimiento nuevo. PREGUNTAS: 'borrá el movimiento 4, lo cargué dos veces', 'eliminá esa entrada'.",
+  inputSchema: z.object({
+    movementId: z.number().int().positive().describe("ID del movimiento (lo da getCashMovements)"),
+  }),
+  execute: async ({ movementId }) => {
+    const result = await deleteMovement(movementId);
+    if ("error" in result) {
+      return `No se pudo borrar: ${result.error}`;
+    }
+    return `🗑️ Movimiento #${result.id} eliminado de la caja abierta.`;
+  },
+});
+
 export const cashTools = {
   openCash,
   registerCashMovement,
+  getCashMovements,
+  updateCashMovement,
+  deleteCashMovement,
   getCashStatus,
   closeCash,
   getCashHistory,
