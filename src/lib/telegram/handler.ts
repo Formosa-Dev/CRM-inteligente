@@ -185,7 +185,7 @@ export async function handleTelegramUpdate(
     // Cargar historial para mantener contexto entre mensajes.
     // El LLM usa esto para entender referencias como "ese mismo" o "ahora mandale un WhatsApp".
     // El system prompt instruye a tratar cada solicitud como independiente por defecto.
-    const history = await getConversationMessages(conversationId, 6);
+    const history = await getConversationMessages(conversationId, 25);
     conversationMessages = history
       .filter((m) => m.id !== storedMediaMessageId && (m.role === "user" || m.role === "assistant"))
       .map((m) => ({

@@ -47,6 +47,28 @@ export function buildOrderNotificationMessage(order: OrderNotification, resolved
   ].filter(Boolean).join("\n");
 }
 
+/**
+ * Admin broadcast: sends `text` to EVERY chat id in the bot allowlist
+ * (agent_config.telegram_chat_id, comma-separated). Best-effort — failures
+ * are logged per chat, never thrown. Use for anything ops-level the owner
+ * and admins should see: new orders, reconcile reports, escalations, alerts.
+ */
+export async function notifyAdmins(text: string, parseMode?: "Markdown" | "HTML"): Promise<void> {
+  try {
+    const config = await getTelegramConfigFromDB();
+    if (!config.enabled || config.allowedChatIds.length === 0) return;
+    for (const chatId of config.allowedChatIds) {
+      try {
+        await sendTelegramMessage(config.botToken, chatId, text, parseMode);
+      } catch (err) {
+        console.warn(`[telegram] notifyAdmins failed for chat ${chatId}:`, err);
+      }
+    }
+  } catch (error) {
+    console.error("[telegram] notifyAdmins failed:", error);
+  }
+}
+
 export async function notifyNewOrder(order: OrderNotification): Promise<void> {
   // Telegram is a best-effort side channel: a config/DB/network failure must
   // never bubble up to the caller that just persisted a real order.
@@ -56,10 +78,7 @@ export async function notifyNewOrder(order: OrderNotification): Promise<void> {
 
     const resolvedName = await resolveClientName(order.phoneNumber || "", order.customerName || "Desconocido");
     const message = buildOrderNotificationMessage(order, resolvedName);
-
-    for (const chatId of config.allowedChatIds) {
-      await sendTelegramMessage(config.botToken, chatId, message, "Markdown");
-    }
+    await notifyAdmins(message, "Markdown");
 
     // ─── Notificación específica para pan mayorista ─────────────────────
     if (order.orderType === "pan_mayorista") {

@@ -8,6 +8,7 @@ import { manageOrderTools } from "./toolsOrder";
 import { managementTools } from "./toolsManagement";
 import { analyticsTools } from "./toolsAnalytics";
 import { whatsAppTools } from "./toolsWhatsApp";
+import { memoryTools } from "./toolsMemory";
 
 // ─── Tools Maestras (Delegantes) ───────────────────────────────────────
 // Cada Tool Maestra es un grupo de sub-tools relacionadas
@@ -131,6 +132,13 @@ export const internalAgentTools = {
   // whatsApp (2 tools)
   sendWhatsAppMessage: whatsAppTools.sendWhatsAppMessage,
   broadcastWhatsApp: whatsAppTools.broadcastWhatsApp,
+
+  // memory + reconcile (5 tools)
+  rememberThis: memoryTools.rememberThis,
+  forgetThis: memoryTools.forgetThis,
+  recallMemories: memoryTools.recallMemories,
+  getReconcileCandidates: memoryTools.getReconcileCandidates,
+  resolveReconcileCandidate: memoryTools.resolveReconcileCandidate,
 };
 
 // whatsApp: Comunicación por WhatsApp

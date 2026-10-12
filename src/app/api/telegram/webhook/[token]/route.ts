@@ -224,8 +224,8 @@ export async function POST(
 
     // Fire-and-forget: webhook returns 200 immediately, processing happens in background
     scheduleBufferProcessing("telegram", String(chatId), async (bufferedMessages) => {
-      // Get conversation history for context (last 6 messages)
-      const history = await getConversationMessages(convId, 6);
+      // Get conversation history for context (last 25 messages)
+      const history = await getConversationMessages(convId, 25);
       const aiMessages = mergeBufferedTurn(history
         .filter((m) => m.role === "user" || m.role === "assistant"), bufferedMessages)
         .map((m) => ({

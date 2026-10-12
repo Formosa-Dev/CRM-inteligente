@@ -32,16 +32,21 @@ export async function sendEscalationEmail(data: EscalationData): Promise<{ ok: b
   const biz = await getBusinessInfo();
   const subject = `[${biz.name}] Derivación: ${data.category} — ${data.customerName}`;
 
-  // Try Telegram notification as primary channel (DB-configured bot first)
+  // Try Telegram notification as primary channel — broadcast to ALL admins
+  // in the allowlist (plus the dedicated notify chat if it's not already in).
   try {
     const { getTelegramConfigFromDB } = await import("@/lib/telegram/bot");
     const tg = await getTelegramConfigFromDB();
     const botToken = tg.botToken || process.env.TELEGRAM_BOT_TOKEN;
-    const chatId = secrets.telegramNotifyChatId
-      || tg.allowedChatIds[0]
-      || process.env.TELEGRAM_ALLOWED_CHAT_IDS?.split(",")[0]?.trim();
+    const chatIds = new Set<number>(tg.allowedChatIds);
+    const extraId = parseInt(
+      (secrets.telegramNotifyChatId
+        || process.env.TELEGRAM_ALLOWED_CHAT_IDS?.split(",")[0]?.trim() || "").trim(),
+      10
+    );
+    if (!isNaN(extraId)) chatIds.add(extraId);
 
-    if (botToken && chatId) {
+    if (botToken && chatIds.size) {
       // Plain text, no parse_mode — customer-controlled fields must not be
       // interpreted as Telegram markdown (link/format injection).
       const telegramText = [
@@ -58,17 +63,20 @@ export async function sendEscalationEmail(data: EscalationData): Promise<{ ok: b
         `Resumen: ${data.conversationSummary}`,
       ].join("\n");
 
-      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: Number(chatId),
-          text: telegramText,
-        }),
-        signal: AbortSignal.timeout(10_000),
-      });
+      for (const chatId of chatIds) {
+        try {
+          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, text: telegramText }),
+            signal: AbortSignal.timeout(10_000),
+          });
+        } catch (err) {
+          console.warn(`[escalation] Telegram to ${chatId} failed:`, err);
+        }
+      }
 
-      console.log(`[escalation] Telegram notification sent to chat ${chatId}`);
+      console.log(`[escalation] Telegram notification sent to ${chatIds.size} admin chat(s)`);
     }
   } catch (err) {
     console.warn("[escalation] Telegram notification failed:", err);

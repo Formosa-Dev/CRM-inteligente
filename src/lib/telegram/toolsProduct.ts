@@ -58,7 +58,7 @@ export const getProductsByCategory = tool({
     "Lista productos por categoría. Preguntas: 'hamburguesas', 'acompañamientos', 'pan al por mayor'",
   inputSchema: z.object({
     category: z
-      .enum(["hamburguesa", "acompanamiento", "pan_mayorista"])
+      .enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas", "alcohol", "empanadas"])
       .describe("Categoría a listar"),
   }),
   execute: async ({ category }) => {
@@ -79,6 +79,10 @@ export const getProductsByCategory = tool({
       hamburguesa: "Hamburguesas",
       acompañamiento: "Acompañamientos",
       pan_mayorista: "Pan al Por Mayor",
+      tragos_vip: "Tragos VIP",
+      bebidas: "Bebidas",
+      alcohol: "Alcohol",
+      empanadas: "Empanadas",
     };
 
     return {
@@ -226,10 +230,10 @@ export const createProduct = tool({
     description: z.string().optional().describe("Descripción del producto"),
     price: z.number().optional().describe("Precio del producto"),
     category: z
-      .enum(["hamburguesa", "acompanamiento", "pan_mayorista"])
+      .enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas", "alcohol", "empanadas"])
       .describe("Categoría del producto"),
     line: z
-      .enum(["pollo", "carne", "clasica", "pan"])
+      .enum(["pollo", "carne", "clasica", "pan", "tragos", "bebidas", "alcohol", "empanadas"])
       .describe("Línea del producto"),
     available: z.boolean().default(true).describe("Si el producto está disponible"),
     comingSoon: z.boolean().default(false).describe("Si el producto es próximamente"),
@@ -275,11 +279,11 @@ export const updateProduct = tool({
     description: z.string().optional().describe("Nueva descripción"),
     price: z.number().optional().describe("Nuevo precio"),
     category: z
-      .enum(["hamburguesa", "acompanamiento", "pan_mayorista"])
+      .enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas", "alcohol", "empanadas"])
       .optional()
       .describe("Nueva categoría"),
     line: z
-      .enum(["pollo", "carne", "clasica", "pan"])
+      .enum(["pollo", "carne", "clasica", "pan", "tragos", "bebidas", "alcohol", "empanadas"])
       .optional()
       .describe("Nueva línea"),
     available: z.boolean().optional().describe("Disponibilidad"),

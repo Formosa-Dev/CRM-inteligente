@@ -1,6 +1,6 @@
 import { db } from "@/db";
-import { products, promotions } from "@/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { products, promotions, agentMemories, reconcileCandidates } from "@/db/schema";
+import { eq, and, desc, sql, count } from "drizzle-orm";
 
 /**
  * Construye el system prompt del bot de Telegram con datos vivos de la DB:
@@ -53,6 +53,41 @@ export async function buildTelegramPrompt(): Promise<string> {
       sections.push(`═══ PROMOCIONES ACTIVAS ═══\n${active.map((promo) =>
         `${promo.name}${promo.customPrice ? ` — $${Number(promo.customPrice).toLocaleString("es-AR")}` : ""}${promo.description ? `: ${promo.description}` : ""}`
       ).join("\n")}`);
+    }
+  } catch {
+    // non-fatal
+  }
+
+  // ── Memoria persistente (reglas/hechos guardados) ──
+  try {
+    const mems = await db
+      .select({ type: agentMemories.type, content: agentMemories.content })
+      .from(agentMemories)
+      .where(eq(agentMemories.active, true))
+      .orderBy(desc(agentMemories.updatedAt))
+      .limit(20);
+
+    if (mems.length > 0) {
+      sections.push(
+        `═══ MEMORIA / REGLAS APRENDIDAS (obligatorias, las dictó el dueño) ═══\n` +
+        mems.map((m) => `• ${m.content}`).join("\n")
+      );
+    }
+  } catch {
+    // non-fatal — la tabla puede no existir en DBs viejas
+  }
+
+  // ── Candidatas de reconciliación pendientes ──
+  try {
+    const [pending] = await db
+      .select({ count: count() })
+      .from(reconcileCandidates)
+      .where(sql`${reconcileCandidates.status} IN ('detected', 'needs_info')`);
+
+    if (pending && pending.count > 0) {
+      sections.push(
+        `═══ RECONCILIACIÓN ═══\nHay ${pending.count} candidata(s) detectada(s) en chats pendientes de resolución. Usá getReconcileCandidates para verlas.`
+      );
     }
   } catch {
     // non-fatal

@@ -203,6 +203,7 @@ export const conversations = pgTable("conversations", {
   lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
   lastMessagePreview: varchar("last_message_preview", { length: 255 }),
   humanOverrideUntil: timestamp("human_override_until", { withTimezone: true }),
+  lastReconciledAt: timestamp("last_reconciled_at", { withTimezone: true }),
   externalUserId: varchar("external_user_id", { length: 255 }),
   conversationMetadata: jsonb("conversation_metadata").$type<{
     repromptCount: number;
@@ -396,6 +397,59 @@ export const addresses = pgTable("addresses", {
   label: text("label"), // "Casa", "Trabajo", etc — lo puede poner el agente
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ─── Agent Memory (reglas/hechos persistentes del agente interno) ─────────────
+// Memoria durable estilo Hermes: cuando el dueño dice "dejalo como regla" o el
+// reconciler aprende un mapeo, queda acá y se inyecta al system prompt.
+
+export const agentMemories = pgTable("agent_memories", {
+  id: serial("id").primaryKey(),
+  key: varchar("key", { length: 120 }).notNull(),
+  type: varchar("type", { length: 30 }).notNull().default("rule"), // rule | fact | preference
+  content: text("content").notNull(),
+  source: varchar("source", { length: 30 }).notNull().default("admin"), // admin | reconcile | system
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  keyUq: uniqueIndex("idx_agent_memories_key").on(table.key),
+}));
+
+// ─── Reconcile (ventas detectadas en chats que no quedaron cargadas) ──────────
+
+export const reconcileStatusEnum = pgEnum("reconcile_status", [
+  "detected",
+  "needs_info",
+  "loaded",
+  "dismissed",
+]);
+
+export const reconcileCandidates = pgTable("reconcile_candidates", {
+  id: serial("id").primaryKey(),
+  conversationId: integer("conversation_id").references(() => conversations.id),
+  kind: varchar("kind", { length: 30 }).notNull().default("order"), // order | product | info
+  summary: text("summary").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().default({}),
+  status: reconcileStatusEnum("status").notNull().default("detected"),
+  orderId: integer("order_id").references(() => orders.id),
+  adminNote: text("admin_note"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+}, (table) => ({
+  convCreatedIdx: index("idx_reconcile_candidates_conv").on(table.conversationId, table.createdAt),
+  statusIdx: index("idx_reconcile_candidates_status").on(table.status),
+}));
+
+export const reconcileRuns = pgTable("reconcile_runs", {
+  id: serial("id").primaryKey(),
+  mode: varchar("mode", { length: 20 }).notNull().default("scan"), // scan | sweep
+  conversationsScanned: integer("conversations_scanned").notNull().default(0),
+  ordersCreated: integer("orders_created").notNull().default(0),
+  candidatesCreated: integer("candidates_created").notNull().default(0),
+  report: text("report"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
 });
 
 // ─── Promotions (promociones con productos reales) ──────────────────────────
