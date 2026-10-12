@@ -156,3 +156,40 @@ test("rejects a delivery order without an address", () => {
   assert.equal(result.success, false);
   if (!result.success) assert.equal(result.error.issues[0]?.message, "Ingresá la dirección de entrega.");
 });
+
+// The storefront sends `fulfillmentMode` plus an explicit `deliveryAddress` on
+// every request: a string for delivery, `null` for pickup. The server schema
+// must accept that exact shape — a rejected `null` would fail every pickup sale
+// before anything is persisted.
+test("accepts the exact storefront pickup payload with deliveryAddress: null", async () => {
+  const storefrontBody = {
+    requestId: REQUEST_A,
+    customerName: "Ramiro",
+    phone: PHONE,
+    items: [{ type: "product", id: 1, quantity: 1 }],
+    fulfillmentMode: "pickup",
+    deliveryAddress: null,
+  };
+  const parsed = checkoutSchema.safeParse(storefrontBody);
+  assert.equal(parsed.success, true);
+
+  const { deps, orders } = fakeDeps();
+  const first = await submitCheckout(parsed.data!, deps);
+  const second = await submitCheckout(parsed.data!, deps);
+  assert.equal(orders.length, 1);
+  assert.equal(second.orderId, first.orderId);
+  assert.equal(orders[0].address, null);
+});
+
+test("rejects a delivery payload whose deliveryAddress is explicitly null", () => {
+  const result = checkoutSchema.safeParse({
+    requestId: REQUEST_A,
+    customerName: "Ramiro",
+    phone: PHONE,
+    fulfillmentMode: "delivery",
+    deliveryAddress: null,
+    items: [{ type: "product", id: 1, quantity: 1 }],
+  });
+  assert.equal(result.success, false);
+  if (!result.success) assert.equal(result.error.issues[0]?.message, "Ingresá la dirección de entrega.");
+});

@@ -17,7 +17,10 @@ export const checkoutSchema = z.object({
   // the legacy WhatsApp form keeps working while the UX worktree adds the
   // selector — an in-flight sale must never be lost to a missing field.
   fulfillmentMode: fulfillmentModeSchema.default("pickup"),
-  deliveryAddress: z.string().trim().max(300).optional(),
+  // The storefront always sends this key: a non-null address on delivery and an
+  // explicit `null` on pickup. `nullish()` accepts both `null` (storefront) and
+  // an omitted key (legacy/agent callers) without rejecting a valid sale.
+  deliveryAddress: z.string().trim().max(300).nullish(),
   items: z.array(z.object({ type: z.enum(["product", "promo"]), id: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).min(1).max(40),
 }).refine(
   (data) => data.fulfillmentMode !== "delivery" || (data.deliveryAddress?.length ?? 0) >= 5,
