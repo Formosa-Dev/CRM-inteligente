@@ -28,7 +28,7 @@ import { saveMediaLocally } from "@/lib/media/downloader";
 import { BufferManager } from "@/lib/buffer/manager";
 import { scheduleBufferProcessing } from "@/lib/buffer/processor";
 import { generateText, stepCountIs } from "ai";
-import { getMainModel } from "@/lib/ai/config";
+import { getMainChatModel } from "@/lib/ai/config";
 import { internalAgentTools } from "@/lib/telegram/tools";
 import { buildTelegramPrompt } from "@/lib/telegram/prompt-builder";
 import { mergeBufferedTurn } from "@/lib/whatsapp/buffered-history";
@@ -237,7 +237,7 @@ export async function POST(
       const systemPrompt = await buildTelegramPrompt();
       // Run the internal agent with full conversation history
       const result = await generateText({
-        model: await getMainModel(),
+        model: await getMainChatModel(),
         system: systemPrompt,
         messages: aiMessages,
         tools: internalAgentTools,
