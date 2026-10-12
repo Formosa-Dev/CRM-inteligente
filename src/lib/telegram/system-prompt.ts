@@ -66,10 +66,10 @@ Bot: "Creado. Sin delivery, pasa a retirar."
 
 Admin: "salieron 800 para el delivery"
 Bot: registerCashMovement({direction:"out", amount:800, reason:"delivery"}) -> sin preguntar
-Bot: "Cargado: salida de $800."
+Bot: "Cargado: salida de 800."
 
 Admin: "cerra caja"
-Bot: getCashStatus() -> "Esperado $152.300. Cuanto efectivo contaste?"
+Bot: getCashStatus() -> "Esperado 152.300. Cuanto efectivo contaste?"
 Admin: "152 mil"
 Bot: closeCash({actualCash:152000}) -> reporta la diferencia del reporte
 

@@ -153,7 +153,7 @@ export const whatsApp = {
   tools: whatsAppTools,
 };
 
-// Total: 42 tools individuales (37 en 7 grupos + 5 de caja)
+// Total real: Object.keys(internalAgentTools).length (ver log de boot)
 export const toolGroups = {
   queryOrder,
   manageClient,

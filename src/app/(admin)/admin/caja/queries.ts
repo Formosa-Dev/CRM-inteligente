@@ -1,7 +1,7 @@
 import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { cashMovements, cashSessions, orders } from "@/db/schema";
-import { computeOrderTotal } from "@/lib/client-utils";
+import { classifyMethod, orderTotal } from "@/lib/cash/session";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,23 +42,9 @@ export interface ClosedSessionLine {
   closedBy: string | null;
 }
 
-// ─── Clasificación de método de pago (spec caja-cierre §1) ────────────────────
-// Duplicada a propósito: el módulo @/lib/cash/session (WT1) todavía no está
-// mergeado y la página necesita las filas crudas de cash_movements que el
-// contrato no expone. Mantener alineada con la lista de keywords del spec.
-
-const CASH_PATTERN = /(efectivo|cash|contado|\befvo\b|en mano)/i;
-const DIGITAL_PATTERN =
-  /(mercado\s?pago|\bmp\b|transferencia|alias|tarjeta|d[eé]bito|cr[eé]dito|\bqr\b|\bmodo\b|cuenta dni)/i;
-
-type MoneyMethod = "cash" | "digital" | "unknown";
-
-function classifyMethod(paymentMethod: string | null): MoneyMethod {
-  if (!paymentMethod) return "unknown";
-  if (CASH_PATTERN.test(paymentMethod)) return "cash";
-  if (DIGITAL_PATTERN.test(paymentMethod)) return "digital";
-  return "unknown";
-}
+// classifyMethod viene de @/lib/cash/session (WT1 ya mergeado) — única fuente
+// de verdad para la clasificación de métodos de pago. La página necesita las
+// filas crudas de cash_movements, por eso consulta drizzle directo.
 
 // ─── Sesión abierta ───────────────────────────────────────────────────────────
 
@@ -105,10 +91,7 @@ export async function getOpenSessionView(): Promise<OpenSessionView | null> {
   let pendingCount = 0;
 
   for (const order of periodOrders) {
-    const total = computeOrderTotal(
-      order.items as Parameters<typeof computeOrderTotal>[0],
-      order.deliveryFee,
-    );
+    const total = orderTotal({ items: order.items, deliveryFee: order.deliveryFee });
     if (order.paymentStatus !== "paid") {
       pendingTotal += total;
       pendingCount += 1;

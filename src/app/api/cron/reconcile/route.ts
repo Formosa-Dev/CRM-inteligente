@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { db } from "@/db";
 import { reconcileRuns } from "@/db/schema";
-import { and, eq, gt, isNull, ne } from "drizzle-orm";
+import { and, gt, isNull } from "drizzle-orm";
 import { runReconcile, type ReconcileMode } from "@/lib/reconcile/runner";
 
 /**

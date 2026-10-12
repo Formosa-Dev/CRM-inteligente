@@ -166,7 +166,12 @@ describe("invariantes de implementación (spec §1/§2)", () => {
     // La sesión cerrada es inmutable: el cuerpo compara el status y tiene un
     // camino de error (return { error } o throw) para el re-cierre.
     const body = functionBody(readFileSync(SOURCE, "utf8"), "function closeSession");
-    assert.match(body, /status\s*(===|!==|==|!=)[^;\n]*["'](?:open|closed)["']/);
+    // Acepta check explícito (status === "open") o el guard atómico en el UPDATE
+    // (eq(cashSessions.status, "open")) — la variante atómica es race-safe.
+    assert.match(
+      body,
+      /status\s*(===|!==|==|!=)[^;\n]*["'](?:open|closed)["']|eq\(cashSessions\.status,\s*["']open["']\)/,
+    );
     assert.match(body, /return\s*\{[^}]*error|throw\s/i);
   });
 
