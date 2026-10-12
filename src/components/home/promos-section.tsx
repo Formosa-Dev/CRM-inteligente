@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Plus } from "lucide-react";
 import { CatalogImage } from "@/components/products/catalog-image";
 import { staggerContainer } from "@/lib/animation-variants";
 import { useEditorialMotion } from "@/components/storefront/motion";
+import { useCart } from "@/lib/cart/cart-context";
 
 export type LandingPromo = {
   id: number;
@@ -17,13 +18,23 @@ export type LandingPromo = {
 };
 
 /**
- * Promotions surfaced from the real promotions table. These are not part of
- * the shared cart checkout (which only accepts catalog product ids), so the
- * section links into /carta-digital where the promo can be ordered.
+ * Promotions surfaced from the real promotions table. Each active promo is
+ * orderable straight into the shared cart (same cart as products); the link
+ * into /carta-digital remains as a secondary path.
  */
 export function PromosSection({ promos }: { promos: LandingPromo[] }) {
   const { reveal } = useEditorialMotion();
+  const { addItem } = useCart();
   if (promos.length === 0) return null;
+
+  function addPromo(promo: LandingPromo) {
+    if (promo.price === null || promo.price <= 0) return;
+    addItem(
+      { id: String(promo.id), name: promo.name.trim(), price: promo.price },
+      1,
+      { type: "promo", imageUrl: promo.imageUrl },
+    );
+  }
 
   return (
     <section
@@ -105,13 +116,24 @@ export function PromosSection({ promos }: { promos: LandingPromo[] }) {
                       ? `$${promo.price.toLocaleString("es-AR")}`
                       : "Consultar"}
                   </strong>
-                  <Link
-                    href="/carta-digital?category=promos"
-                    className="btn-gold inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-wider"
-                  >
-                    Ver en la carta
-                    <ArrowRight size={13} aria-hidden="true" />
-                  </Link>
+                  {promo.price && promo.price > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => addPromo(promo)}
+                      className="btn-gold inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-wider"
+                    >
+                      <Plus size={14} aria-hidden="true" />
+                      Agregar
+                    </button>
+                  ) : (
+                    <Link
+                      href="/carta-digital?category=promos"
+                      className="btn-gold inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-wider"
+                    >
+                      Ver en la carta
+                      <ArrowRight size={13} aria-hidden="true" />
+                    </Link>
+                  )}
                 </div>
               </div>
             </motion.article>

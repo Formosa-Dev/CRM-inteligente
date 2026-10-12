@@ -1,58 +1,247 @@
 "use client";
+
 import { useRef, useState } from "react";
 import { ArrowUpRight, LoaderCircle, Check } from "lucide-react";
-import { checkoutSchema, type CheckoutLine, type CheckoutReceipt } from "@/lib/checkout/contract";
+import { useCart } from "@/lib/cart/cart-context";
+import {
+  checkoutPhone,
+  checkoutSchema,
+  type CheckoutLine,
+  type CheckoutReceipt,
+} from "@/lib/checkout/contract";
+import {
+  FULFILLMENT_OPTIONS,
+  fulfillmentPayload,
+  validateFulfillment,
+  type FulfillmentMode,
+} from "./fulfillment";
+import {
+  clearAttempt,
+  normalizeAttemptSignature,
+  resolveAttempt,
+  type AttemptStorage,
+  type CheckoutAttempt,
+} from "./checkout-attempt";
+import {
+  checkoutFailureMessage,
+  interpretCheckoutOutcome,
+  shouldClearAfter,
+} from "./checkout-outcome";
+
+function attemptStorage(): AttemptStorage | null {
+  return typeof window === "undefined" ? null : window.sessionStorage;
+}
 
 export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
+  const { clearCart } = useCart();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [fulfillmentMode, setFulfillmentMode] = useState<FulfillmentMode>("delivery");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [receipt, setReceipt] = useState<CheckoutReceipt | null>(null);
+  // Hard guards: one request at a time, one terminal success per attempt.
   const inFlight = useRef(false);
-  const attempt = useRef<{ signature: string; requestId: string } | null>(null);
+  const completed = useRef(false);
+  const attemptRef = useRef<CheckoutAttempt | null>(null);
+
+  const deliverySelected = fulfillmentMode === "delivery";
+
+  /** Reuses the persisted id when the semantic signature is unchanged. */
+  function stableAttempt(signature: string): CheckoutAttempt {
+    if (attemptRef.current?.signature === signature) return attemptRef.current;
+    attemptRef.current = resolveAttempt(attemptStorage(), signature);
+    return attemptRef.current;
+  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (inFlight.current || !items.length) return;
+    if (inFlight.current || completed.current || !items.length) return;
     setError("");
-    const signature = JSON.stringify({ customerName: name.trim(), phone, items });
-    // Keep the same key after lost responses, remounts and page reloads.
-    if (attempt.current?.signature !== signature) {
-      try {
-        const saved = JSON.parse(sessionStorage.getItem("muzapp-checkout-attempt") || "null");
-        attempt.current = saved?.signature === signature && typeof saved?.requestId === "string" ? saved : { signature, requestId: crypto.randomUUID() };
-      } catch { attempt.current = { signature, requestId: crypto.randomUUID() }; }
+    const fulfillmentError = validateFulfillment(fulfillmentMode, deliveryAddress);
+    if (fulfillmentError) {
+      setError(fulfillmentError);
+      return;
     }
-    const parsed = checkoutSchema.safeParse({ requestId: attempt.current!.requestId, customerName: name, phone, items });
-    if (!parsed.success) { setError("Ingresá tu nombre y WhatsApp con código de área, sin 0 ni 15. Ejemplo: 370 4123456."); return; }
-    try { sessionStorage.setItem("muzapp-checkout-attempt", JSON.stringify(attempt.current)); } catch { /* session memory still protects retries */ }
-    inFlight.current = true; setBusy(true);
+    // Canonical signature: sorted semantic fields only. Reordering UI lines or
+    // re-rendering must not mint a new id for the same intent.
+    const signature = normalizeAttemptSignature({
+      phone: checkoutPhone(phone),
+      customerName: name,
+      fulfillmentMode,
+      deliveryAddress: deliverySelected ? deliveryAddress : null,
+      items: items.map((item) => ({ type: item.type, id: item.id, quantity: item.quantity })),
+    });
+    const attempt = stableAttempt(signature);
+    const parsed = checkoutSchema.safeParse({
+      requestId: attempt.requestId,
+      customerName: name,
+      phone,
+      items,
+    });
+    if (!parsed.success) {
+      setError("Ingresá tu nombre y WhatsApp con código de área, sin 0 ni 15. Ejemplo: 370 4123456.");
+      return;
+    }
+    inFlight.current = true;
+    setBusy(true);
     try {
-      const response = await fetch("/api/checkout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed.data) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "No pudimos registrar el pedido.");
-      setReceipt(data);
-      // Same-tab navigation works after async persistence without popup permissions.
-      window.location.assign(data.whatsappUrl);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "No pudimos conectar. Reintentá desde este pedido."); }
-    finally { inFlight.current = false; setBusy(false); }
+      const response = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...parsed.data,
+          ...fulfillmentPayload(fulfillmentMode, deliveryAddress),
+        }),
+      });
+      let data: Partial<CheckoutReceipt> & { error?: string } = {};
+      try {
+        data = await response.json();
+      } catch {
+        data = {};
+      }
+      const outcome = interpretCheckoutOutcome(response.ok, response.status);
+      if (!shouldClearAfter(outcome)) {
+        // Keep the stable attempt id and the cart. No automatic retry.
+        setError(checkoutFailureMessage(outcome, data.error));
+        return;
+      }
+      if (completed.current) return;
+      completed.current = true;
+      clearAttempt(attemptStorage());
+      attemptRef.current = null;
+      clearCart();
+      setReceipt(data as CheckoutReceipt);
+      // The business URL is only opened after the server confirmed the order.
+      if (typeof data.whatsappUrl === "string" && data.whatsappUrl) {
+        window.location.assign(data.whatsappUrl);
+      }
+    } catch {
+      // Network error: the request may have reached the server. Preserve the
+      // cart, keep the id, and ask the customer to verify before retrying.
+      setError(checkoutFailureMessage("ambiguous"));
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
   }
-  if (receipt) return <div className="checkout-confirmation" role="status">
-    <Check size={20} /><strong>Pedido #{receipt.orderId} registrado</strong>
-    <p>Subtotal confirmado: ${receipt.total.toLocaleString("es-AR")}. Enviá el mensaje para coordinar entrega y pago.</p>
-    <a className="menu-whatsapp-button" href={receipt.whatsappUrl}>Continuar en WhatsApp <ArrowUpRight size={18} /></a>
-  </div>;
-  return <form className="checkout-form" onSubmit={submit}>
-    <div className="checkout-fields">
-      <label>Tu nombre<input name="name" autoComplete="name" required minLength={2} maxLength={100} value={name} onChange={e => setName(e.target.value)} disabled={busy} placeholder="¿Cómo te llamás?" /></label>
-      <label>Tu WhatsApp<input name="tel" type="tel" autoComplete="tel" required maxLength={30} value={phone} onChange={e => setPhone(e.target.value)} disabled={busy} placeholder="370 4123456" aria-describedby="checkout-phone-help" /></label>
-    </div>
-    <p id="checkout-phone-help" className="menu-cart-note">Usá el número desde el que vas a escribirnos para que reconozcamos tu pedido.</p>
-    {error && <p className="checkout-error" role="alert">{error}</p>}
-    <button className="menu-whatsapp-button" type="submit" disabled={busy || !items.length}>
-      {busy ? <><LoaderCircle className="animate-spin" size={18} /> Registrando pedido…</> : <>Confirmar y abrir WhatsApp <ArrowUpRight size={18} /></>}
-    </button>
-    <p className="menu-cart-note">El pedido queda registrado al confirmar. En WhatsApp, tocá Enviar para hablar con nuestro asistente.</p>
-  </form>;
+
+  if (receipt) {
+    return (
+      <div className="checkout-confirmation" role="status">
+        <Check size={20} />
+        <strong>Pedido #{receipt.orderId} registrado</strong>
+        <p>
+          Subtotal confirmado: ${receipt.total.toLocaleString("es-AR")}. Enviá el mensaje para
+          coordinar {fulfillmentMode === "pickup" ? "el retiro" : "la entrega"} y el pago.
+        </p>
+        <a className="menu-whatsapp-button" href={receipt.whatsappUrl}>
+          Continuar en WhatsApp <ArrowUpRight size={18} />
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <form className="checkout-form" onSubmit={submit}>
+      <div className="checkout-fields">
+        <label>
+          Tu nombre
+          <input
+            name="name"
+            autoComplete="name"
+            required
+            minLength={2}
+            maxLength={100}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            disabled={busy}
+            placeholder="¿Cómo te llamás?"
+          />
+        </label>
+        <label>
+          Tu WhatsApp
+          <input
+            name="tel"
+            type="tel"
+            autoComplete="tel"
+            required
+            maxLength={30}
+            value={phone}
+            onChange={(event) => setPhone(event.target.value)}
+            disabled={busy}
+            placeholder="370 4123456"
+            aria-describedby="checkout-phone-help"
+          />
+        </label>
+      </div>
+      <p id="checkout-phone-help" className="menu-cart-note">
+        Usá el número desde el que vas a escribirnos para que reconozcamos tu pedido.
+      </p>
+
+      <fieldset className="checkout-fulfillment">
+        <legend>¿Cómo lo querés recibir?</legend>
+        <div className="checkout-fulfillment-options">
+          {FULFILLMENT_OPTIONS.map((option) => (
+            <label
+              key={option.value}
+              className="checkout-fulfillment-option"
+              data-selected={fulfillmentMode === option.value}
+            >
+              <input
+                type="radio"
+                name="fulfillment"
+                value={option.value}
+                checked={fulfillmentMode === option.value}
+                onChange={() => setFulfillmentMode(option.value)}
+                disabled={busy}
+              />
+              <b>{option.label}</b>
+              <small>{option.hint}</small>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      {deliverySelected && (
+        <div className="checkout-address">
+          <label>
+            Dirección de entrega
+            <input
+              name="address"
+              autoComplete="street-address"
+              maxLength={200}
+              value={deliveryAddress}
+              onChange={(event) => setDeliveryAddress(event.target.value)}
+              disabled={busy}
+              placeholder="Calle, número y referencia"
+              aria-required="true"
+            />
+          </label>
+        </div>
+      )}
+
+      {error && (
+        <p className="checkout-error" role="alert">
+          {error}
+        </p>
+      )}
+      <button className="menu-whatsapp-button" type="submit" disabled={busy || !items.length}>
+        {busy ? (
+          <>
+            <LoaderCircle className="animate-spin" size={18} /> Registrando pedido…
+          </>
+        ) : (
+          <>
+            Confirmar y abrir WhatsApp <ArrowUpRight size={18} />
+          </>
+        )}
+      </button>
+      <p className="menu-cart-note">
+        El pedido queda registrado al confirmar. En WhatsApp, tocá Enviar para hablar con nuestro
+        asistente.
+      </p>
+    </form>
+  );
 }

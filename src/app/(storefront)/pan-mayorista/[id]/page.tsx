@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ProductDetail } from "@/components/products/product-detail";
 import { useCart } from "@/lib/cart/cart-context";
+import { getCatalogProductImage } from "@/lib/catalog-images";
 
 type ProductFromAPI = {
   id: number;
@@ -58,13 +59,18 @@ export default function ProductDetailPage() {
   const { addItem } = useCart();
 
   function handleAddToCart(p: ProductFromAPI) {
-    const price = p.price ? Number(p.price) : 0;
-    addItem({
-      id: String(p.id),
-      name: p.name,
-      price,
-      emoji: "🍞",
-    });
+    const raw = p.isPromo && p.promoPrice != null ? p.promoPrice : p.price;
+    const price = raw ? Number(raw) : 0;
+    addItem(
+      {
+        id: String(p.id),
+        name: p.name,
+        price,
+        emoji: "🍞",
+      },
+      1,
+      { type: "product", imageUrl: getCatalogProductImage(p) },
+    );
   }
 
   if (loading) {

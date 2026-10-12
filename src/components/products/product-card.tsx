@@ -23,7 +23,7 @@ export function ProductCard({ product }: { product: Product; index?: number }) {
       {product.stock === 0 && <span className="menu-unavailable">Sin stock</span>}
       <div className="menu-item-action">
         <div>{product.originalPrice && product.originalPrice > (product.price ?? Infinity) ? <del className="block text-xs text-foreground/40">${product.originalPrice.toLocaleString("es-AR")}</del> : null}<strong>{product.price && product.price > 0 ? `$${product.price.toLocaleString("es-AR")}` : "Consultar"}</strong></div>
-        {canOrder && <button type="button" className="menu-add-button" onClick={() => addItem({ id: product.id, name: product.name, price: product.price!, emoji: product.emoji })}><Plus size={16} />Agregar</button>}
+        {canOrder && <button type="button" className="menu-add-button" onClick={() => addItem({ id: product.id, name: product.name, price: product.price!, emoji: product.emoji }, 1, { type: "product", imageUrl: getCatalogProductImage(product) })}><Plus size={16} />Agregar</button>}
       </div>
     </div>
   </motion.article>;

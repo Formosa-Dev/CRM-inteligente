@@ -181,6 +181,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
   const clearCart = useCallback(() => {
     setItems([])
+    // Persist synchronously: a checkout redirect right after clearing must not
+    // be able to resurrect the just-ordered cart from a stale localStorage copy.
+    saveCart([])
   }, [])
 
   const total = useMemo(
