@@ -2,6 +2,7 @@ import { and, eq, like, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { agentConfig, orders, products, promotions } from "@/db/schema";
 import { type Product, type Promo, webReference } from "./contract";
+import { notifyNewOrder, type OrderNotification } from "@/lib/telegram/notifier";
 
 export type OrderRow = {
   id: number;
@@ -32,6 +33,8 @@ export type CheckoutDeps = {
   getProductStock(productId: number): Promise<{ name: string; stock: number | null } | null>;
   releaseStock(productId: number, quantity: number): Promise<void>;
   insertOrderIfAbsent(values: InsertOrderValues): Promise<OrderRow | null>;
+  /** Best-effort ops-bot notification. Tests inject a spy; production defaults to the real notifier. */
+  notifyNewOrder?(order: OrderNotification): void | Promise<void>;
 };
 
 // Raw SQL via the neon-http driver returns the database's snake_case column
@@ -124,6 +127,9 @@ export function createDbCheckoutDeps(): CheckoutDeps {
       const raw = inserted.rows?.[0] as RawOrderRow | undefined;
       return raw ? mapOrderRow(raw) : null;
     },
+    // Production wiring for the ops-bot side channel. Injected here (not in the
+    // service) so tests that build their own deps never touch the real DB/bot.
+    notifyNewOrder,
   };
 }
 

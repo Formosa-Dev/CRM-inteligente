@@ -99,6 +99,23 @@ export async function submitCheckout(input: CheckoutInput, deps: CheckoutDeps = 
     if (!again) throw new CheckoutError("No pudimos confirmar el pedido. Reintentá en unos segundos.", 503);
     return buildReceipt(again, input, fingerprint, destination);
   }
+
+  // Brand-new order: notify the ops bot. Fire-and-forget — notification is a
+  // best-effort side channel and must never fail a sale already persisted.
+  if (deps.notifyNewOrder) {
+    const total = priced.items.reduce((sum, item) => sum + Math.round(item.unitPrice * 100) * item.quantity, 0) / 100;
+    void Promise.resolve(deps.notifyNewOrder({
+      id: created.id,
+      customerName: created.customerName,
+      orderType: priced.orderType,
+      items: priced.items,
+      total,
+      status: "pending",
+      phoneNumber: created.phoneNumber ?? input.phone,
+      notes: created.notes,
+    })).catch(() => {});
+  }
+
   return buildReceipt(created, input, fingerprint, destination);
 }
 
