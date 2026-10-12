@@ -1,6 +1,6 @@
 import { db } from "@/db";
-import { products, promotions, agentMemories, reconcileCandidates } from "@/db/schema";
-import { eq, and, desc, sql, count } from "drizzle-orm";
+import { products, promotions, agentMemories, reconcileCandidates, orders } from "@/db/schema";
+import { eq, and, desc, sql, count, ne } from "drizzle-orm";
 
 /**
  * Construye el system prompt del bot de Telegram con datos vivos de la DB:
@@ -88,6 +88,26 @@ export async function buildTelegramPrompt(): Promise<string> {
       sections.push(
         `═══ RECONCILIACIÓN ═══\nHay ${pending.count} candidata(s) detectada(s) en chats pendientes de resolución. Usá getReconcileCandidates para verlas.`
       );
+    }
+  } catch {
+    // non-fatal
+  }
+
+  // ── Estado operativo (radar): pendientes + sin cobrar ──
+  try {
+    const [stats] = await db
+      .select({
+        open: sql<number>`count(*) filter (where ${orders.status} in ('pending','preparing','ready'))::int`,
+        unpaid: sql<number>`count(*) filter (where ${orders.paymentStatus} <> 'paid' and ${orders.status} <> 'cancelled')::int`,
+      })
+      .from(orders)
+      .where(ne(orders.status, "cancelled"));
+
+    if (stats && (stats.open > 0 || stats.unpaid > 0)) {
+      const parts: string[] = [];
+      if (stats.open > 0) parts.push(`${stats.open} pedido(s) pendiente(s)/en curso`);
+      if (stats.unpaid > 0) parts.push(`${stats.unpaid} sin marcar pagado`);
+      sections.push(`═══ RADAR ═══\n${parts.join(" · ")} — mencioná lo relevante sin esperar a que pregunten.`);
     }
   } catch {
     // non-fatal
