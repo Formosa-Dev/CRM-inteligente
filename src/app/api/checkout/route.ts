@@ -22,7 +22,10 @@ export async function POST(request: Request) {
     let body: unknown;
     try { body = JSON.parse(text); } catch { return Response.json({ error: "Pedido no válido." }, { status: 400 }); }
     const parsed = checkoutSchema.safeParse(body);
-    if (!parsed.success) return Response.json({ error: "Revisá tu nombre, WhatsApp y las cantidades del pedido." }, { status: 400 });
+    if (!parsed.success) {
+      const issue = parsed.error.issues.find(problem => problem.path[0] === "deliveryAddress");
+      return Response.json({ error: issue?.message ?? "Revisá tu nombre, WhatsApp y las cantidades del pedido." }, { status: 400 });
+    }
     const receipt = await submitCheckout(parsed.data);
     // Revalidation failure must not report a persisted order as failed.
     try { revalidatePath("/admin/orders"); } catch { /* order is already stored */ }

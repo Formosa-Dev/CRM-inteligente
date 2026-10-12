@@ -7,23 +7,34 @@ export function checkoutPhone(value: string) {
   if (digits.startsWith("54") && digits.length === 12) return `549${digits.slice(2)}`;
   return digits;
 }
+export const fulfillmentModeSchema = z.enum(["pickup", "delivery"]);
+export type FulfillmentMode = z.infer<typeof fulfillmentModeSchema>;
 export const checkoutSchema = z.object({
   requestId: z.uuid(),
   customerName: z.string().trim().min(2).max(100),
   phone: z.string().max(30).transform(checkoutPhone).pipe(z.string().regex(/^549\d{10}$/, "Ingresá tu WhatsApp con código de área, sin 0 ni 15.")),
+  // The storefront sends the explicit mode. A missing mode defaults to pickup so
+  // the legacy WhatsApp form keeps working while the UX worktree adds the
+  // selector — an in-flight sale must never be lost to a missing field.
+  fulfillmentMode: fulfillmentModeSchema.default("pickup"),
+  deliveryAddress: z.string().trim().max(300).optional(),
   items: z.array(z.object({ type: z.enum(["product", "promo"]), id: z.number().int().positive(), quantity: z.number().int().min(1).max(99) })).min(1).max(40),
-});
+}).refine(
+  (data) => data.fulfillmentMode !== "delivery" || (data.deliveryAddress?.length ?? 0) >= 5,
+  { message: "Ingresá la dirección de entrega.", path: ["deliveryAddress"] },
+);
 export type CheckoutInput = z.infer<typeof checkoutSchema>;
 export type CheckoutLine = CheckoutInput["items"][number];
-export type CheckoutReceipt = { orderId: number; total: number; whatsappUrl: string };
+export type CheckoutReceipt = { orderId: number; total: number; whatsappUrl: string; fulfillmentMode: FulfillmentMode };
 export const WEB_ORDER_TAG = "Carta digital";
 export const webOrderKey = (id: string) => `web-checkout:${id}`;
+export const webReference = (requestId: string) => `Referencia WEB:${requestId}`;
 export function extractWebOrderReference(text: string): string | null {
   return text.match(/\bWEB:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i)?.[1].toLowerCase() ?? null;
 }
 
-type Product = { id: number; name: string; price: string | null; promoPrice?: string | null; isPromo?: boolean; category: string; available: boolean; comingSoon: boolean; stock: number | null };
-type Promo = { id: number; name: string; customPrice: string | null; active: boolean; items: { productId: number; quantity: number }[] | null };
+export type Product = { id: number; name: string; price: string | null; promoPrice?: string | null; isPromo?: boolean; category: string; available: boolean; comingSoon: boolean; stock: number | null };
+export type Promo = { id: number; name: string; customPrice: string | null; active: boolean; items: { productId: number; quantity: number }[] | null };
 export type PricedItem = { name: string; quantity: number; price: number; unitPrice: number };
 export function priceCheckout(lines: CheckoutLine[], products: Product[], promos: Promo[], burgersUnavailable = false) {
   const demand = new Map<number, number>();
