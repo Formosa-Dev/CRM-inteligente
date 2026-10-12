@@ -9,6 +9,7 @@ import {
   BarChart2Icon,
   MegaphoneIcon,
   UtensilsCrossedIcon,
+  WalletIcon,
 } from "lucide-react";
 
 export const navItems = [
@@ -70,6 +71,12 @@ export const navItems = [
     label: "Promociones",
     href: "/admin/promos",
     icon: MegaphoneIcon,
+    disabled: false,
+  },
+  {
+    label: "Caja",
+    href: "/admin/caja",
+    icon: WalletIcon,
     disabled: false,
   },
   {
