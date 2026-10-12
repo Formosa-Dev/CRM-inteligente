@@ -12,6 +12,13 @@ const maskPhone = (v) => {
   return digits.length <= 4 ? "****" : "***" + digits.slice(-4) + ` [digits=${digits.length}]`;
 };
 const clip = (v, n = 220) => (v == null ? "(null)" : String(v).length > n ? String(v).slice(0, n) + "…" : String(v));
+// Customer names are PII: keep only the first initial so the script can still
+// correlate records without exposing full identities in logs.
+const maskName = (v) => {
+  if (v == null) return "(null)";
+  const s = String(v).trim();
+  return s.length === 0 ? "(empty)" : `${s[0].toUpperCase()}***`;
+};
 
 async function main() {
   const host = new URL(url).host.replace(/^[^.]+/, "***");
@@ -101,7 +108,7 @@ async function main() {
     order by id desc limit 10`;
   console.log("  matches:", cust.length);
   for (const o of cust) {
-    console.log(`  #${o.id} phone=${maskPhone(o.phone_number)} name=${clip(o.customer_name, 30)} status=${o.status} at=${o.created_at?.toISOString?.() || o.created_at}`);
+    console.log(`  #${o.id} phone=${maskPhone(o.phone_number)} name=${maskName(o.customer_name)} status=${o.status} at=${o.created_at?.toISOString?.() || o.created_at}`);
     console.log(`     notes: ${clip(o.notes, 360)}`);
   }
 
