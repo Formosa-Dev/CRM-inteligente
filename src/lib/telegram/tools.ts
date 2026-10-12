@@ -9,6 +9,7 @@ import { managementTools } from "./toolsManagement";
 import { analyticsTools } from "./toolsAnalytics";
 import { whatsAppTools } from "./toolsWhatsApp";
 import { memoryTools } from "./toolsMemory";
+import { cashTools } from "./toolsCash";
 
 // ─── Tools Maestras (Delegantes) ───────────────────────────────────────
 // Cada Tool Maestra es un grupo de sub-tools relacionadas
@@ -139,6 +140,9 @@ export const internalAgentTools = {
   recallMemories: memoryTools.recallMemories,
   getReconcileCandidates: memoryTools.getReconcileCandidates,
   resolveReconcileCandidate: memoryTools.resolveReconcileCandidate,
+
+  // cash (5 tools)
+  ...cashTools,
 };
 
 // whatsApp: Comunicación por WhatsApp
@@ -149,7 +153,7 @@ export const whatsApp = {
   tools: whatsAppTools,
 };
 
-// Total: 37 tools individuales organizadas en 7 grupos
+// Total: 42 tools individuales (37 en 7 grupos + 5 de caja)
 export const toolGroups = {
   queryOrder,
   manageClient,
