@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence, useDragControls, type PanInfo } from "framer-motion";
 import { X, ShoppingCart, Sparkles } from "lucide-react";
 import { useCart } from "@/lib/cart/cart-context";
+import { getCatalogProductImage } from "@/lib/catalog-images";
 import { useMediaQuery } from "@/hooks/use-media-query";
 
 const STORAGE_KEY = "muzapp-upsell-shown";
@@ -17,6 +18,7 @@ type ApiProduct = {
   stock?: number | null;
   category: string;
   comingSoon?: boolean;
+  imageUrl?: string | null;
 };
 
 const SUGGESTED_CATEGORIES = ["acompanamiento", "bebidas"] as const;
@@ -76,12 +78,16 @@ export function UpsellModal({ onNavigateToPapas }: UpsellModalProps) {
   }, []);
 
   const handleAdd = (product: ApiProduct) => {
-    addItem({
-      id: String(product.id),
-      name: product.name,
-      price: effectivePrice(product),
-      emoji: CATEGORY_EMOJI[product.category] ?? "⭐",
-    });
+    addItem(
+      {
+        id: String(product.id),
+        name: product.name,
+        price: effectivePrice(product),
+        emoji: CATEGORY_EMOJI[product.category] ?? "⭐",
+      },
+      1,
+      { type: "product", imageUrl: getCatalogProductImage(product) },
+    );
     setShow(false);
     if (product.category === "acompanamiento") onNavigateToPapas?.();
   };

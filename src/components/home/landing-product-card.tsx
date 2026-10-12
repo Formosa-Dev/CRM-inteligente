@@ -50,12 +50,16 @@ export function LandingProductCard({
 
   function handleAdd() {
     if (price === null || price <= 0) return;
-    addItem({
-      id: String(product.id),
-      name: product.name,
-      price,
-      emoji: CATEGORY_EMOJI[product.category] ?? "🛒",
-    });
+    addItem(
+      {
+        id: String(product.id),
+        name: product.name,
+        price,
+        emoji: CATEGORY_EMOJI[product.category] ?? "🛒",
+      },
+      1,
+      { type: "product", imageUrl: getCatalogProductImage(product) },
+    );
   }
 
   return (

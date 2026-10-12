@@ -44,11 +44,11 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
         onDragDismiss={onClose}
         className={
           isMobile
-            ? "flex max-h-[85svh] w-full flex-col overflow-y-auto px-5 pt-0"
+            ? "flex max-h-[85svh] w-full flex-col overflow-hidden p-0"
             : "flex w-full flex-col overflow-y-auto p-5 sm:max-w-md"
         }
       >
-        <SheetHeader className="flex-row items-center justify-between gap-0">
+        <SheetHeader className="shrink-0 flex-row items-center justify-between gap-0 px-5 pt-2">
           <SheetTitle className="flex items-center gap-2 text-lg">
             <ShoppingCart className="size-5" />
             Tu Pedido
@@ -61,21 +61,21 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
         </SheetHeader>
 
         {items.length === 0 ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-5 py-16 text-center">
             <ShoppingCart className="text-muted-foreground size-12 opacity-30" />
             <p className="text-muted-foreground text-sm">
               No hay productos en el carrito
             </p>
           </div>
         ) : (
-          <>
-            <div className="flex-1 space-y-1 overflow-y-auto py-4">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-[max(20px,env(safe-area-inset-bottom))]">
+            <div className="space-y-1 py-4">
               {items.map((item) => (
                 <div
                   key={cartKey(item.type, item.product.id)}
-                  className="group flex items-center gap-3 rounded-lg p-2 transition-colors hover:bg-muted/50"
+                  className="group flex items-center gap-2 rounded-lg p-2 transition-colors hover:bg-muted/50 sm:gap-3"
                 >
-                  <div className="relative h-12 w-14 shrink-0 overflow-hidden rounded-md">
+                  <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-md sm:h-12 sm:w-14">
                     <CatalogImage
                       src={getCatalogProductImage({ id: item.product.id, name: item.product.name, imageUrl: item.imageUrl })}
                       alt={item.product.name}
@@ -83,16 +83,16 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
                     />
                   </div>
 
-                  <div className="flex-1 min-w-0">
+                  <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">
                       {item.product.name}
                     </p>
-                    <p className="text-muted-foreground text-xs">
+                    <p className="text-muted-foreground text-xs tabular-nums">
                       ${item.product.price.toLocaleString("es-AR")} c/u
                     </p>
                   </div>
 
-                  <div className="flex shrink-0 items-center gap-1">
+                  <div className="flex shrink-0 items-center gap-0.5">
                     <Button
                       variant="ghost"
                       size="icon-sm"
@@ -141,9 +141,9 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
               <div className="space-y-1 px-1">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Subtotal</span>
-                  <span>${total.toLocaleString("es-AR")}</span>
+                  <span className="tabular-nums">${total.toLocaleString("es-AR")}</span>
                 </div>
-                <div className="flex justify-between text-base font-semibold">
+                <div className="flex items-center justify-between gap-3 text-base font-semibold">
                   <span>Total</span>
                   <span className="text-4xl font-black font-mono tabular-nums">${total.toLocaleString("es-AR")}</span>
                 </div>
@@ -179,7 +179,7 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
                 </button>
               </div>
             </div>
-          </>
+          </div>
         )}
       </SheetContent>
     </Sheet>

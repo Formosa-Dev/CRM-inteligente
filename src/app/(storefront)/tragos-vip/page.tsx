@@ -38,7 +38,7 @@ export default function TragosVIPPage() {
             <div className="relative aspect-[4/5] overflow-hidden"><CatalogImage src={getCatalogProductImage(product)} alt={product.name} contain sizes="(max-width:640px) 100vw, 33vw" /></div>
             <div className="menu-item-body"><div><h3>{product.name}</h3><p>{product.description}</p></div>
               {product.variants?.length ? <p className="menu-includes">{product.variants.map(v => `${v.name}${v.priceDelta > 0 ? ` (+$${v.priceDelta.toLocaleString("es-AR")})` : ""}`).join(" · ")}. Variantes a coordinar por WhatsApp.</p> : null}
-              <div className="menu-item-action"><strong>{price > 0 ? `$${price.toLocaleString("es-AR")}` : "Consultar"}</strong>{price > 0 && !product.comingSoon && product.stock !== 0 && <button className="menu-add-button" onClick={() => addItem({ id: String(product.id), name: product.name, price, emoji: "🍸" })}><Plus size={16} />Agregar</button>}</div>
+              <div className="menu-item-action"><strong>{price > 0 ? `$${price.toLocaleString("es-AR")}` : "Consultar"}</strong>{price > 0 && !product.comingSoon && product.stock !== 0 && <button className="menu-add-button" onClick={() => addItem({ id: String(product.id), name: product.name, price, emoji: "🍸" }, 1, { type: "product", imageUrl: getCatalogProductImage(product) })}><Plus size={16} />Agregar</button>}</div>
             </div>
           </motion.article>;
         })}

@@ -680,6 +680,7 @@
 .menu-cart-line-copy{flex:1;min-width:0}
 .menu-cart-line h3{font-size:.82rem;font-weight:500;line-height:1.4}
 .menu-cart-line p{font-size:.75rem;color:#c8b899;margin-top:.3rem}
+.menu-cart-line .menu-quantity{flex-shrink:0}
 .menu-cart-total{display:flex;justify-content:space-between;align-items:center;margin:1.5rem 0}
 .menu-cart-total span{font-size:.85rem}
 .menu-cart-total small{display:block;font-size:.65rem;color:#aaa497;margin-top:.3rem}
@@ -696,6 +697,18 @@
 .checkout-error button{text-decoration:underline}
 .checkout-confirmation{color:#eae5da;padding:1rem 0;display:flex;flex-direction:column;gap:.7rem}
 .checkout-confirmation p{font-size:.8rem;font-weight:300;line-height:1.6;color:#bab2a2}
+.checkout-fulfillment{border:0;margin:.2rem 0 .9rem;padding:0}
+.checkout-fulfillment legend{font-size:.7rem;color:#bab2a2;padding:0;margin-bottom:.5rem}
+.checkout-fulfillment-options{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+.checkout-fulfillment-option{position:relative;display:flex;flex-direction:column;gap:.15rem;min-height:46px;border:1px solid #ffffff25;border-radius:10px;background:#ffffff04;padding:.6rem .8rem;color:#eae5da;cursor:pointer;transition:border-color .2s,background .2s}
+.checkout-fulfillment-option b{font-weight:600;font-size:.8rem}
+.checkout-fulfillment-option small{font-size:.62rem;line-height:1.4;color:#aaa497}
+.checkout-fulfillment-option input{position:absolute;width:1px;height:1px;opacity:0}
+.checkout-fulfillment-option[data-selected="true"]{border-color:#d7c198;background:#d7c1981f}
+.checkout-fulfillment-option:has(input:focus-visible){outline:2px solid #d7c198;outline-offset:2px}
+.checkout-address{margin:.2rem 0 .9rem}
+.checkout-address label{font-size:.7rem;color:#bab2a2;display:flex;flex-direction:column;gap:.5rem}
+.checkout-address input{min-width:0;width:100%;min-height:46px;border:1px solid #ffffff25;border-radius:4px;background:#ffffff04;padding:.75rem;font-size:.8rem;color:#f2eee5}
 .public-product-card{display:flex;flex-direction:column;border-bottom:1px solid #ffffff20;padding-bottom:1.3rem;color:#f2eee5}
 .public-product-card .menu-item-preview{aspect-ratio:1.22}
 .public-product-card .menu-item-body{gap:1rem}
