@@ -452,6 +452,41 @@ export const reconcileRuns = pgTable("reconcile_runs", {
   finishedAt: timestamp("finished_at", { withTimezone: true }),
 });
 
+// ─── Cash Sessions (cierre de caja — efectivo físico) ────────────────────────
+// Invariante contable: las sesiones forman una cadena continua — cada sesión
+// abre donde cerró la anterior (auto-apertura backdateada), así ningún pedido
+// queda fuera de ninguna ventana ni en dos a la vez. Una sesión cerrada es
+// inmutable: queda como asiento de auditoría.
+
+export const cashSessionStatusEnum = pgEnum("cash_session_status", ["open", "closed"]);
+
+export const cashSessions = pgTable("cash_sessions", {
+  id: serial("id").primaryKey(),
+  status: cashSessionStatusEnum("status").notNull().default("open"),
+  openedAt: timestamp("opened_at", { withTimezone: true }).notNull().defaultNow(),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+  openingCash: numeric("opening_cash", { precision: 12, scale: 2 }).notNull().default("0"),
+  expectedCash: numeric("expected_cash", { precision: 12, scale: 2 }),
+  actualCash: numeric("actual_cash", { precision: 12, scale: 2 }),
+  difference: numeric("difference", { precision: 12, scale: 2 }),
+  closedBy: varchar("closed_by", { length: 100 }),
+  report: jsonb("report"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const cashMovements = pgTable("cash_movements", {
+  id: serial("id").primaryKey(),
+  sessionId: integer("session_id").notNull().references(() => cashSessions.id),
+  direction: varchar("direction", { length: 10 }).notNull(), // 'in' | 'out'
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  reason: text("reason").notNull(),
+  createdBy: varchar("created_by", { length: 100 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  sessionIdx: index("idx_cash_movements_session").on(table.sessionId, table.createdAt),
+}));
+
 // ─── Promotions (promociones con productos reales) ──────────────────────────
 
 export const promotions = pgTable("promotions", {
