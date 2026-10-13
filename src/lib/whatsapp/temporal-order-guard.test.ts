@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import {
   argentinaDayKey,
+  argentinaDayStart,
   buildTemporalAgentMessages,
   classifyTurnIntent,
   evaluateOrderLifecycle,
+  filterSameDayActiveCartRows,
   formatArgentinaStamp,
   isNonOrderingText,
   KEEP_ACTIVE_ORDER_MARKER,
@@ -44,6 +46,60 @@ describe("Argentina local calendar boundaries", () => {
   test("stamps are rendered as [DD/MM HH:mm] in Argentina time", () => {
     assert.equal(formatArgentinaStamp(new Date("2026-10-13T03:05:00Z")), "[13/10 00:05]");
     assert.equal(formatArgentinaStamp(new Date("2026-10-13T18:30:00Z")), "[13/10 15:30]");
+  });
+
+  test("argentinaDayStart is the UTC instant of local midnight", () => {
+    // 2026-10-13T02:59:59Z is still 12/10 locally → day starts 12/10 03:00Z.
+    assert.equal(argentinaDayStart(new Date("2026-10-13T02:59:59Z")).toISOString(), "2026-10-12T03:00:00.000Z");
+    // 2026-10-13T03:00:00Z is the first instant of 13/10 locally.
+    assert.equal(argentinaDayStart(new Date("2026-10-13T03:00:00Z")).toISOString(), "2026-10-13T03:00:00.000Z");
+  });
+});
+
+describe("midnight cart must not leak into the next local day", () => {
+  // now = 13/10 00:15 Argentina local (03:15Z).
+  const now = new Date("2026-10-13T03:15:00Z");
+
+  test("a cart created yesterday 23:59 local with expiry after midnight is ignored", () => {
+    const midnightCart = {
+      status: "active",
+      createdAt: new Date("2026-10-13T02:59:00Z"), // 12/10 23:59 local
+      expiresAt: new Date("2026-10-13T03:29:00Z"), // 13/10 00:29 local → still unexpired
+    };
+
+    // Active + unexpired, but from the preceding local day → excluded.
+    assert.deepEqual(filterSameDayActiveCartRows([midnightCart], now), []);
+
+    // With the leaking cart excluded, a "lo de siempre" turn has no grounding
+    // and cannot materialize an order from yesterday's items.
+    const plan = planOrderCreation(facts({
+      now,
+      turnText: "quiero lo de siempre",
+      sameDayCartItems: filterSameDayActiveCartRows([midnightCart], now).map((ci) => ({ name: "Deli Deli", quantity: 2 })),
+    }));
+    assert.equal(plan.kind, "blocked");
+    if (plan.kind === "blocked") assert.equal(plan.reason, "no_current_day_items");
+  });
+
+  test("a cart created today remains eligible", () => {
+    const todayCart = {
+      status: "active",
+      createdAt: new Date("2026-10-13T03:10:00Z"), // 13/10 00:10 local
+      expiresAt: new Date("2026-10-13T03:40:00Z"),
+    };
+
+    const kept = filterSameDayActiveCartRows([todayCart], now);
+    assert.equal(kept.length, 1);
+
+    const plan = planOrderCreation(facts({
+      now,
+      turnText: "quiero lo que tenía",
+      sameDayCartItems: kept.map((ci) => ({ name: "Deli Deli", quantity: 2 })),
+    }));
+    assert.equal(plan.kind, "create");
+    if (plan.kind === "create") {
+      assert.deepEqual(plan.items, [{ name: "Deli Deli", quantity: 2 }]);
+    }
   });
 });
 

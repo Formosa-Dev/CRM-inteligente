@@ -43,7 +43,7 @@ import { buildSystemPrompt, DEFAULT_SYSTEM_PROMPT, type CustomerContext } from "
 import { assertSessionContext, type SessionContext } from "./session-policy";
 import { getAIConfig, getMainChatModel, isOpenAIBaseUrl } from "@/lib/ai/config";
 import { getStatusSemantic } from "./status-utils";
-import { classifyTurnIntent, evaluateOrderLifecycle } from "./temporal-context";
+import { classifyTurnIntent, evaluateOrderLifecycle, filterSameDayActiveCartRows } from "./temporal-context";
 
 // ─── Session routing guard (SDD memoria-persistente-sesion-whatsapp, PR 4) ───
 // Only an AI-enabled, permitted commercial flow may reach the LLM/tools.
@@ -323,6 +323,7 @@ export async function runWhatsAppAgent({
         try {
           const { orderContextItems } = await import("@/db/schema");
           const { and, eq, gt } = await import("drizzle-orm");
+          const now = new Date();
           const cartItems = await db
             .select()
             .from(orderContextItems)
@@ -330,12 +331,15 @@ export async function runWhatsAppAgent({
               and(
                 eq(orderContextItems.conversationId, conversationId),
                 eq(orderContextItems.status, "active"),
-                gt(orderContextItems.expiresAt, new Date()),
+                gt(orderContextItems.expiresAt, now),
               )
             )
             .orderBy(orderContextItems.createdAt);
-          if (cartItems.length > 0) {
-            currentCart = cartItems.map(i => ({
+          // Only TODAY's (Argentina local day) cart grounds the order: an
+          // active cart from a preceding local day must not leak in at midnight.
+          const sameDayCartItems = filterSameDayActiveCartRows(cartItems, now);
+          if (sameDayCartItems.length > 0) {
+            currentCart = sameDayCartItems.map(i => ({
               productName: i.productName,
               quantity: i.quantity,
               variant: i.variant,

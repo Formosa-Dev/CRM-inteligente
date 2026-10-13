@@ -94,6 +94,73 @@ export function isWithinActiveWindow(
   return ageInHours(createdAt, now) < hours;
 }
 
+function timeZoneOffsetMs(timeZone: string, date: Date): number {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const parts = formatter.formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes): number =>
+    Number(parts.find((part) => part.type === type)?.value ?? "0");
+  const asUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour") % 24,
+    get("minute"),
+    get("second"),
+  );
+  return asUtc - date.getTime();
+}
+
+/**
+ * UTC instant of 00:00 Argentina local on the calendar day of `value`.
+ * Used to scope DB reads/writes to the current local day without relying on
+ * the server's (UTC) calendar day.
+ */
+export function argentinaDayStart(value: Date | string | number): Date {
+  const [year, month, day] = argentinaDayKey(value).split("-").map(Number);
+  const utcMidnight = Date.UTC(year, month - 1, day, 0, 0, 0);
+  const offset = timeZoneOffsetMs(ARGENTINA_TIME_ZONE, new Date(utcMidnight));
+  return new Date(utcMidnight - offset);
+}
+
+// ─── Same-day cart grounding ────────────────────────────────────────────────
+
+export interface CartGroundingRow {
+  createdAt: Date | string;
+  expiresAt: Date | string;
+  status?: string;
+}
+
+/**
+ * A cart row may ground an order only when it is active, unexpired AND was
+ * created on the SAME Argentina local calendar day as `now`. A cart created at
+ * 23:59 local whose expiry crosses midnight (active but from a preceding local
+ * day) must never be used as same-day order grounding.
+ */
+export function isSameDayActiveCartRow(
+  row: CartGroundingRow,
+  now: Date | string | number,
+): boolean {
+  if (row.status !== undefined && row.status !== "active") return false;
+  if (toDate(row.expiresAt).getTime() <= toDate(now).getTime()) return false;
+  return isSameArgentinaDay(row.createdAt, now);
+}
+
+export function filterSameDayActiveCartRows<T extends CartGroundingRow>(
+  rows: T[],
+  now: Date | string | number,
+): T[] {
+  return rows.filter((row) => isSameDayActiveCartRow(row, now));
+}
+
 // ─── Day segmentation of the model context ──────────────────────────────────
 
 export interface TemporalHistoryEntry {

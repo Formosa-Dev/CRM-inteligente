@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { orderContextItems } from "@/db/schema";
-import { eq, and, gt, sql } from "drizzle-orm";
+import { eq, and, gt, gte, sql } from "drizzle-orm";
+import { argentinaDayStart, filterSameDayActiveCartRows } from "@/lib/whatsapp/temporal-context";
 
 const TTL_MINUTES = 30;
 
@@ -29,7 +30,11 @@ export async function addOrderContextItem(
   // Limpiar expirados primero
   await cleanExpiredItems(conversationId);
 
-  // Buscar si ya existe este producto activo (mismo nombre y variante)
+  const now = new Date();
+
+  // Buscar si ya existe este producto activo (mismo nombre y variante) DEL DÍA
+  // LOCAL ACTUAL. Un item de un día anterior no debe fusionarse: si el cliente
+  // vuelve a pedir tras la medianoche, se registra como item nuevo de hoy.
   const [existing] = await db
     .select()
     .from(orderContextItems)
@@ -39,7 +44,8 @@ export async function addOrderContextItem(
         eq(orderContextItems.productName, productName),
         eq(orderContextItems.status, "active"),
         variant ? eq(orderContextItems.variant, variant) : sql`${orderContextItems.variant} IS NULL`,
-        gt(orderContextItems.expiresAt, new Date()),
+        gt(orderContextItems.expiresAt, now),
+        gte(orderContextItems.createdAt, argentinaDayStart(now)),
       )
     )
     .limit(1);
@@ -75,17 +81,22 @@ export async function addOrderContextItem(
 export async function getOrderContextSummary(
   conversationId: number
 ): Promise<OrderContextItem[]> {
-  const items = await db
+  const now = new Date();
+  const rows = await db
     .select()
     .from(orderContextItems)
     .where(
       and(
         eq(orderContextItems.conversationId, conversationId),
         eq(orderContextItems.status, "active"),
-        gt(orderContextItems.expiresAt, new Date()),
+        gt(orderContextItems.expiresAt, now),
       )
     )
     .orderBy(orderContextItems.createdAt);
+
+  // Solo el carrito del día local actual es visible/usable: un carrito activo
+  // de un día anterior no debe presentarse como "pedido actual".
+  const items = filterSameDayActiveCartRows(rows, now);
 
   return items.map((i) => ({
     id: i.id,
