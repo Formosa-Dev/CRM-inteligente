@@ -8,6 +8,7 @@ import { resolveItems, validateResolvedOrderItems, decrementStockBestEffort } fr
 import { normalizePhone } from "@/lib/phone-utils";
 import {
   argentinaDayKey,
+  filterSameDayActiveCartRows,
   planOrderCreation,
   type ActiveOrderSnapshot,
 } from "@/lib/whatsapp/temporal-context";
@@ -126,7 +127,7 @@ export function createCreateOrderTool(
           )
         )
         .orderBy(asc(orderContextItems.createdAt));
-      sameDayCartItems = cartItems.map((ci) => ({ name: ci.productName, quantity: ci.quantity }));
+      sameDayCartItems = filterSameDayActiveCartRows(cartItems, now).map((ci) => ({ name: ci.productName, quantity: ci.quantity }));
     } catch (err) {
       console.warn("[createOrder] Failed to read cart:", err);
     }
