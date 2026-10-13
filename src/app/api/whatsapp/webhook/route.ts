@@ -1109,6 +1109,9 @@ async function deliverWebhookHandoff(input: {
         conversationId,
         customerPhone,
         messages: aiMessages,
+        turnMessageIds: bufferedMessages
+          .map((m) => m.messageId)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
         ...(sessionDecision && sessionDecision.kind === "allow_agent"
           ? { routingKind: "allow_agent" as const, sessionContext: toSessionContext(sessionDecision.state) }
           : {}),

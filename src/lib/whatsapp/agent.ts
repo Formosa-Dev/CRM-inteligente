@@ -93,6 +93,8 @@ interface RunAgentParams {
   sessionContext?: SessionContext;
   /** Boundary routing kind — non-commercial kinds never reach the LLM/tools. */
   routingKind?: AgentRoutingKind;
+  /** Provider message IDs of the current turn, forwarded to the order audit. */
+  turnMessageIds?: string[];
 }
 
 export interface PendingMedia {
@@ -108,6 +110,7 @@ export async function runWhatsAppAgent({
   messages,
   sessionContext,
   routingKind,
+  turnMessageIds,
 }: RunAgentParams): Promise<{ text: string; pendingMedia: PendingMedia[] }> {
   // 🧠 SESIÓN PERSISTENTE (SDD memoria-persistente-sesion-whatsapp, PR 4):
   // fixed/handoff/blocked/duplicate NEVER reach the LLM or tools — return
@@ -258,10 +261,13 @@ export async function runWhatsAppAgent({
         const lastOrder = recentOrders[0];
         // El pedido activo SOLO cuenta dentro de la ventana de 4h. Un pedido
         // abierto viejo NO se presenta al modelo como actual (el tool lo
-        // auto-cierra en el próximo intento de creación).
+        // auto-cierra en el próximo intento de creación). Se busca el último
+        // pedido ABIERTO directamente — un activo viejo puede quedar por
+        // debajo de varias órdenes cerradas más recientes.
         let pendingOrder: (typeof recentOrders)[number] | undefined;
         try {
-          const activeRows = await db
+          const { and, inArray } = await import("drizzle-orm");
+          const [candidate] = await db
             .select({
               items: orders.items,
               status: orders.status,
@@ -272,12 +278,14 @@ export async function runWhatsAppAgent({
               createdAt: orders.createdAt,
             })
             .from(orders)
-            .where(eq(orders.phoneNumber, conv.phone))
+            .where(
+              and(
+                eq(orders.phoneNumber, conv.phone),
+                inArray(orders.status, ["pending", "preparing", "ready"]),
+              ),
+            )
             .orderBy(desc(orders.createdAt))
-            .limit(5);
-          const candidate = activeRows.find(
-            (o) => o.status === "pending" || o.status === "preparing" || o.status === "ready",
-          );
+            .limit(1);
           if (candidate) {
             const lifecycle = evaluateOrderLifecycle({
               activeOrder: { id: candidate.id, status: candidate.status, createdAt: candidate.createdAt },
@@ -490,6 +498,7 @@ export async function runWhatsAppAgent({
     createOrder: createCreateOrderTool(conversationId, referencedWebOrder?.id, {
       turnText: lastUserMessage,
       replyToNotification,
+      turnMessageIds,
     }),
     getOrderStatus: getOrderStatusTool,
     addToOrder: addToOrderTool,

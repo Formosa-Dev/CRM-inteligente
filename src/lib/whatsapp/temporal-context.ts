@@ -248,6 +248,24 @@ const NON_ORDERING_PATTERNS: RegExp[] = [
 
 const EMOJI_ONLY_PATTERN = /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|\s|\uFE0F)+$/u;
 
+/**
+ * Marker embedded in the keep-active question. The tool result that asks
+ * "same order or a new one?" carries it, so a later turn can detect that the
+ * clarification already happened and a "new order" answer may proceed —
+ * otherwise keep_active would be a dead end the customer could never exit.
+ */
+export const KEEP_ACTIVE_ORDER_MARKER = "mismo pedido o querés uno nuevo";
+
+const SEPARATE_ORDER_PATTERN =
+  /\b(otro pedido|otra orden|pedido nuevo|nuevo pedido|orden nueva|nueva orden|pedido aparte|pedido separado|pedido distinto|un pedido mas|hacer otro pedido)\b/;
+
+/** The customer explicitly asks for a NEW/separate order (not the active one). */
+export function wantsSeparateOrder(text: string): boolean {
+  const norm = normalizeForMatch(text);
+  if (!norm) return false;
+  return SEPARATE_ORDER_PATTERN.test(norm);
+}
+
 export function hasExplicitOrderText(text: string): boolean {
   const norm = normalizeForMatch(text);
   if (!norm) return false;
@@ -321,6 +339,12 @@ export interface OrderCreationFacts {
   /** Items the model claims for THIS turn (never trusted on their own). */
   explicitItems?: OrderCartItem[];
   activeOrder: ActiveOrderSnapshot | null;
+  /**
+   * True when recent turns show the same/new clarification already happened
+   * (assistant asked the keep-active question, or the customer already said
+   * "otro pedido"). Lets an explicit new order proceed past keep_active.
+   */
+  newOrderIntentPending?: boolean;
   now?: Date;
   lifecycleHours?: number;
 }
@@ -419,14 +443,21 @@ export function planOrderCreation(facts: OrderCreationFacts): OrderCreationPlan 
   });
 
   if (lifecycle.action === "keep_active") {
-    return {
-      kind: "keep_active",
-      orderId: lifecycle.orderId,
-      message:
-        `Ya tenés un pedido activo (#${lifecycle.orderId}) de hace menos de ` +
-        `${facts.lifecycleHours ?? ACTIVE_ORDER_LIFECYCLE_HOURS} horas. ` +
-        `No creé otro. ¿Es el mismo pedido o querés uno nuevo?`,
-    };
+    // The same/new clarification already happened (or the customer explicitly
+    // asked for a separate order): items above are already grounded in today,
+    // so honoring "iniciar otro" is the required path — not a duplicate.
+    const separateOrderRequested =
+      facts.newOrderIntentPending === true || wantsSeparateOrder(facts.turnText);
+    if (!separateOrderRequested) {
+      return {
+        kind: "keep_active",
+        orderId: lifecycle.orderId,
+        message:
+          `Ya tenés un pedido activo (#${lifecycle.orderId}) de hace menos de ` +
+          `${facts.lifecycleHours ?? ACTIVE_ORDER_LIFECYCLE_HOURS} horas. ` +
+          `No creé otro. ¿Es el ${KEEP_ACTIVE_ORDER_MARKER}?`,
+      };
+    }
   }
 
   if (lifecycle.action === "auto_close") {

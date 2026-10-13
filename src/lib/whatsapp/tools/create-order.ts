@@ -1,12 +1,19 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { db } from "@/db";
-import { orders, leads, agentConfig, addresses, orderContextItems, conversations } from "@/db/schema";
+import { orders, leads, agentConfig, addresses, orderContextItems, conversations, chatMessages } from "@/db/schema";
 import { eq, desc, and, gt, asc } from "drizzle-orm";
 import { notifyNewOrder } from "@/lib/telegram/notifier";
 import { resolveItems, validateResolvedOrderItems, decrementStockBestEffort } from "@/lib/order-utils";
 import { normalizePhone } from "@/lib/phone-utils";
-import { argentinaDayKey, planOrderCreation, type ActiveOrderSnapshot } from "@/lib/whatsapp/temporal-context";
+import {
+  argentinaDayKey,
+  KEEP_ACTIVE_ORDER_MARKER,
+  planOrderCreation,
+  textMentionsName,
+  wantsSeparateOrder,
+  type ActiveOrderSnapshot,
+} from "@/lib/whatsapp/temporal-context";
 import {
   auditOrderEvent,
   autoCloseStaleOrder,
@@ -19,6 +26,8 @@ export interface OrderCreationContext {
   turnText?: string;
   /** True when this turn replies to a closure/status notification. */
   replyToNotification?: boolean;
+  /** Provider message IDs of the current turn, for the audit trail. */
+  turnMessageIds?: string[];
   /** Test seam; defaults to the shared Drizzle repository. */
   lifecycleRepository?: OrderLifecycleRepository;
 }
@@ -130,6 +139,27 @@ export function createCreateOrderTool(
       return "No pude verificar si ya existe un pedido. Reintentá en un momento para evitar duplicados.";
     }
 
+    // ─── Pending same/new clarification: was the keep-active question ─────
+    // already asked (assistant marker) or did the customer already request a
+    // separate order? Without this, keep_active is a dead end the customer
+    // can never exit — "iniciar otro" would loop back to the same question.
+    let newOrderIntentPending = false;
+    try {
+      const recentTurns = await db
+        .select({ role: chatMessages.role, content: chatMessages.content })
+        .from(chatMessages)
+        .where(eq(chatMessages.conversationId, conversationId))
+        .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
+        .limit(8);
+      newOrderIntentPending =
+        recentTurns.some(
+          (turn) => turn.role === "assistant" && turn.content.includes(KEEP_ACTIVE_ORDER_MARKER),
+        ) ||
+        recentTurns.some((turn) => turn.role === "user" && wantsSeparateOrder(turn.content));
+    } catch {
+      newOrderIntentPending = false;
+    }
+
     const plan = planOrderCreation({
       referencedWebOrderId,
       turnText: context.turnText ?? "",
@@ -137,6 +167,7 @@ export function createCreateOrderTool(
       sameDayCartItems,
       explicitItems,
       activeOrder,
+      newOrderIntentPending,
       now,
     });
 
@@ -144,6 +175,7 @@ export function createCreateOrderTool(
       conversationId,
       localDay: argentinaDayKey(now),
       consideredCurrentMessages: context.turnText ? 1 : 0,
+      messageIds: context.turnMessageIds,
       activeOrderId: activeOrder?.id ?? null,
       autoClosed: plan.kind === "auto_close_then_create",
       decision:
@@ -185,11 +217,24 @@ export function createCreateOrderTool(
       }
     }
 
-    // ─── Items: explícitos del modelo, o el carrito same-day ya validado ──
-    let items = explicitItems && explicitItems.length > 0 ? explicitItems : undefined;
-    if (!items && sameDayCartItems.length > 0) {
-      items = sameDayCartItems;
+    // ─── Items: el carrito same-day es la verdad de servidor. Ítems ──────
+    // explícitos del modelo solo pueden agregar productos que el cliente
+    // nombró en ESTE turno (nunca ítems alucinados ni de días anteriores).
+    let items: { name: string; quantity: number }[] | undefined;
+    if (sameDayCartItems.length > 0) {
+      items = [...sameDayCartItems];
+      for (const explicit of explicitItems ?? []) {
+        const inCart = sameDayCartItems.some(
+          (cart) =>
+            textMentionsName(cart.name, explicit.name) || textMentionsName(explicit.name, cart.name),
+        );
+        if (!inCart && textMentionsName(context.turnText ?? "", explicit.name)) {
+          items.push(explicit);
+        }
+      }
       console.log(`[createOrder] Auto-read ${items.length} items from carrito (conversation ${conversationId})`);
+    } else {
+      items = explicitItems && explicitItems.length > 0 ? explicitItems : undefined;
     }
 
     if (!items || items.length === 0) {

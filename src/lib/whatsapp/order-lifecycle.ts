@@ -64,6 +64,7 @@ export async function getActiveOrderSnapshot(phoneNumber: string): Promise<Activ
 export interface OrderAuditFields {
   conversationId?: number;
   messageId?: string;
+  messageIds?: string[];
   localDay?: string;
   consideredCurrentMessages?: number;
   activeOrderId?: number | null;

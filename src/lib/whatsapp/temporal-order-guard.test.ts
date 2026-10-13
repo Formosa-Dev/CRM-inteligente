@@ -7,8 +7,10 @@ import {
   evaluateOrderLifecycle,
   formatArgentinaStamp,
   isNonOrderingText,
+  KEEP_ACTIVE_ORDER_MARKER,
   planOrderCreation,
   segmentHistoryByDay,
+  wantsSeparateOrder,
   type OrderCreationFacts,
 } from "./temporal-context";
 import {
@@ -182,6 +184,48 @@ describe("4-hour active-order lifecycle", () => {
     }));
     assert.equal(plan.kind, "keep_active");
     if (plan.kind === "keep_active") assert.match(plan.message, /mismo pedido o querés uno nuevo/);
+  });
+
+  test("explicit 'otro pedido' intent proceeds past keep_active", () => {
+    const activeOrder = { id: 248, status: "pending", createdAt: new Date(now.getTime() - 1 * HOUR) };
+    const plan = planOrderCreation(facts({
+      now,
+      turnText: "quiero otro pedido: 2 genesis",
+      explicitItems: [{ name: "Genesis", quantity: 2 }],
+      activeOrder,
+    }));
+    assert.equal(plan.kind, "create");
+  });
+
+  test("a pending same/new clarification lets the follow-up order through", () => {
+    const activeOrder = { id: 248, status: "pending", createdAt: new Date(now.getTime() - 1 * HOUR) };
+    const plan = planOrderCreation(facts({
+      now,
+      turnText: "2 genesis",
+      explicitItems: [{ name: "Genesis", quantity: 2 }],
+      activeOrder,
+      newOrderIntentPending: true,
+    }));
+    assert.equal(plan.kind, "create");
+  });
+
+  test("without a new-order intent, keep_active still asks first", () => {
+    const activeOrder = { id: 248, status: "pending", createdAt: new Date(now.getTime() - 1 * HOUR) };
+    const plan = planOrderCreation(facts({
+      now,
+      turnText: "2 genesis",
+      explicitItems: [{ name: "Genesis", quantity: 2 }],
+      activeOrder,
+    }));
+    assert.equal(plan.kind, "keep_active");
+    if (plan.kind === "keep_active") assert.match(plan.message, new RegExp(KEEP_ACTIVE_ORDER_MARKER));
+  });
+
+  test("separate-order phrasing is detected without matching plain items", () => {
+    assert.equal(wantsSeparateOrder("quiero otro pedido"), true);
+    assert.equal(wantsSeparateOrder("haceme un pedido aparte"), true);
+    assert.equal(wantsSeparateOrder("2 genesis"), false);
+    assert.equal(wantsSeparateOrder("dame otro"), false);
   });
 
   test("stale open order at/over 4h is auto-closed before creating", () => {
