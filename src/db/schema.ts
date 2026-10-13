@@ -211,6 +211,8 @@ export const conversations = pgTable("conversations", {
     lastUserMessageType: "order" | "greeting" | "menu" | "info" | "complaint" | "other";
     lastSuggestedProducts: string[];
     lastTools: string[];
+    // Same/new order clarification asked during the 4h active-order window.
+    keepActiveConfirmation?: { activeOrderId: number; askedAt: string };
   }>().default({ repromptCount: 0, lastUserMessageType: "other", lastSuggestedProducts: [], lastTools: [] }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

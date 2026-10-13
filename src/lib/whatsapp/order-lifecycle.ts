@@ -11,7 +11,7 @@
  */
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { orders } from "@/db/schema";
+import { conversations, orders } from "@/db/schema";
 import { logger } from "@/lib/logger";
 import {
   ACTIVE_ORDER_STATUSES,
@@ -57,6 +57,66 @@ export class DrizzleOrderLifecycleRepository implements OrderLifecycleRepository
 /** Read-only snapshot of the customer's open order, if any. */
 export async function getActiveOrderSnapshot(phoneNumber: string): Promise<ActiveOrderSnapshot | null> {
   return new DrizzleOrderLifecycleRepository().findActiveOrder(phoneNumber);
+}
+
+// ─── Same/new clarification state (two-turn, server-side) ───────────────────
+// Stored in the opaque conversationMetadata jsonb (no schema migration) and
+// NOT derived from LLM phrasing: the assistant marker lives only in the tool
+// result, which is never persisted, so detecting it in messages is unreliable.
+// anti-loop preserves unknown keys when it rewrites the metadata.
+
+export interface KeepActiveConfirmation {
+  activeOrderId: number;
+  askedAt: string;
+}
+
+type ConversationMetadataShape = (typeof conversations.$inferSelect)["conversationMetadata"];
+
+async function readConversationMetadata(conversationId: number): Promise<Record<string, unknown>> {
+  const [row] = await db
+    .select({ metadata: conversations.conversationMetadata })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId))
+    .limit(1);
+  return (row?.metadata ?? {}) as Record<string, unknown>;
+}
+
+/** Reads the pending same/new marker, if any. */
+export async function readKeepActiveConfirmation(conversationId: number): Promise<KeepActiveConfirmation | null> {
+  const metadata = await readConversationMetadata(conversationId);
+  const raw = metadata.keepActiveConfirmation;
+  if (!raw || typeof raw !== "object") return null;
+  const candidate = raw as Record<string, unknown>;
+  if (typeof candidate.activeOrderId !== "number") return null;
+  return {
+    activeOrderId: candidate.activeOrderId,
+    askedAt: typeof candidate.askedAt === "string" ? candidate.askedAt : "",
+  };
+}
+
+/** Marks that the same/new question was asked for a given active order. */
+export async function setKeepActiveConfirmation(conversationId: number, activeOrderId: number): Promise<void> {
+  const metadata = await readConversationMetadata(conversationId);
+  const next = {
+    ...metadata,
+    keepActiveConfirmation: { activeOrderId, askedAt: new Date().toISOString() } satisfies KeepActiveConfirmation,
+  };
+  await db
+    .update(conversations)
+    .set({ conversationMetadata: next as ConversationMetadataShape })
+    .where(eq(conversations.id, conversationId));
+}
+
+/** Clears the marker once the clarification no longer applies. */
+export async function clearKeepActiveConfirmation(conversationId: number): Promise<void> {
+  const metadata = await readConversationMetadata(conversationId);
+  if (!("keepActiveConfirmation" in metadata)) return;
+  const { keepActiveConfirmation: _drop, ...rest } = metadata;
+  void _drop;
+  await db
+    .update(conversations)
+    .set({ conversationMetadata: rest as ConversationMetadataShape })
+    .where(eq(conversations.id, conversationId));
 }
 
 // ─── Privacy-safe structured audit ──────────────────────────────────────────

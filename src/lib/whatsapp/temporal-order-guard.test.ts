@@ -142,12 +142,19 @@ describe("material order-creation guard", () => {
       explicitItems: [{ name: "Deli Deli", quantity: 2 }],
     }));
     assert.equal(direct.kind, "create");
+    if (direct.kind === "create") {
+      assert.deepEqual(direct.items, [{ name: "Deli Deli", quantity: 2 }]);
+    }
 
+    // The server cart is the chosen source of truth for an explicit order turn.
     const fromCart = planOrderCreation(facts({
-      turnText: "dale",
+      turnText: "quiero 2 deli deli",
       sameDayCartItems: [{ name: "Deli Deli", quantity: 2 }],
     }));
     assert.equal(fromCart.kind, "create");
+    if (fromCart.kind === "create") {
+      assert.deepEqual(fromCart.items, [{ name: "Deli Deli", quantity: 2 }]);
+    }
   });
 
   test("no explicit current-day items is blocked", () => {
@@ -155,9 +162,39 @@ describe("material order-creation guard", () => {
     assert.equal(plan.kind, "blocked");
   });
 
-  test("items the current turn never mentioned are rejected", () => {
+  test("an ambiguous short reply is not an order", () => {
     const plan = planOrderCreation(facts({
       turnText: "todo bien?",
+      explicitItems: [{ name: "Genesis", quantity: 1 }],
+    }));
+    assert.equal(plan.kind, "blocked");
+    if (plan.kind === "blocked") assert.equal(plan.reason, "not_an_order");
+  });
+
+  test("items the current turn never mentioned are rejected", () => {
+    const plan = planOrderCreation(facts({
+      turnText: "quiero algo",
+      explicitItems: [{ name: "Genesis", quantity: 1 }],
+    }));
+    assert.equal(plan.kind, "blocked");
+    if (plan.kind === "blocked") assert.equal(plan.reason, "unsupported_items");
+  });
+
+  test("cart-present greetings/acks never create an order", () => {
+    for (const text of ["hola", "ok"]) {
+      const plan = planOrderCreation(facts({
+        turnText: text,
+        sameDayCartItems: [{ name: "Deli Deli", quantity: 2 }],
+      }));
+      assert.equal(plan.kind, "blocked", `expected blocked: ${text}`);
+      if (plan.kind === "blocked") assert.equal(plan.reason, "non_ordering");
+    }
+  });
+
+  test("cart-present unmentioned explicitItems are rejected, not merged", () => {
+    const plan = planOrderCreation(facts({
+      turnText: "quiero lo de siempre",
+      sameDayCartItems: [{ name: "Deli Deli", quantity: 2 }],
       explicitItems: [{ name: "Genesis", quantity: 1 }],
     }));
     assert.equal(plan.kind, "blocked");

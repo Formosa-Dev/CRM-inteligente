@@ -11,6 +11,10 @@ export type ConversationMetadata = {
   lastUserMessageType: MessageType;
   lastSuggestedProducts: string[];
   lastTools: string[];
+  // Opaque fields written by other subsystems (e.g. the order-lifecycle
+  // same/new confirmation marker) are preserved verbatim on every rewrite.
+  keepActiveConfirmation?: { activeOrderId: number; askedAt: string };
+  [extra: string]: unknown;
 };
 
 // ─── Analyze message type ───────────────────────────────────────────────────
@@ -96,8 +100,10 @@ export async function analyzeConversationState(
   // o si el agente preguntó lo mismo más de una vez
   const isReprompt = messageType === currentMeta.lastUserMessageType;
 
-  // Actualizar metadata
+  // Actualizar metadata preservando campos desconocidos de otros subsistemas
+  // (p. ej. el marcador de confirmación mismo/nuevo del ciclo de pedidos).
   const newMeta: ConversationMetadata = {
+    ...currentMeta,
     repromptCount: isReprompt ? currentMeta.repromptCount + 1 : 0,
     lastUserMessageType: messageType,
     lastSuggestedProducts: currentMeta.lastSuggestedProducts,

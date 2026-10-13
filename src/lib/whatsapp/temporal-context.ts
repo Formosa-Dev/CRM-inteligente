@@ -301,6 +301,11 @@ export function textMentionsName(text: string, name: string): boolean {
   return normText.includes(normName);
 }
 
+/** Loose product-name equality (either normalized name contains the other). */
+export function sameProductName(a: string, b: string): boolean {
+  return textMentionsName(a, b) || textMentionsName(b, a);
+}
+
 // ─── Order lifecycle (pure decision) ────────────────────────────────────────
 
 export type OrderLifecycleAction =
@@ -354,14 +359,15 @@ export type OrderCreationBlockReason =
   | "negative_response"
   | "notification_reply"
   | "non_ordering"
+  | "not_an_order"
   | "no_current_day_items"
   | "unsupported_items";
 
 export type OrderCreationPlan =
   | { kind: "blocked"; reason: OrderCreationBlockReason; message: string }
   | { kind: "keep_active"; orderId: number; message: string }
-  | { kind: "auto_close_then_create"; closeOrderId: number }
-  | { kind: "create" };
+  | { kind: "auto_close_then_create"; closeOrderId: number; items: OrderCartItem[] }
+  | { kind: "create"; items: OrderCartItem[] };
 
 const NO_CREATE_PREFIX = "NO se creó ningún pedido.";
 
@@ -371,12 +377,16 @@ const NO_CREATE_PREFIX = "NO se creó ningún pedido.";
  *  1. A verified web order is never duplicated.
  *  2. A rejection ("nooo") never creates or suggests an order.
  *  3. A reply to a closure/status notification never creates an order.
- *  4. A pure non-ordering reply (greeting/ack/emoji) with no same-day cart
- *     never creates an order.
- *  5. Orders are only created from explicit items of TODAY — either a
- *     server-recorded same-day cart or explicit items that the current turn
- *     actually mentions. Never reconstructed across days.
- *  6. An open order under 4h keeps active (avoid duplication; ask same/new);
+ *  4. The current turn must be an EXPLICIT order. Greetings, reactions, acks
+ *     and ambiguous short replies never create — even when a same-day cart
+ *     exists (a cart must never be materialized by "hola"/"ok").
+ *  5. Item grounding is unconditional. The server-recorded same-day cart is the
+ *     authoritative source; model-supplied items are accepted only as
+ *     additions whose product names appear in the CURRENT turn. Any
+ *     ungrounded model item rejects the whole creation (never an unvalidated
+ *     override, never reconstructed across days).
+ *  6. An open order under 4h keeps active (avoid duplication; ask same/new)
+ *     unless a separate/new order has been explicitly requested or confirmed;
  *     at/over 4h it is auto-closed before any new order is created.
  */
 export function planOrderCreation(facts: OrderCreationFacts): OrderCreationPlan {
@@ -406,34 +416,50 @@ export function planOrderCreation(facts: OrderCreationFacts): OrderCreationPlan 
     };
   }
 
-  const hasSameDayCart = facts.sameDayCartItems.length > 0;
-
-  if (!hasSameDayCart && classifyTurnIntent(facts.turnText) === "non_ordering") {
+  // Unconditional: no explicit order in the CURRENT turn → no order, even with
+  // a same-day cart. Kills "short message + stale/LLM items" creation paths.
+  const intent = classifyTurnIntent(facts.turnText);
+  if (intent !== "explicit_order") {
+    const reason: OrderCreationBlockReason = intent === "non_ordering" ? "non_ordering" : "not_an_order";
     return {
       kind: "blocked",
-      reason: "non_ordering",
-      message: `${NO_CREATE_PREFIX} El mensaje de HOY es un saludo/reacción/confirmación, no un pedido. No sugieras "lo de siempre" ni pedidos de días anteriores.`,
+      reason,
+      message:
+        intent === "non_ordering"
+          ? `${NO_CREATE_PREFIX} El mensaje de HOY es un saludo/reacción/confirmación, no un pedido. No sugieras "lo de siempre" ni pedidos de días anteriores.`
+          : `${NO_CREATE_PREFIX} El mensaje de HOY no expresa un pedido explícito. No reconstruyas un pedido con mensajes de días anteriores.`,
     };
   }
 
-  const hasExplicitItems = (facts.explicitItems?.length ?? 0) > 0;
-  if (!hasSameDayCart && !hasExplicitItems) {
+  // Unconditional item grounding: every model item must be named in THIS turn
+  // or already be in the server cart. The cart is the chosen source of truth.
+  const cart = facts.sameDayCartItems;
+  const explicit = facts.explicitItems ?? [];
+  const grounded = (name: string): boolean =>
+    textMentionsName(facts.turnText, name) ||
+    cart.some((item) => sameProductName(item.name, name));
+  if (explicit.some((item) => !grounded(item.name))) {
+    return {
+      kind: "blocked",
+      reason: "unsupported_items",
+      message: `${NO_CREATE_PREFIX} El cliente no nombró esos productos en el mensaje actual. No los registres sin confirmación.`,
+    };
+  }
+
+  const chosenItems: OrderCartItem[] = [...cart];
+  for (const item of explicit) {
+    if (!textMentionsName(facts.turnText, item.name)) continue;
+    if (!chosenItems.some((existing) => sameProductName(existing.name, item.name))) {
+      chosenItems.push({ name: item.name, quantity: item.quantity });
+    }
+  }
+
+  if (chosenItems.length === 0) {
     return {
       kind: "blocked",
       reason: "no_current_day_items",
       message: `${NO_CREATE_PREFIX} No hay productos explícitos del día de HOY. No reconstruyas un pedido con mensajes de días anteriores.`,
     };
-  }
-
-  if (!hasSameDayCart && facts.explicitItems) {
-    const mentioned = facts.explicitItems.some((item) => textMentionsName(facts.turnText, item.name));
-    if (!mentioned && !hasExplicitOrderText(facts.turnText)) {
-      return {
-        kind: "blocked",
-        reason: "unsupported_items",
-        message: `${NO_CREATE_PREFIX} El cliente no confirmó esos productos en el mensaje actual. No los registres sin confirmación.`,
-      };
-    }
   }
 
   const lifecycle = evaluateOrderLifecycle({
@@ -443,9 +469,9 @@ export function planOrderCreation(facts: OrderCreationFacts): OrderCreationPlan 
   });
 
   if (lifecycle.action === "keep_active") {
-    // The same/new clarification already happened (or the customer explicitly
-    // asked for a separate order): items above are already grounded in today,
-    // so honoring "iniciar otro" is the required path — not a duplicate.
+    // The same/new clarification already happened (pending server-side marker)
+    // or the customer explicitly asked for a separate order: items above are
+    // already grounded in today, so honoring "iniciar otro" is not a duplicate.
     const separateOrderRequested =
       facts.newOrderIntentPending === true || wantsSeparateOrder(facts.turnText);
     if (!separateOrderRequested) {
@@ -461,8 +487,8 @@ export function planOrderCreation(facts: OrderCreationFacts): OrderCreationPlan 
   }
 
   if (lifecycle.action === "auto_close") {
-    return { kind: "auto_close_then_create", closeOrderId: lifecycle.orderId };
+    return { kind: "auto_close_then_create", closeOrderId: lifecycle.orderId, items: chosenItems };
   }
 
-  return { kind: "create" };
+  return { kind: "create", items: chosenItems };
 }

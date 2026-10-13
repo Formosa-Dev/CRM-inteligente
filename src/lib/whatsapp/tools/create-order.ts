@@ -1,23 +1,23 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { db } from "@/db";
-import { orders, leads, agentConfig, addresses, orderContextItems, conversations, chatMessages } from "@/db/schema";
+import { orders, leads, agentConfig, addresses, orderContextItems, conversations } from "@/db/schema";
 import { eq, desc, and, gt, asc } from "drizzle-orm";
 import { notifyNewOrder } from "@/lib/telegram/notifier";
 import { resolveItems, validateResolvedOrderItems, decrementStockBestEffort } from "@/lib/order-utils";
 import { normalizePhone } from "@/lib/phone-utils";
 import {
   argentinaDayKey,
-  KEEP_ACTIVE_ORDER_MARKER,
   planOrderCreation,
-  textMentionsName,
-  wantsSeparateOrder,
   type ActiveOrderSnapshot,
 } from "@/lib/whatsapp/temporal-context";
 import {
   auditOrderEvent,
   autoCloseStaleOrder,
+  clearKeepActiveConfirmation,
   DrizzleOrderLifecycleRepository,
+  readKeepActiveConfirmation,
+  setKeepActiveConfirmation,
   type OrderLifecycleRepository,
 } from "@/lib/whatsapp/order-lifecycle";
 
@@ -139,23 +139,15 @@ export function createCreateOrderTool(
       return "No pude verificar si ya existe un pedido. Reintentá en un momento para evitar duplicados.";
     }
 
-    // ─── Pending same/new clarification: was the keep-active question ─────
-    // already asked (assistant marker) or did the customer already request a
-    // separate order? Without this, keep_active is a dead end the customer
-    // can never exit — "iniciar otro" would loop back to the same question.
+    // ─── Server-side two-turn confirmation state ─────────────────────────
+    // When keep_active asks "same order or a new one?", we persist a marker
+    // scoped to that active order. The customer's next explicit order turn
+    // then proceeds instead of looping on the same question. The marker is
+    // durable (conversationMetadata), independent of the LLM's wording.
     let newOrderIntentPending = false;
     try {
-      const recentTurns = await db
-        .select({ role: chatMessages.role, content: chatMessages.content })
-        .from(chatMessages)
-        .where(eq(chatMessages.conversationId, conversationId))
-        .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
-        .limit(8);
-      newOrderIntentPending =
-        recentTurns.some(
-          (turn) => turn.role === "assistant" && turn.content.includes(KEEP_ACTIVE_ORDER_MARKER),
-        ) ||
-        recentTurns.some((turn) => turn.role === "user" && wantsSeparateOrder(turn.content));
+      const pending = await readKeepActiveConfirmation(conversationId);
+      newOrderIntentPending = pending !== null && activeOrder !== null && pending.activeOrderId === activeOrder.id;
     } catch {
       newOrderIntentPending = false;
     }
@@ -191,14 +183,29 @@ export function createCreateOrderTool(
       return plan.message;
     }
     if (plan.kind === "keep_active") {
+      // Persist the same/new clarification so the next explicit turn can exit
+      // keep_active instead of looping. Failure is non-fatal (we just re-ask).
+      try {
+        await setKeepActiveConfirmation(conversationId, plan.orderId);
+      } catch (error) {
+        console.warn("[createOrder] Failed to persist keep-active confirmation:", error);
+      }
       return plan.message;
     }
+    // plan is now auto_close_then_create | create: both carry grounded items.
+    const items = plan.items;
     if (plan.kind === "auto_close_then_create") {
       // Idempotent: a lost race or an already-closed row is a no-op.
       await autoCloseStaleOrder(activeOrder ?? { id: plan.closeOrderId, status: "pending", createdAt: now }, now, repository, {
         conversationId,
         localDay: argentinaDayKey(now),
       });
+    }
+    // A fresh order is proceeding — the same/new question is resolved.
+    try {
+      await clearKeepActiveConfirmation(conversationId);
+    } catch {
+      // non-fatal
     }
 
     // ─── Verificar si hay stock de hamburguesas ──────────────────────────
@@ -215,30 +222,6 @@ export function createCreateOrderTool(
       } catch {
         // non-fatal — si falla la consulta, permitir el pedido
       }
-    }
-
-    // ─── Items: el carrito same-day es la verdad de servidor. Ítems ──────
-    // explícitos del modelo solo pueden agregar productos que el cliente
-    // nombró en ESTE turno (nunca ítems alucinados ni de días anteriores).
-    let items: { name: string; quantity: number }[] | undefined;
-    if (sameDayCartItems.length > 0) {
-      items = [...sameDayCartItems];
-      for (const explicit of explicitItems ?? []) {
-        const inCart = sameDayCartItems.some(
-          (cart) =>
-            textMentionsName(cart.name, explicit.name) || textMentionsName(explicit.name, cart.name),
-        );
-        if (!inCart && textMentionsName(context.turnText ?? "", explicit.name)) {
-          items.push(explicit);
-        }
-      }
-      console.log(`[createOrder] Auto-read ${items.length} items from carrito (conversation ${conversationId})`);
-    } else {
-      items = explicitItems && explicitItems.length > 0 ? explicitItems : undefined;
-    }
-
-    if (!items || items.length === 0) {
-      return "No hay items en el carrito y no se pasaron items explícitos. Usá addOrderItem primero para agregar productos al pedido.";
     }
 
     // Resolver items contra productos reales de la DB
