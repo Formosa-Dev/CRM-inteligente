@@ -1,6 +1,6 @@
 import { db } from "@/db";
-import { products } from "@/db/schema";
-import { eq, and, asc, isNotNull } from "drizzle-orm";
+import { products, agentMemories } from "@/db/schema";
+import { eq, and, asc, isNotNull, like } from "drizzle-orm";
 import { getArgentinaMinutes, getArgentinaDayIndex, getArgentinaHour } from "@/lib/argentina-time";
 import { getStatusSemantic } from "@/lib/whatsapp/status-utils";
 import { assertSessionContext, type SessionContext } from "./session-policy";
@@ -128,6 +128,25 @@ export async function getStyleProfile(): Promise<string> {
     });
     const profile = config?.whatsappStyleProfile?.trim();
     return profile ? `ESTILO DE VENTA DEL NEGOCIO (reglas aprendidas del operador — prioridad sobre el estilo base cuando difieran):\n${profile}` : "";
+  } catch {
+    return "";
+  }
+}
+
+// Layer 1c: Guía de ventas APROBADA por el operador (loop de aprendizaje).
+// Cada línea es una regla de comportamiento que el admin aprobó explícitamente
+// vía el agente de Telegram (agent_memories, prefijo `sales-guidance:`). Es
+// revisable y se puede quitar con forgetThis. Fail-closed: sin filas → "".
+export async function getApprovedSalesGuidance(): Promise<string> {
+  try {
+    const rows = await db
+      .select({ content: agentMemories.content })
+      .from(agentMemories)
+      .where(and(eq(agentMemories.active, true), like(agentMemories.key, "sales-guidance:%")))
+      .orderBy(asc(agentMemories.key));
+    const lines = rows.map((r) => r.content.trim()).filter(Boolean);
+    if (lines.length === 0) return "";
+    return `GUÍA DE VENTAS APROBADA POR EL OPERADOR (obligatoria — prioridad sobre el estilo base):\n${lines.map((l) => `- ${l}`).join("\n")}`;
   } catch {
     return "";
   }
@@ -510,6 +529,7 @@ export interface CustomerContext {
 export async function buildSystemPrompt(conversationId?: number, customerContext?: CustomerContext, antiLoopDirective?: string, nonCommercialDirective?: string, sessionFacts?: SessionContext): Promise<string> {
   const layer1 = await getCorePrompt();
   const layer1b = await getStyleProfile();
+  const layer1c = await getApprovedSalesGuidance();
   const layer2 = await getMenuData();
   const layer3 = await getBusinessHours();
   const layer3b = await getProductionHours();
@@ -634,6 +654,7 @@ export async function buildSystemPrompt(conversationId?: number, customerContext
   // Combine layers + replace dynamic placeholders
   const combined = `${layer1}
 ${layer1b ? `\n${layer1b}\n` : ""}
+${layer1c ? `\n${layer1c}\n` : ""}
 ${layer2}
 
 ${layer3}
@@ -672,6 +693,19 @@ Vendés hamburguesas, pan mayorista, tragos.
 - NO expliques el menú si no preguntan
 - NO pidas método de pago por adelantado
 - NO asumas que una consulta de precio significa que quiere comprar
+
+[TONO — DIRECTO PERO NO PREsumIDO]
+Directo y conciso, pero NUNCA adelantándote a lo que el cliente no confirmó.
+- Estado del pedido: no digas "ya está", "ya salió", "sale en X" si ninguna
+  tool te lo devolvió en este turno. El pedido recién creado NO está listo.
+- Envío/pago: no prometas Uber, envío, total ni "pasame comprobante" antes de
+  que el cliente elija entrega y pago. Preguntá lo que falta; no lo asumas.
+- Venta: no cierres por el cliente ("dale, te la mando") hasta que él confirme.
+- Disponibilidad, precio, delivery y horarios: SIEMPRE desde una tool, jamás
+  de memoria ni de suposiciones.
+- Familiaridad: sin "amigo" repetido ni frases de presión. La calidez viene del
+  trato y del nombre, no de muletillas.
+- Si el cliente fue claro, ejecutá; si algo no está claro, preguntá UNA vez.
 
 [ACTITUD — RESOLUTIVO, NO PREGUNTONA]
 Ejecutá, no preguntes permiso. Si el cliente mostró interés, ya es suficiente — mandá directo.

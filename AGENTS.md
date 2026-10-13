@@ -1,31 +1,71 @@
-<!-- BEGIN:nextjs-agent-rules -->
-# This is NOT the Next.js you know
+# AGENTS.md — Muzapp
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
-<!-- END:nextjs-agent-rules -->
+Open-source commerce + WhatsApp/Telegram AI-agent platform. Next.js 16 (App Router),
+React 19, TypeScript, Tailwind 4, Drizzle ORM + PostgreSQL (Neon), NextAuth v5, Vercel
+AI SDK. Target deployment: Render. Per-install business data and credentials live in the
+DB (`agent_config`) and are edited from `/admin/agent`.
 
-<!-- BEGIN:inter-agent-engram -->
-# Inter-Agent Communication via Engram
+## Next.js version caveat
 
-Cuando hay múltiples agentes trabajando en paralelo en este proyecto:
-1. Cargá la skill `inter-agent-engram`
-2. Leé las specs compartidas en Engram: `sdd/muzzarella-core/specs`
-3. Buscá señales de otros agentes: `mem_search query="SIGNAL" scope=project`
-4. Escribí señales al coordinar: `task-claim`, `task-done`, `signal`
-5. Respetá la división de tareas definida en specs
+This repo uses Next 16.2.4 — APIs, conventions, and file structure differ from older
+Next. Before editing routing, data fetching, or server/client boundaries, read the
+relevant guide under `node_modules/next/dist/docs/` and follow its deprecation notes.
 
-**Proyecto**: muzapp
-**Specs activas**: `sdd/muzzarella-core/specs`
-<!-- END:inter-agent-engram -->
+## Commands
 
-<!-- BEGIN:skill-clear-chat -->
-# Skill: clear-chat
+- `npm run dev` — local dev server.
+- `npm run build` — production build (`next build --webpack`). Must pass. On
+  low-memory machines the default Node heap can OOM after page generation; if so
+  re-run with `NODE_OPTIONS=--max-old-space-size=8192`.
+- `npm start` — serve the production build.
+- `npm run typecheck` — `tsc --noEmit`.
+- `npm run lint` — ESLint.
+- `npm run test:agents` — node:test suites (agents, checkout, whatsapp, telegram, cash).
+- `npm run db:push` / `db:generate` / `db:migrate` — Drizzle schema changes.
 
-Cargá la skill `clear-chat` desde `skills/clear-chat/SKILL.md` cuando el usuario pida vaciar su chat de WhatsApp. Trigger: "vacia mi chat", "clear my chat", "empty my chat", "borra mis mensajes", "limpia mi chat".
-<!-- END:skill-clear-chat -->
+## Verification gates (run before claiming work is done)
 
-<!-- BEGIN:design-md -->
-# DESIGN.MD — fuente de verdad del design system
+1. `npm run test:agents`
+2. `npm run typecheck`
+3. `npm run lint`
+4. `npm run build`
 
-Antes de tocar cualquier UI leé `DESIGN.MD` en la raíz del repo: tokens, sub-sistemas visuales (admin dark-chrome + storefront editorial), utilidades gold/glass, brechas conocidas, do's/don'ts. Los agentes que editen vistas DEBEN respetarlo.
-<!-- END:design-md -->
+For browser/E2E validation use a production build (`npm run build && npm start`), never
+`npm run dev`.
+
+## Environment & data safety
+
+- `DATABASE_URL` (production Postgres/Neon) lives in the local `.env` / `.env.local`,
+  both gitignored. Never print, log, commit, or paste the URL or any secret.
+- Audits and analyses of production data are READ-ONLY: SELECTs only. No sends, writes,
+  migrations, or deletions without explicit instruction.
+- Never commit customer messages, phones, names, or other PII. De-identify examples.
+- `.env.example` is the only tracked env file; document new required vars there.
+
+## Layout
+
+- `src/app/(storefront)/` — public storefront; `src/app/(admin)/admin/` — dashboard,
+  agent config, orders, conversations, leads, analytics.
+- `src/app/api/` — webhooks (`whatsapp`, `telegram`, `meta`) + public endpoints.
+- `src/lib/whatsapp|telegram|agent/` — AI agents + tools; `src/lib/checkout/` — web order flow.
+- `src/db/schema.ts` — Drizzle schema; `agent_config` holds identity, credentials, prompts.
+- `scripts/` — ops/audit scripts (load `.env` via `dotenv/config`).
+- `sdd/` and `.specs/changes/` — change specs; `docs/` — reports and manuals.
+
+## UI
+
+Read `DESIGN.MD` at the repo root before touching any UI, and follow it: tokens, admin
+dark-chrome vs storefront editorial, gold/glass utilities, do's/don'ts.
+
+## Conventions
+
+- Conventional commits only. Never add AI attribution or `Co-Authored-By`.
+- Keep commits as reviewable work units; include tests with the behavior they verify.
+- Don't mix unrelated lint/formatting cleanup into a feature diff.
+
+## Coordination & skills
+
+- `skills/clear-chat/SKILL.md` — clearing a WhatsApp chat (trigger: "vacia mi chat", ...).
+- Multi-agent work coordinates through Engram memory (project `muzapp`): load the
+  `inter-agent-engram` skill, keep specs in `sdd/` and `.specs/changes/`, and check/write
+  `task-claim` / `task-done` / `signal` topics.

@@ -10,6 +10,7 @@ import { analyticsTools } from "./toolsAnalytics";
 import { whatsAppTools } from "./toolsWhatsApp";
 import { memoryTools } from "./toolsMemory";
 import { cashTools } from "./toolsCash";
+import { salesCoachTools } from "./toolsSalesCoach";
 
 // ─── Tools Maestras (Delegantes) ───────────────────────────────────────
 // Cada Tool Maestra es un grupo de sub-tools relacionadas
@@ -143,6 +144,9 @@ export const internalAgentTools = {
 
   // cash (5 tools)
   ...cashTools,
+
+  // sales coach: loop de aprendizaje operador → agente (3 tools)
+  ...salesCoachTools,
 };
 
 // whatsApp: Comunicación por WhatsApp
