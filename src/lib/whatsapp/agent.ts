@@ -43,6 +43,7 @@ import { buildSystemPrompt, DEFAULT_SYSTEM_PROMPT, type CustomerContext } from "
 import { assertSessionContext, type SessionContext } from "./session-policy";
 import { getAIConfig, getMainChatModel, isOpenAIBaseUrl } from "@/lib/ai/config";
 import { getStatusSemantic } from "./status-utils";
+import { classifyTurnIntent, evaluateOrderLifecycle } from "./temporal-context";
 
 // ─── Session routing guard (SDD memoria-persistente-sesion-whatsapp, PR 4) ───
 // Only an AI-enabled, permitted commercial flow may reach the LLM/tools.
@@ -255,8 +256,37 @@ export async function runWhatsAppAgent({
         
         // El último pedido (cualquier estado) es el primero de la lista
         const lastOrder = recentOrders[0];
-        // El pedido activo es el último que está "pending"
-        const pendingOrder = recentOrders.find(o => o.status === "pending");
+        // El pedido activo SOLO cuenta dentro de la ventana de 4h. Un pedido
+        // abierto viejo NO se presenta al modelo como actual (el tool lo
+        // auto-cierra en el próximo intento de creación).
+        let pendingOrder: (typeof recentOrders)[number] | undefined;
+        try {
+          const activeRows = await db
+            .select({
+              items: orders.items,
+              status: orders.status,
+              id: orders.id,
+              orderType: orders.orderType,
+              address: orders.address,
+              paymentStatus: orders.paymentStatus,
+              createdAt: orders.createdAt,
+            })
+            .from(orders)
+            .where(eq(orders.phoneNumber, conv.phone))
+            .orderBy(desc(orders.createdAt))
+            .limit(5);
+          const candidate = activeRows.find(
+            (o) => o.status === "pending" || o.status === "preparing" || o.status === "ready",
+          );
+          if (candidate) {
+            const lifecycle = evaluateOrderLifecycle({
+              activeOrder: { id: candidate.id, status: candidate.status, createdAt: candidate.createdAt },
+            });
+            if (lifecycle.action === "keep_active") pendingOrder = candidate;
+          }
+        } catch {
+          // non-fatal
+        }
         
         const { getArgentinaHour } = await import("@/lib/argentina-time");
         const currentHour = getArgentinaHour();
@@ -385,8 +415,25 @@ export async function runWhatsAppAgent({
     // non-fatal
   }
 
+  // ─── Temporal / order guard directive (server-side, not prompt-only) ───────
+  // The material guard lives in planOrderCreation(); this directive keeps the
+  // model aligned so it does not even *suggest* a recurring order ("lo de
+  // siempre") on a greeting, reaction, acknowledgement or "nooo".
+  const replyToNotification = replyToNotificationDirective.length > 0;
+  const turnIntent = classifyTurnIntent(lastUserMessage);
+  const temporalDirective =
+    "⏱️ CONTEXTO TEMPORAL: HOY es el único día válido para el pedido actual. " +
+    "Los mensajes etiquetados [DD/MM HH:mm] son de días previos (histórico SECUNDARIO): " +
+    "NUNCA armes, reconstruyas ni ofrezcas un pedido basándote en ellos.";
+  const nonOrderingOrderDirective =
+    turnIntent === "non_ordering"
+      ? "🚫 MENSAJE NO-PEDIDO (HOY): el mensaje actual es un saludo, reacción, confirmación o emoji. " +
+        'NO crees ni sugieras pedidos. NO digas "lo de siempre" ni menciones pedidos de días anteriores ' +
+        "como si fueran de hoy. NO ejecutes createOrder ni addOrderItem."
+      : "";
+
   // Combinar directivas
-  const combinedAntiLoop = [antiLoopDirective, replyToNotificationDirective]
+  const combinedAntiLoop = [antiLoopDirective, replyToNotificationDirective, temporalDirective, nonOrderingOrderDirective]
     .filter(Boolean)
     .join("\n\n");
   
@@ -440,7 +487,10 @@ export async function runWhatsAppAgent({
     listAvailableProducts: listAvailableProductsTool,
     getWaitTime: getWaitTimeTool,
     // Grupo C: Pedidos (5)
-    createOrder: createCreateOrderTool(conversationId, referencedWebOrder?.id),
+    createOrder: createCreateOrderTool(conversationId, referencedWebOrder?.id, {
+      turnText: lastUserMessage,
+      replyToNotification,
+    }),
     getOrderStatus: getOrderStatusTool,
     addToOrder: addToOrderTool,
     updateOrder: updateOrderTool,

@@ -2,11 +2,26 @@ import { tool } from "ai";
 import { z } from "zod";
 import { db } from "@/db";
 import { orders, leads, agentConfig, addresses, orderContextItems, conversations } from "@/db/schema";
-import { eq, desc, and, gt, asc, inArray } from "drizzle-orm";
+import { eq, desc, and, gt, asc } from "drizzle-orm";
 import { notifyNewOrder } from "@/lib/telegram/notifier";
 import { resolveItems, validateResolvedOrderItems, decrementStockBestEffort } from "@/lib/order-utils";
 import { normalizePhone } from "@/lib/phone-utils";
-import { ORDER_STATUS_INFO } from "@/lib/whatsapp/status-utils";
+import { argentinaDayKey, planOrderCreation, type ActiveOrderSnapshot } from "@/lib/whatsapp/temporal-context";
+import {
+  auditOrderEvent,
+  autoCloseStaleOrder,
+  DrizzleOrderLifecycleRepository,
+  type OrderLifecycleRepository,
+} from "@/lib/whatsapp/order-lifecycle";
+
+export interface OrderCreationContext {
+  /** Current-day buffered user text (server truth, not the model's view). */
+  turnText?: string;
+  /** True when this turn replies to a closure/status notification. */
+  replyToNotification?: boolean;
+  /** Test seam; defaults to the shared Drizzle repository. */
+  lifecycleRepository?: OrderLifecycleRepository;
+}
 
 async function notifyDeliveryOrder(
   customerName: string,
@@ -57,7 +72,11 @@ async function notifyDeliveryOrder(
   }
 }
 
-export function createCreateOrderTool(conversationId: number, referencedWebOrderId?: number) {
+export function createCreateOrderTool(
+  conversationId: number,
+  referencedWebOrderId?: number,
+  context: OrderCreationContext = {},
+) {
   return tool({
   description: "Crea un pedido una vez que el cliente confirmó los items. AUTO-LEE el carrito de la conversación. SIEMPRE confirmar con el cliente antes de usar esta herramienta. Preguntá el nombre al cliente si no lo sabés.",
   inputSchema: z.object({
@@ -81,30 +100,74 @@ export function createCreateOrderTool(conversationId: number, referencedWebOrder
     if (!conversation?.phone) return "No pude verificar el remitente. No creé el pedido.";
     customerPhone = normalizePhone(conversation.phone);
 
-    // ─── ACTIVE ORDER GUARD: genérico para TODOS los tipos de pedido ──────
-    // Verifica si el cliente ya tiene un pedido activo (pending/preparing/ready)
-    // dentro de la ventana configurable de tiempo.
+    const now = new Date();
+    const repository = context.lifecycleRepository ?? new DrizzleOrderLifecycleRepository();
+
+    // ─── Same-day cart (server truth): only non-expired items of THIS day ──
+    let sameDayCartItems: { name: string; quantity: number }[] = [];
     try {
-      const windowMinutes = parseInt(process.env.DUPLICATE_ORDER_WINDOW_MINUTES || "15", 10);
-      const activeThreshold = new Date(Date.now() - windowMinutes * 60 * 1000);
-      const activeStatuses = ["pending", "preparing", "ready"] as const;
-      const [activeOrder] = await db
-        .select({ id: orders.id, status: orders.status })
-        .from(orders)
+      const cartItems = await db
+        .select()
+        .from(orderContextItems)
         .where(
           and(
-            eq(orders.phoneNumber, customerPhone),
-            inArray(orders.status, activeStatuses),
-            gt(orders.createdAt, activeThreshold),
+            eq(orderContextItems.conversationId, conversationId),
+            eq(orderContextItems.status, "active"),
+            gt(orderContextItems.expiresAt, now),
           )
         )
-        .orderBy(desc(orders.createdAt))
-        .limit(1);
-      if (activeOrder) {
-        const statusLabel = ORDER_STATUS_INFO[activeOrder.status as keyof typeof ORDER_STATUS_INFO]?.label || activeOrder.status;
-        return `Ya tenés un pedido activo (#${activeOrder.id}) en estado ${statusLabel}. No puedo crear otro. Si querés modificar algo, decime.`;
-      }
-    } catch { return "No pude verificar si ya existe un pedido. Reintentá en un momento para evitar duplicados."; }
+        .orderBy(asc(orderContextItems.createdAt));
+      sameDayCartItems = cartItems.map((ci) => ({ name: ci.productName, quantity: ci.quantity }));
+    } catch (err) {
+      console.warn("[createOrder] Failed to read cart:", err);
+    }
+
+    // ─── Material temporal + lifecycle guard (server-side, prompt-proof) ──
+    let activeOrder: ActiveOrderSnapshot | null = null;
+    try {
+      activeOrder = await repository.findActiveOrder(customerPhone);
+    } catch {
+      return "No pude verificar si ya existe un pedido. Reintentá en un momento para evitar duplicados.";
+    }
+
+    const plan = planOrderCreation({
+      referencedWebOrderId,
+      turnText: context.turnText ?? "",
+      replyToNotification: context.replyToNotification ?? false,
+      sameDayCartItems,
+      explicitItems,
+      activeOrder,
+      now,
+    });
+
+    auditOrderEvent("order_creation_decision", {
+      conversationId,
+      localDay: argentinaDayKey(now),
+      consideredCurrentMessages: context.turnText ? 1 : 0,
+      activeOrderId: activeOrder?.id ?? null,
+      autoClosed: plan.kind === "auto_close_then_create",
+      decision:
+        plan.kind === "create" || plan.kind === "auto_close_then_create"
+          ? "create"
+          : plan.kind === "keep_active"
+            ? "keep_active"
+            : "no_create",
+      reason: plan.kind === "blocked" ? plan.reason : plan.kind,
+    });
+
+    if (plan.kind === "blocked") {
+      return plan.message;
+    }
+    if (plan.kind === "keep_active") {
+      return plan.message;
+    }
+    if (plan.kind === "auto_close_then_create") {
+      // Idempotent: a lost race or an already-closed row is a no-op.
+      await autoCloseStaleOrder(activeOrder ?? { id: plan.closeOrderId, status: "pending", createdAt: now }, now, repository, {
+        conversationId,
+        localDay: argentinaDayKey(now),
+      });
+    }
 
     // ─── Verificar si hay stock de hamburguesas ──────────────────────────
     if (orderType === "hamburguesas") {
@@ -122,34 +185,13 @@ export function createCreateOrderTool(conversationId: number, referencedWebOrder
       }
     }
 
-    // ─── AUTO-LEER CARRITO desde orderContextItems si no se pasaron items explícitos ──
-    let items = explicitItems;
-    if (!items || items.length === 0) {
-      try {
-        const cartItems = await db
-          .select()
-          .from(orderContextItems)
-          .where(
-            and(
-              eq(orderContextItems.conversationId, conversationId),
-              eq(orderContextItems.status, "active"),
-              gt(orderContextItems.expiresAt, new Date()),
-            )
-          )
-          .orderBy(asc(orderContextItems.createdAt));
-        if (cartItems.length > 0) {
-          items = cartItems.map((ci) => ({
-            name: ci.productName,
-            quantity: ci.quantity,
-          }));
-          console.log(`[createOrder] Auto-read ${items.length} items from carrito (conversation ${conversationId})`);
-        }
-      } catch (err) {
-        console.warn("[createOrder] Failed to auto-read carrito:", err);
-      }
+    // ─── Items: explícitos del modelo, o el carrito same-day ya validado ──
+    let items = explicitItems && explicitItems.length > 0 ? explicitItems : undefined;
+    if (!items && sameDayCartItems.length > 0) {
+      items = sameDayCartItems;
+      console.log(`[createOrder] Auto-read ${items.length} items from carrito (conversation ${conversationId})`);
     }
 
-    // Si después de todo no hay items, error
     if (!items || items.length === 0) {
       return "No hay items en el carrito y no se pasaron items explícitos. Usá addOrderItem primero para agregar productos al pedido.";
     }

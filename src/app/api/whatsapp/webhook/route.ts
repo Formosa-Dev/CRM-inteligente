@@ -21,6 +21,8 @@ import { agentConfig, conversations, leads, addresses } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { normalizePhone, phoneInList } from "@/lib/phone-utils";
 import { mergeBufferedTurn } from "@/lib/whatsapp/buffered-history";
+import { buildTemporalAgentMessages } from "@/lib/whatsapp/temporal-context";
+import { getActiveOrderSnapshot } from "@/lib/whatsapp/order-lifecycle";
 import { resolveWhatsAppActor, shouldCaptureLead } from "@/lib/whatsapp/actor";
 import { downloadYCloudMedia, saveMediaLocally } from "@/lib/media/downloader";
 import { transcribeAudio } from "@/lib/media/transcription";
@@ -881,6 +883,15 @@ async function deliverWebhookHandoff(input: {
     // ─────────────────────────────────────────────────────────────────────────
     let sessionDecision: Awaited<ReturnType<typeof persistSessionTransition>> | null = null;
     if (!isSeller && policyText !== null) {
+      // Active-order fact for the boundary policy: an open order keeps the
+      // conversation commercial. Lookup failure is treated as "no active
+      // order" (never forces a commercial route on stale/unknown state).
+      let hasActiveOrder = false;
+      try {
+        hasActiveOrder = (await getActiveOrderSnapshot(phone)) !== null;
+      } catch {
+        hasActiveOrder = false;
+      }
       try {
         sessionDecision = await persistSessionTransition({
           conversationId,
@@ -889,6 +900,7 @@ async function deliverWebhookHandoff(input: {
           messageType: msgType,
           aiEnabled: isAiEnabled,
           hasHumanOverride: await checkHumanOverride(conversationId),
+          hasActiveOrder,
         });
       } catch (sessionError) {
         console.error("[webhook:wa] Session persistence failed — fail closed, no routing or output", sessionError);
@@ -1071,23 +1083,17 @@ async function deliverWebhookHandoff(input: {
         return;
       }
 
-      // Concatenate all buffered messages into a single context for the agent
-      // Get fresh conversation history for AI context (last 20 messages)
+      // Concatenate all buffered messages into a single context for the agent.
+      // Fresh conversation history (last 20) segmented by Argentina local day:
+      // today is primary, older days are labelled [DD/MM HH:mm] and marked as
+      // secondary so old items can never be read as the current order.
       const history = await getConversationMessages(conversationId, 20);
-      const aiMessages = mergeBufferedTurn(history
-        .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "human" || m.role === "system"), bufferedMessages)
-        .map((m) => {
-          // Mapear roles para OpenAI: system se mantiene como system, human → assistant
-          if (m.role === "system") {
-            return { role: "system" as const, content: m.content };
-          }
-          return {
-            role: (m.role === "human" ? "assistant" : m.role) as "user" | "assistant",
-            content: m.content,
-          };
-        });
-
-      console.log(`[webhook:wa] Running agent with ${aiMessages.length} history messages`);
+      const temporalContext = buildTemporalAgentMessages(history, bufferedMessages, new Date());
+      const aiMessages = temporalContext.messages;
+      console.log(
+        `[webhook:wa] Running agent with ${aiMessages.length} history messages ` +
+        `(today=${temporalContext.todayCount} older=${temporalContext.olderCount} day=${temporalContext.todayDayKey})`
+      );
 
       // NOTA: el customer context (order history, address, notes, preferences)
       // ya se carga DENTRO de runWhatsAppAgent() → buildSystemPrompt().
