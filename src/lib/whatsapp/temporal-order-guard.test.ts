@@ -75,7 +75,7 @@ describe("midnight cart must not leak into the next local day", () => {
     const plan = planOrderCreation(facts({
       now,
       turnText: "quiero lo de siempre",
-      sameDayCartItems: filterSameDayActiveCartRows([midnightCart], now).map((ci) => ({ name: "Deli Deli", quantity: 2 })),
+      sameDayCartItems: filterSameDayActiveCartRows([midnightCart], now).map(() => ({ name: "Deli Deli", quantity: 2 })),
     }));
     assert.equal(plan.kind, "blocked");
     if (plan.kind === "blocked") assert.equal(plan.reason, "no_current_day_items");
@@ -94,7 +94,7 @@ describe("midnight cart must not leak into the next local day", () => {
     const plan = planOrderCreation(facts({
       now,
       turnText: "quiero lo que tenía",
-      sameDayCartItems: kept.map((ci) => ({ name: "Deli Deli", quantity: 2 })),
+      sameDayCartItems: kept.map(() => ({ name: "Deli Deli", quantity: 2 })),
     }));
     assert.equal(plan.kind, "create");
     if (plan.kind === "create") {
