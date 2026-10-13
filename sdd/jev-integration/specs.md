@@ -460,3 +460,9 @@ Before runtime Jev enforcement:
 - [ ] Seller productivity instructions cannot bypass deterministic financial/destructive/bulk tool policies.
 
 These requirements MUST pass with Jev disabled.
+
+# Implementation checkpoint — 2026-09-22 (working branch)
+
+Phases -1, 0, 1 (fixture/harness), 2 (shadow) implemented locally. Seller lead exclusion, phone matching, shared buffered-turn builder, single cron owner with atomic five-minute claim, prompt cleanup, tool metadata and seller broadcast removal are present. The cron schema migration must run before deployment. TypeSafe SDK 0.6.0 uses `systemOne({state, questions, model}, {timeout, retry})`; timeout is per attempt. Version `jev-1.13.0` is pinned. No Jev credential was available for a live baseline, so model quality and Spanish prompt variants remain unmeasured.
+
+The observed route is telemetry only. Manifest authorization is recorded but not yet wired into GPT tool filtering, apart from the deliberate removal of seller access to bulk WhatsApp broadcast. Meta, automation, response guard, pending actions, direct execution and Jev enforcement remain pending. The Meta gate above remains open; the seller productivity gate needs deterministic enforcement before further rollout. The scheduler claim prevents ordinary overlap but provider-level exactly-once delivery remains open across a crash after network send.
