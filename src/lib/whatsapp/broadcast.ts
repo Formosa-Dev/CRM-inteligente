@@ -1,6 +1,6 @@
 import { db } from "@/db";
-import { leads, conversations } from "@/db/schema";
-import { eq, and, or, ilike, desc, gte, isNotNull } from "drizzle-orm";
+import { leads, conversations, chatMessages } from "@/db/schema";
+import { eq, and, or, ilike, desc, gte, isNotNull, sql } from "drizzle-orm";
 import { sendText, sendImage } from "@/lib/ycloud";
 import { findOrCreateConversation } from "@/lib/channels/router";
 import { insertMessage } from "@/lib/channels/router";
@@ -31,12 +31,16 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** Safety cap — a broadcast never resolves more recipients than this. */
+export const BROADCAST_HARD_LIMIT = 500;
+
 /**
- * Obtiene los destinatarios según el filtro seleccionado.
+ * Obtiene todos los destinatarios que matchean el filtro (hasta BROADCAST_HARD_LIMIT).
+ * El caller decide cuántos enviar con `maxRecipients` (slice).
  */
 export async function getBroadcastRecipients(
   filter: BroadcastFilter,
-  maxRecipients: number
+  hardLimit: number = BROADCAST_HARD_LIMIT
 ): Promise<BroadcastRecipient[]> {
   let rows: { phone: string; name: string | null }[] = [];
 
@@ -50,7 +54,7 @@ export async function getBroadcastRecipients(
           isNotNull(leads.phone),
         ))
         .orderBy(desc(leads.createdAt))
-        .limit(maxRecipients);
+        .limit(hardLimit);
       break;
 
     case "b2c":
@@ -62,11 +66,13 @@ export async function getBroadcastRecipients(
           isNotNull(leads.phone),
         ))
         .orderBy(desc(leads.createdAt))
-        .limit(maxRecipients);
+        .limit(hardLimit);
       break;
 
     case "24h-window": {
-      // Clientes con actividad en las últimas 24h (ventana gratuita de WhatsApp)
+      // Ventana real de WhatsApp: se abre con el último mensaje INBOUND del cliente.
+      // conversations.lastMessageAt también la tocan los mensajes del bot (incluidos
+      // broadcasts), así que hay que mirar chat_messages con role = 'user'.
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const activeConversations = await db
         .select({ customerPhone: conversations.customerPhone })
@@ -74,11 +80,16 @@ export async function getBroadcastRecipients(
         .where(
           and(
             eq(conversations.channel, "whatsapp"),
-            gte(conversations.lastMessageAt, twentyFourHoursAgo),
+            sql`exists (
+              select 1 from chat_messages m
+              where m.conversation_id = ${conversations.id}
+                and m.role = 'user'
+                and m.created_at >= ${twentyFourHoursAgo}
+            )`,
           ),
         )
         .orderBy(desc(conversations.lastMessageAt))
-        .limit(maxRecipients);
+        .limit(hardLimit);
 
       const phones = activeConversations
         .map((c) => c.customerPhone)
@@ -116,7 +127,7 @@ export async function getBroadcastRecipients(
           or(eq(leads.type, "b2c"), eq(leads.type, "b2b")),
         ))
         .orderBy(desc(leads.createdAt))
-        .limit(maxRecipients);
+        .limit(hardLimit);
       break;
     }
 
@@ -134,7 +145,7 @@ export async function getBroadcastRecipients(
           ),
         )
         .orderBy(desc(leads.createdAt))
-        .limit(maxRecipients);
+        .limit(hardLimit);
       break;
 
     case "all":
@@ -143,11 +154,79 @@ export async function getBroadcastRecipients(
         .from(leads)
         .where(isNotNull(leads.phone))
         .orderBy(desc(leads.createdAt))
-        .limit(maxRecipients);
+        .limit(hardLimit);
       break;
   }
 
   return rows.filter((r) => r.phone?.trim());
+}
+
+// ─── Dedup guard: misma copy no se manda dos veces en una ventana corta ────
+// El broadcast del 15/10 salió duplicado (dos rondas a ~3 min, wamids distintos)
+// porque el agente ejecutó la tool dos veces. Este guard lo vuelve imposible.
+
+export const DUPLICATE_BROADCAST_WINDOW_MINUTES = 15;
+export const DUPLICATE_BROADCAST_THRESHOLD = 3;
+
+/**
+ * Cuenta a cuántas conversaciones distintas salió este texto exacto como
+ * mensaje assistant en los últimos `withinMinutes` minutos.
+ */
+export async function countRecentBroadcastSends(
+  message: string,
+  withinMinutes: number = DUPLICATE_BROADCAST_WINDOW_MINUTES,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - withinMinutes * 60 * 1000);
+  const [row] = await db
+    .select({ count: sql<number>`count(distinct ${chatMessages.conversationId})::int` })
+    .from(chatMessages)
+    .where(
+      and(
+        eq(chatMessages.role, "assistant"),
+        eq(chatMessages.content, message),
+        gte(chatMessages.createdAt, cutoff),
+      ),
+    );
+  return row?.count ?? 0;
+}
+
+/**
+ * Un envío es duplicado si el mismo texto ya llegó a varias conversaciones
+ * dentro de la ventana, salvo override explícito del admin.
+ */
+export function shouldBlockDuplicateBroadcast(
+  recentCount: number,
+  allowDuplicate: boolean,
+  threshold: number = DUPLICATE_BROADCAST_THRESHOLD,
+): boolean {
+  if (allowDuplicate) return false;
+  return recentCount >= threshold;
+}
+
+/**
+ * Preview para dryRun: audiencia real sin enviar nada.
+ */
+export function formatBroadcastPreview(opts: {
+  filterLabel: string;
+  totalMatched: number;
+  recipients: BroadcastRecipient[];
+  maxRecipients: number;
+  capped: boolean;
+}): string {
+  const { filterLabel, totalMatched, recipients, maxRecipients, capped } = opts;
+  const lines: string[] = [
+    `👀 Preview — filtro "${filterLabel}":`,
+    `👥 ${totalMatched} destinatario${totalMatched === 1 ? "" : "s"} matchean${capped ? ` (se mandaría a los primeros ${maxRecipients})` : ""}`,
+    "",
+  ];
+  for (const r of recipients.slice(0, 40)) {
+    lines.push(`• ${r.name || "sin nombre"} — ${r.phone}`);
+  }
+  if (recipients.length > 40) {
+    lines.push(`... y ${recipients.length - 40} más`);
+  }
+  lines.push("", "No envié nada. Para mandarlo: mismo filtro y mensaje, dryRun=false.");
+  return lines.join("\n");
 }
 
 /**
