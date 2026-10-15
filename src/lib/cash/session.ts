@@ -141,6 +141,17 @@ export function lastCashBoundary(now = new Date()): Date {
   return b;
 }
 
+// Primera frontera de las 02:00 ART estrictamente DESPUÉS de `d` — el rollover
+// cierra una sesión vieja por cada frontera que cruzó, no solo la última:
+// una caja abierta hace 3 días produce 3 cierres encadenados, uno por turno.
+export function nextCashBoundaryAfter(d: Date): Date {
+  const b = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 5, 0, 0),
+  );
+  if (d.getTime() >= b.getTime()) b.setUTCDate(b.getUTCDate() + 1);
+  return b;
+}
+
 // Cierra `session` con timestamp `boundary` (no "ahora"): los pedidos entre la
 // frontera y ahora quedan dentro de la sesión nueva. El conteo es virtual —
 // actualCash = esperado, diferencia 0 — porque nadie contó el cajón; el admin
@@ -176,15 +187,20 @@ async function rolloverAt(
   return { rolledOver: true, closedId: session.id };
 }
 
-// Expuesta para el scheduler: si la caja abierta ya cruzó el límite de las
-// 02:00 la cierra en la frontera y abre la siguiente. Devuelve si hubo rollover
-// para que el caller decida si notificar.
-export async function rolloverCashDay(): Promise<{ rolledOver: boolean; closedId?: number }> {
-  const open = await getOpenSession();
-  if (!open) return { rolledOver: false };
-  const boundary = lastCashBoundary();
-  if (open.openedAt >= boundary) return { rolledOver: false };
-  return rolloverAt(open, boundary);
+// Expuesta para el scheduler y para ensureOpenSession: cierra la sesión
+// abierta en CADA frontera de las 02:00 que haya cruzado (turno por turno) y
+// deja abierta la sesión del turno actual. Devuelve los IDs cerrados.
+export async function rolloverCashDay(): Promise<{ rolledOver: boolean; closedIds: number[] }> {
+  const closedIds: number[] = [];
+  const last = lastCashBoundary();
+  for (let i = 0; i < 31; i++) {
+    const open = await getOpenSession();
+    if (!open || open.openedAt >= last) break;
+    const res = await rolloverAt(open, nextCashBoundaryAfter(open.openedAt));
+    if (!res.rolledOver) break;
+    closedIds.push(res.closedId!);
+  }
+  return { rolledOver: closedIds.length > 0, closedIds };
 }
 
 // Devuelve la sesión abierta o crea una manteniendo la cadena continua:
@@ -193,14 +209,12 @@ export async function rolloverCashDay(): Promise<{ rolledOver: boolean; closedId
 // "con la caja cerrada" caen igual dentro de la próxima ventana.
 export async function ensureOpenSession(): Promise<typeof cashSessions.$inferSelect> {
   let open = await getOpenSession();
-  if (open) {
-    const boundary = lastCashBoundary();
-    if (open.openedAt >= boundary) return open;
-    // Cruzó el cierre de las 02:00 sin cerrarse: rollover ahora, en la frontera.
-    await rolloverAt(open, boundary);
+  if (open && open.openedAt < lastCashBoundary()) {
+    // Cruzó una o más fronteras de las 02:00 sin cerrarse: rollover por turno.
+    await rolloverCashDay();
     open = await getOpenSession();
-    if (open) return open;
   }
+  if (open) return open;
 
   const [lastClosed] = await db
     .select()

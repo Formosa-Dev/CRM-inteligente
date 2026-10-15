@@ -56,8 +56,8 @@ async function tick(): Promise<void> {
     const res = await rolloverCashDay();
     if (res.rolledOver) {
       await notifyAdmins(
-        `💰 Caja #${res.closedId} cerrada automáticamente (fin de turno 02:00). ` +
-        `Se abrió la sesión nueva. Verificá el efectivo contra el esperado cuando puedas.`,
+        `💰 Cierre automático de fin de turno (02:00): ${res.closedIds.map((id) => `#${id}`).join(", ")} cerrada(s). ` +
+        `Sesión nueva abierta — verificá el efectivo contra el esperado cuando puedas.`,
       );
     }
   }
