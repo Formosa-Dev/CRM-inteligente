@@ -470,9 +470,49 @@ export async function closeSession(
 }
 
 // ─── Corrección de cierres ────────────────────────────────────────────────────
-// Una sesión cerrada es inmutable como ASIENTO, pero el admin puede corregir
-// el conteo (actualCash) — queda auditado en notes. Si el corregido cambia el
-// actual, la cadena se re-propaga: la sesión siguiente abre con ese fondo.
+// Una sesión cerrada NO es inmutable: el conteo se corrige (con nota de
+// auditoría), sus movimientos se pueden editar/borrar y el cierre se puede
+// recomputar entero con resyncSession. Cualquier cambio re-propaga la cadena:
+// la sesión siguiente abre con el actual de la anterior.
+
+// Recalcula un cierre desde cero (pedidos + movimientos actuales de su
+// ventana) y re-propaga. Si el cierre fue automático (auto-02:00) el conteo
+// es virtual y sigue al esperado; si fue manual el actual real se conserva y
+// la diferencia se recalcula.
+export async function resyncSession(
+  sessionId: number,
+): Promise<
+  | { sessionId: number; expectedCash: number; actualCash: number; difference: number }
+  | { error: string }
+> {
+  const [s] = await db
+    .select()
+    .from(cashSessions)
+    .where(eq(cashSessions.id, sessionId))
+    .limit(1);
+  if (!s) return { error: `No encontré la sesión de caja #${sessionId}.` };
+  if (s.status !== "closed" || !s.closedAt) {
+    return { error: `La sesión #${sessionId} está abierta — su snapshot ya es dinámico.` };
+  }
+
+  const snapshot = await getSnapshot(s.id, s.closedAt);
+  const isAuto = s.closedBy === "auto-02:00";
+  const actualCash = isAuto ? snapshot.expectedCash : Number(s.actualCash ?? 0);
+  const difference = round2(actualCash - snapshot.expectedCash);
+
+  await db
+    .update(cashSessions)
+    .set({
+      expectedCash: snapshot.expectedCash.toFixed(2),
+      actualCash: actualCash.toFixed(2),
+      difference: difference.toFixed(2),
+      report: snapshot,
+    })
+    .where(eq(cashSessions.id, sessionId));
+
+  await propagateOpening(sessionId);
+  return { sessionId, expectedCash: snapshot.expectedCash, actualCash, difference };
+}
 
 // Re-propaga opening_cash = actualCash del cierre anterior hacia adelante.
 // Solo atraviesa sesiones auto-02:00 y la abierta: una cerrada MANUAL tiene
@@ -589,12 +629,9 @@ async function getMovementWithSession(movementId: number) {
 function assertEditable(
   row: { movement: typeof cashMovements.$inferSelect; session: typeof cashSessions.$inferSelect } | null,
 ): { error: string } | null {
+  // Los movimientos se editan/borran en cualquier sesión: si la sesión está
+  // cerrada, su cierre se recalcula con resyncSession después del cambio.
   if (!row) return { error: "No encontré ese movimiento de caja." };
-  if (row.session.status !== "open") {
-    return {
-      error: `El movimiento #${row.movement.id} pertenece a la sesión #${row.session.id}, que ya está cerrada. Las sesiones cerradas no se tocan: cargá la corrección como un movimiento nuevo en la caja abierta.`,
-    };
-  }
   return null;
 }
 
@@ -634,6 +671,7 @@ export async function updateMovement(
     .set(set)
     .where(eq(cashMovements.id, movementId))
     .returning();
+  if (row.session.status === "closed") await resyncSession(row.session.id);
   return updated;
 }
 
@@ -645,5 +683,6 @@ export async function deleteMovement(
   if (blocked) return blocked;
 
   await db.delete(cashMovements).where(eq(cashMovements.id, movementId));
+  if (row.session.status === "closed") await resyncSession(row.session.id);
   return { deleted: true, id: movementId };
 }

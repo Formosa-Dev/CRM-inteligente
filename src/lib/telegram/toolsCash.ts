@@ -18,6 +18,7 @@ import {
   updateMovement,
   deleteMovement,
   correctClosedSession,
+  resyncSession,
   type CashSnapshot,
   type CloseResult,
 } from "@/lib/cash/session";
@@ -139,7 +140,7 @@ export const getCashStatus = tool({
 // ─── closeCash ───────────────────────────────────────────────────────────────
 export const closeCash = tool({
   description:
-    "CERRAR la caja: el admin cuenta el efectivo físico y pasa ese número como actualCash. Compara contra lo esperado, cierra la sesión (inmutable) y envía el reporte a los admins. PREGUNTAS: 'cerrá la caja, conté 45200', 'cierre de caja con 38000'. Si el admin no dio el conteo, pedirlo antes.",
+    "CERRAR la caja: el admin cuenta el efectivo físico y pasa ese número como actualCash. Compara contra lo esperado, cierra la sesión y envía el reporte a los admins. El cierre queda corregible (correctCashSession). PREGUNTAS: 'cerrá la caja, conté 45200', 'cierre de caja con 38000'. Si el admin no dio el conteo, pedirlo antes.",
   inputSchema: z.object({
     actualCash: z.number().nonnegative().describe("Efectivo físico contado en el cajón"),
     note: z.string().optional().describe("Nota opcional del cierre"),
@@ -198,7 +199,7 @@ export const getCashMovements = tool({
 // ─── updateCashMovement ──────────────────────────────────────────────────────
 export const updateCashMovement = tool({
   description:
-    "CORREGIR un movimiento de efectivo de la caja abierta por su ID (monto, motivo o dirección). Solo sesión abierta: los movimientos de días cerrados no se editan. PREGUNTAS: 'el movimiento 3 era 900 no 800', 'corregí el motivo de la salida 2'.",
+    "CORREGIR un movimiento de efectivo por su ID (monto, motivo o dirección). Sirve en caja abierta Y en sesiones cerradas: si es de una cerrada, ese cierre se recalcula solo. PREGUNTAS: 'el movimiento 3 era 900 no 800', 'corregí el motivo de la salida 2'.",
   inputSchema: z.object({
     movementId: z.number().int().positive().describe("ID del movimiento (lo da getCashMovements)"),
     amount: z.number().positive().optional().describe("Nuevo monto en pesos"),
@@ -218,7 +219,7 @@ export const updateCashMovement = tool({
 // ─── deleteCashMovement ──────────────────────────────────────────────────────
 export const deleteCashMovement = tool({
   description:
-    "BORRAR un movimiento de efectivo de la caja abierta por su ID (se cargó mal o duplicado). Solo sesión abierta: los movimientos de días cerrados no se borran, la corrección se carga como movimiento nuevo. PREGUNTAS: 'borrá el movimiento 4, lo cargué dos veces', 'eliminá esa entrada'.",
+    "BORRAR un movimiento de efectivo por su ID (se cargó mal o duplicado). Sirve en caja abierta Y en sesiones cerradas: si es de una cerrada, ese cierre se recalcula solo. PREGUNTAS: 'borrá el movimiento 4, lo cargué dos veces', 'eliminá esa entrada'.",
   inputSchema: z.object({
     movementId: z.number().int().positive().describe("ID del movimiento (lo da getCashMovements)"),
   }),
@@ -227,21 +228,27 @@ export const deleteCashMovement = tool({
     if ("error" in result) {
       return `No se pudo borrar: ${result.error}`;
     }
-    return `🗑️ Movimiento #${result.id} eliminado de la caja abierta.`;
+    return `🗑️ Movimiento #${result.id} eliminado.`;
   },
 });
 
 // ─── correctCashSession ──────────────────────────────────────────────────────
 export const correctCashSession = tool({
   description:
-    "CORREGIR el conteo de una sesión de caja ya CERRADA (actualCash o expectedCash), con nota de auditoría obligatoria. La cadena se re-propaga sola: la sesión siguiente abre con el actual corregido. USAR cuando el admin dice 'el cierre #N tenía X de verdad', 'corregí la caja de ayer'. Si la sesión está abierta, los ajustes van como movimientos.",
+    "CORREGIR una sesión de caja ya CERRADA. Dos usos: (1) conteo corregido → pasar actualCash/expectedCash + nota de auditoría; (2) recalcular el cierre entero desde pedidos/movimientos actuales → recompute:true (la nota sigue siendo obligatoria). La cadena se re-propaga sola: la sesión siguiente abre con el actual corregido. USAR cuando el admin dice 'el cierre #N tenía X de verdad', 'corregí/recalculá la caja de ayer'. Si la sesión está abierta, los ajustes van como movimientos.",
   inputSchema: z.object({
     sessionId: z.number().int().positive().describe("ID de la sesión cerrada"),
     actualCash: z.number().nonnegative().optional().describe("Conteo físico corregido"),
     expectedCash: z.number().optional().describe("Esperado corregido (casos raros)"),
+    recompute: z.boolean().optional().describe("true = recalcular el cierre desde pedidos y movimientos actuales"),
     note: z.string().trim().min(3).describe("Motivo de la corrección — queda en el asiento"),
   }),
-  execute: async ({ sessionId, actualCash, expectedCash, note }) => {
+  execute: async ({ sessionId, actualCash, expectedCash, recompute, note }) => {
+    if (recompute) {
+      const res = await resyncSession(sessionId);
+      if ("error" in res) return `No se pudo recalcular: ${res.error}`;
+      return `✅ Caja #${res.sessionId} recalculada — esperado ${fmtMoney(res.expectedCash)} · contado ${fmtMoney(res.actualCash)} · dif ${fmtMoney(res.difference)}.`;
+    }
     const result = await correctClosedSession(sessionId, { actualCash, expectedCash, note });
     if ("error" in result) return `No se pudo corregir: ${result.error}`;
     return `✅ Caja #${result.sessionId} corregida — esperado ${fmtMoney(result.expectedCash)} · contado ${fmtMoney(result.actualCash)} · dif ${fmtMoney(result.difference)}. La sesión siguiente abrió con el fondo actualizado.`;

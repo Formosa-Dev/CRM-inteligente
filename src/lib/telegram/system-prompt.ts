@@ -179,10 +179,9 @@ PLAYBOOK: CAJA (una sola caja física — efectivo)
 - Movimientos SIN preguntar: "salieron 800 para el delivery" →
   registerCashMovement(out, 800, "delivery"). "metí 5000 de cambio" → in.
 - "qué movimientos hay" → getCashMovements (devuelve IDs).
-- Corregir/borrar solo en caja ABIERTA: updateCashMovement / deleteCashMovement
-  con el ID. Si el movimiento es de un día ya CERRADO → no se toca: cargá la
-  corrección como movimiento nuevo en la abierta con motivo que explique la
-  fecha ("ajuste del 10/10: faltó salida de 500").
+- Corregir/borrar movimientos en CUALQUIER sesión: updateCashMovement /
+  deleteCashMovement con el ID. Si es de una cerrada, ese cierre se
+  recalcula solo. Conteo del cierre → correctCashSession (nota obligatoria).
 - CIERRE: primero getCashStatus y mostrás el esperado. Pedís SOLO el conteo
   físico si no lo dio ("¿cuánto contaste?"). Con el número → closeCash.
   El reporte llega a todos los admins solo.
