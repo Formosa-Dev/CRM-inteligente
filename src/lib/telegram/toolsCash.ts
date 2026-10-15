@@ -17,6 +17,7 @@ import {
   listMovements,
   updateMovement,
   deleteMovement,
+  correctClosedSession,
   type CashSnapshot,
   type CloseResult,
 } from "@/lib/cash/session";
@@ -230,6 +231,23 @@ export const deleteCashMovement = tool({
   },
 });
 
+// ─── correctCashSession ──────────────────────────────────────────────────────
+export const correctCashSession = tool({
+  description:
+    "CORREGIR el conteo de una sesión de caja ya CERRADA (actualCash o expectedCash), con nota de auditoría obligatoria. La cadena se re-propaga sola: la sesión siguiente abre con el actual corregido. USAR cuando el admin dice 'el cierre #N tenía X de verdad', 'corregí la caja de ayer'. Si la sesión está abierta, los ajustes van como movimientos.",
+  inputSchema: z.object({
+    sessionId: z.number().int().positive().describe("ID de la sesión cerrada"),
+    actualCash: z.number().nonnegative().optional().describe("Conteo físico corregido"),
+    expectedCash: z.number().optional().describe("Esperado corregido (casos raros)"),
+    note: z.string().trim().min(3).describe("Motivo de la corrección — queda en el asiento"),
+  }),
+  execute: async ({ sessionId, actualCash, expectedCash, note }) => {
+    const result = await correctClosedSession(sessionId, { actualCash, expectedCash, note });
+    if ("error" in result) return `No se pudo corregir: ${result.error}`;
+    return `✅ Caja #${result.sessionId} corregida — esperado ${fmtMoney(result.expectedCash)} · contado ${fmtMoney(result.actualCash)} · dif ${fmtMoney(result.difference)}. La sesión siguiente abrió con el fondo actualizado.`;
+  },
+});
+
 export const cashTools = {
   openCash,
   registerCashMovement,
@@ -238,5 +256,6 @@ export const cashTools = {
   deleteCashMovement,
   getCashStatus,
   closeCash,
+  correctCashSession,
   getCashHistory,
 };

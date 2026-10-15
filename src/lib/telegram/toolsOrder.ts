@@ -685,8 +685,10 @@ export const updateOrder = tool({
     notes: z.string().optional().describe("Notas del pedido"),
     paymentMethod: z.string().optional().describe("Método de pago: 'efectivo', 'mp', 'transferencia', etc."),
     paymentStatus: z.enum(["pending", "paid"]).optional().describe("Estado de cobro"),
+    deliveredAt: z.string().optional().describe("Fecha/hora de entrega en ISO, ej: '2026-10-14T23:30:00-03:00'. Corrige a qué turno/caja pertenece el pedido."),
+    createdAt: z.string().optional().describe("Fecha/hora de creación en ISO — solo para re-ubicar pedidos mal fechados"),
   }),
-  execute: async ({ orderId, customerName, phone, leadId, address, deliveryFee, notes, paymentMethod, paymentStatus }) => {
+  execute: async ({ orderId, customerName, phone, leadId, address, deliveryFee, notes, paymentMethod, paymentStatus, deliveredAt, createdAt }) => {
     const [existing] = await db
       .select({ id: orders.id, customerName: orders.customerName, phoneNumber: orders.phoneNumber, leadId: orders.leadId })
       .from(orders)
@@ -722,6 +724,12 @@ export const updateOrder = tool({
     if (notes !== undefined) updates.notes = notes;
     if (paymentMethod !== undefined) updates.paymentMethod = paymentMethod;
     if (paymentStatus !== undefined) updates.paymentStatus = paymentStatus;
+    for (const [key, value] of [["deliveredAt", deliveredAt], ["createdAt", createdAt]] as const) {
+      if (value === undefined) continue;
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return { success: false, message: `Fecha inválida en ${key}: "${value}"` };
+      updates[key] = d;
+    }
 
     await db.update(orders).set(updates).where(eq(orders.id, orderId));
 

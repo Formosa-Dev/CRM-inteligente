@@ -469,6 +469,85 @@ export async function closeSession(
   return { ...snapshot, closedAt, actualCash, difference };
 }
 
+// ─── Corrección de cierres ────────────────────────────────────────────────────
+// Una sesión cerrada es inmutable como ASIENTO, pero el admin puede corregir
+// el conteo (actualCash) — queda auditado en notes. Si el corregido cambia el
+// actual, la cadena se re-propaga: la sesión siguiente abre con ese fondo.
+
+// Re-propaga opening_cash = actualCash del cierre anterior hacia adelante.
+// Solo atraviesa sesiones auto-02:00 y la abierta: una cerrada MANUAL tiene
+// conteo real y no se reescribe — la diferencia queda visible en su asiento.
+export async function propagateOpening(fromSessionId: number): Promise<void> {
+  const [from] = await db
+    .select()
+    .from(cashSessions)
+    .where(eq(cashSessions.id, fromSessionId))
+    .limit(1);
+  if (!from?.closedAt || from.actualCash == null) return;
+
+  const next = await db
+    .select()
+    .from(cashSessions)
+    .where(gte(cashSessions.openedAt, from.closedAt))
+    .orderBy(cashSessions.openedAt);
+
+  let prev = Number(from.actualCash);
+  for (const s of next) {
+    const delta = prev - Number(s.openingCash);
+    if (Math.abs(delta) < 0.005) break;
+
+    const set: Record<string, string> = { openingCash: prev.toFixed(2) };
+    if (s.status === "closed") {
+      if (s.closedBy !== "auto-02:00") break; // conteo real — no se toca
+      set.expectedCash = (Number(s.expectedCash ?? 0) + delta).toFixed(2);
+      set.actualCash = (Number(s.actualCash ?? 0) + delta).toFixed(2);
+    }
+    await db.update(cashSessions).set(set).where(eq(cashSessions.id, s.id));
+    if (s.status !== "closed" || s.actualCash == null) break; // sesión abierta: solo se mueve su fondo
+    prev = Number(s.actualCash) + delta;
+  }
+}
+
+export async function correctClosedSession(
+  sessionId: number,
+  patch: { actualCash?: number; expectedCash?: number; note: string },
+): Promise<
+  | { sessionId: number; expectedCash: number; actualCash: number; difference: number }
+  | { error: string }
+> {
+  const [s] = await db
+    .select()
+    .from(cashSessions)
+    .where(eq(cashSessions.id, sessionId))
+    .limit(1);
+  if (!s) return { error: `No encontré la sesión de caja #${sessionId}.` };
+  if (s.status !== "closed") {
+    return { error: `La sesión #${sessionId} está abierta — los ajustes de una abierta se cargan como movimientos, no como corrección.` };
+  }
+  if (!patch.note?.trim()) {
+    return { error: "La corrección de un cierre necesita una nota que explique el ajuste (auditoría)." };
+  }
+
+  const newExpected = patch.expectedCash ?? Number(s.expectedCash ?? 0);
+  const newActual = patch.actualCash ?? Number(s.actualCash ?? 0);
+  const difference = round2(newActual - newExpected);
+
+  await db
+    .update(cashSessions)
+    .set({
+      expectedCash: newExpected.toFixed(2),
+      actualCash: newActual.toFixed(2),
+      difference: difference.toFixed(2),
+      notes: `${s.notes ? s.notes + " | " : ""}Corrección ${new Date().toISOString().slice(0, 10)}: ${patch.note.trim()}`,
+    })
+    .where(eq(cashSessions.id, sessionId));
+
+  // Si cambió el actual, la sesión siguiente arranca con ese fondo.
+  if (patch.actualCash !== undefined) await propagateOpening(sessionId);
+
+  return { sessionId, expectedCash: newExpected, actualCash: newActual, difference };
+}
+
 // ─── Historial ────────────────────────────────────────────────────────────────
 
 export async function getHistory(limit: number): Promise<typeof cashSessions.$inferSelect[]> {
