@@ -125,13 +125,82 @@ export async function getOpenSession(): Promise<typeof cashSessions.$inferSelect
   return row ?? null;
 }
 
+// ─── Cierre obligatorio de fin de turno (02:00 ART) ──────────────────────────
+// El día de negocio cierra a las 02:00 hora Argentina (= 05:00 UTC, sin DST).
+// Si la sesión abierta arrancó antes del último límite de las 02:00, se cierra
+// automáticamente EN ese instante y se abre la siguiente sesión de la cadena.
+// Es rollover perezoso: corre en cualquier entrada a la caja (tools del agente,
+// admin, scheduler), así no depende de que el proceso esté despierto a las
+// 02:00 en punto — en free tier la instancia duerme y el cierre sale igual a la
+// primera actividad posterior.
+export function lastCashBoundary(now = new Date()): Date {
+  const b = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 5, 0, 0),
+  );
+  if (now.getTime() < b.getTime()) b.setUTCDate(b.getUTCDate() - 1);
+  return b;
+}
+
+// Cierra `session` con timestamp `boundary` (no "ahora"): los pedidos entre la
+// frontera y ahora quedan dentro de la sesión nueva. El conteo es virtual —
+// actualCash = esperado, diferencia 0 — porque nadie contó el cajón; el admin
+// puede verificar después y la diferencia real se ajusta como movimiento nuevo.
+async function rolloverAt(
+  session: typeof cashSessions.$inferSelect,
+  boundary: Date,
+): Promise<{ rolledOver: boolean; closedId?: number }> {
+  const snapshot = await getSnapshot(session.id, boundary);
+  const expected = snapshot.expectedCash.toFixed(2);
+  const [closed] = await db
+    .update(cashSessions)
+    .set({
+      status: "closed",
+      closedAt: boundary,
+      expectedCash: expected,
+      actualCash: expected,
+      difference: "0",
+      closedBy: "auto-02:00",
+      report: snapshot,
+      notes:
+        "Cierre automático de fin de turno (02:00). Conteo virtual = esperado; verificar el efectivo real contra este número.",
+    })
+    .where(and(eq(cashSessions.id, session.id), eq(cashSessions.status, "open")))
+    .returning();
+  if (!closed) return { rolledOver: false }; // otra llamada la cerró primero
+
+  await db.insert(cashSessions).values({
+    status: "open",
+    openedAt: boundary,
+    openingCash: expected,
+  });
+  return { rolledOver: true, closedId: session.id };
+}
+
+// Expuesta para el scheduler: si la caja abierta ya cruzó el límite de las
+// 02:00 la cierra en la frontera y abre la siguiente. Devuelve si hubo rollover
+// para que el caller decida si notificar.
+export async function rolloverCashDay(): Promise<{ rolledOver: boolean; closedId?: number }> {
+  const open = await getOpenSession();
+  if (!open) return { rolledOver: false };
+  const boundary = lastCashBoundary();
+  if (open.openedAt >= boundary) return { rolledOver: false };
+  return rolloverAt(open, boundary);
+}
+
 // Devuelve la sesión abierta o crea una manteniendo la cadena continua:
 // openedAt = closedAt de la última cerrada (ahora si no hay historial) y
 // openingCash = actualCash de esa sesión (0 si no hay). Así los pedidos hechos
 // "con la caja cerrada" caen igual dentro de la próxima ventana.
 export async function ensureOpenSession(): Promise<typeof cashSessions.$inferSelect> {
-  const open = await getOpenSession();
-  if (open) return open;
+  let open = await getOpenSession();
+  if (open) {
+    const boundary = lastCashBoundary();
+    if (open.openedAt >= boundary) return open;
+    // Cruzó el cierre de las 02:00 sin cerrarse: rollover ahora, en la frontera.
+    await rolloverAt(open, boundary);
+    open = await getOpenSession();
+    if (open) return open;
+  }
 
   const [lastClosed] = await db
     .select()
@@ -214,7 +283,7 @@ export async function addMovement(
 // [openedAt, closedAt|ahora) — delivered_at manda porque un pedido entregado
 // tarde pertenece al turno en que se entregó, no al que se cargó.
 
-export async function getSnapshot(sessionId: number): Promise<CashSnapshot> {
+export async function getSnapshot(sessionId: number, windowEndOverride?: Date): Promise<CashSnapshot> {
   const [session] = await db
     .select()
     .from(cashSessions)
@@ -224,7 +293,7 @@ export async function getSnapshot(sessionId: number): Promise<CashSnapshot> {
     throw new Error(`No encontré la sesión de caja #${sessionId}.`);
   }
 
-  const windowEnd = session.closedAt ?? new Date();
+  const windowEnd = windowEndOverride ?? session.closedAt ?? new Date();
   const orderAt = sql`COALESCE(${orders.deliveredAt}, ${orders.createdAt})`;
 
   const orderRows = await db

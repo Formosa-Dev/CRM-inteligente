@@ -9,14 +9,18 @@
 
 import { runReconcile } from "./runner";
 import { getArgentinaHour } from "@/lib/argentina-time";
+import { rolloverCashDay } from "@/lib/cash/session";
+import { notifyAdmins } from "@/lib/telegram/notifier";
 
 const TICK_MS = 60 * 1000;                 // chequeo cada minuto
 const SCAN_INTERVAL_MS = 30 * 60 * 1000;   // scan cada 30 min
 const SWEEP_HOURS = new Set([3, 14]);      // barrido: cierre de noche + mediodía
+const CASH_ROLLOVER_HOUR = 2;              // cierre de turno: 02:00 ART
 
 let started = false;
 let lastScanAt = 0;
 let lastSweepKey = "";
+let lastCashKey = "";
 
 export function startReconcileScheduler(): void {
   if (started) return;
@@ -41,5 +45,20 @@ async function tick(): Promise<void> {
   if (SWEEP_HOURS.has(hour) && lastSweepKey !== sweepKey) {
     lastSweepKey = sweepKey;
     await runReconcile({ mode: "sweep" });
+  }
+
+  // Cierre obligatorio de caja a las 02:00 ART. Si la instancia está dormida
+  // igual se resuelve: ensureOpenSession hace el rollover perezoso en la
+  // primera actividad posterior — esto solo lo hace en hora y notifica.
+  const cashKey = new Date().toISOString().slice(0, 10);
+  if (hour === CASH_ROLLOVER_HOUR && lastCashKey !== cashKey) {
+    lastCashKey = cashKey;
+    const res = await rolloverCashDay();
+    if (res.rolledOver) {
+      await notifyAdmins(
+        `💰 Caja #${res.closedId} cerrada automáticamente (fin de turno 02:00). ` +
+        `Se abrió la sesión nueva. Verificá el efectivo contra el esperado cuando puedas.`,
+      );
+    }
   }
 }

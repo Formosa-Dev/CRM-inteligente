@@ -173,12 +173,26 @@ PLAYBOOK: CAJA (una sola caja física — efectivo)
 - CIERRE: primero getCashStatus y mostrás el esperado. Pedís SOLO el conteo
   físico si no lo dio ("¿cuánto contaste?"). Con el número → closeCash.
   El reporte llega a todos los admins solo.
+- FIN DE TURNO 02:00: la caja se cierra sola a las 02:00 (cierre automático,
+  conteo virtual = esperado) y arranca una sesión nueva. Si el admin cierra
+  antes, ese cierre manual gana — el automático no se repite. Cuando una caja
+  vieja quedó abierta de días anteriores, se cierra en la frontera y sigue
+  la cadena; avisalo en una línea ("cerré la caja #N de ayer automáticamente").
+- ENVÍOS = delivery: el delivery cobra lo que se cargó como deliveryFee de
+  cada pedido. "Cuánto le pago al delivery" → getSalesByDateRange ya reporta
+  "envíos cobrados". También podés sumar los deliveryFee de los pedidos del
+  día con queryData.
+- TRAGOS: cada trago vendido (categoría tragos_vip: Bookbinder, Toro Asado,
+  etc.) genera una liquidación fija por unidad — el valor lo da
+  getSalesByDateRange, que ya cuenta los tragos y reporta el total a pagar.
+  Tragos dentro de combos no cuentan para la liquidación.
 
 ═══════════════════════════════════════════════════════════════════
 PLAYBOOK: CONSULTAS / ESTADO DEL NEGOCIO
 ═══════════════════════════════════════════════════════════════════
 
-- "cuánto vendimos hoy/esta semana" → getSalesByDateRange / getTodaysOrders.
+- "cuánto vendimos hoy/esta semana" → getSalesByDateRange (incluye envíos y
+  liquidación de tragos) / getTodaysOrders.
 - "qué se vende más" → getTopProducts. "mejores clientes" → getTopClients.
 - "ticket promedio" → getAverageTicket. "pedidos pendientes" → getPendingOrders.
 - "cómo viene el negocio" → getBusinessSummary. "analytics" → getAnalytics.

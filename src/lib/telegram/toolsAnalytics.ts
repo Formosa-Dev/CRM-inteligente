@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { db } from "@/db";
-import { orders } from "@/db/schema";
+import { orders, products } from "@/db/schema";
 import { and, gte, lte, eq, ne } from "drizzle-orm";
 import { resolveClientNamesBatch } from "@/lib/lead-utils";
 
@@ -19,11 +19,24 @@ function parseItems(items: unknown): OrderItem[] {
   return items as OrderItem[];
 }
 
-function orderTotal(items: unknown): number {
-  return parseItems(items).reduce(
+function orderTotal(items: unknown, deliveryFee?: string | null): number {
+  const itemsTotal = parseItems(items).reduce(
     (sum, item) => sum + ((item.price ?? item.unitPrice ?? 0) * (item.quantity ?? 1)),
     0
   );
+  const fee = Number(deliveryFee ?? 0);
+  return itemsTotal + (Number.isFinite(fee) ? fee : 0);
+}
+
+// Liquidación de tragos VIP: cada trago vendido genera $7.000 a pagar.
+const TRAGO_LIQUIDATION = 7000;
+
+async function tragoNames(): Promise<Set<string>> {
+  const rows = await db
+    .select({ name: products.name })
+    .from(products)
+    .where(eq(products.category, "tragos_vip"));
+  return new Set(rows.map((r) => r.name.trim().toLowerCase()));
 }
 
 // ─── analyticsTools: Métricas de negocio para Mrs Muzzarella ────────────────
@@ -66,23 +79,38 @@ export const getSalesByDateRange = tool({
         items: orders.items,
         status: orders.status,
         createdAt: orders.createdAt,
+        deliveryFee: orders.deliveryFee,
       })
       .from(orders)
       .where(and(...conditions))
       .orderBy(orders.createdAt);
 
+    const tragos = await tragoNames();
+
     let totalRevenue = 0;
     let totalItems = 0;
+    let enviosCount = 0;
+    let enviosTotal = 0;
+    let tragoUnits = 0;
     const byType: Record<string, { count: number; revenue: number }> = {};
     const byDay: Record<string, { count: number; revenue: number }> = {};
 
     for (const row of rows) {
-      const revenue = orderTotal(row.items);
+      const revenue = orderTotal(row.items, row.deliveryFee);
       totalRevenue += revenue;
+
+      const fee = Number(row.deliveryFee ?? 0);
+      if (Number.isFinite(fee) && fee > 0) {
+        enviosCount += 1;
+        enviosTotal += fee;
+      }
 
       const items = parseItems(row.items);
       for (const item of items) {
         totalItems += item.quantity ?? 1;
+        if (tragos.has(item.name?.trim().toLowerCase() ?? "")) {
+          tragoUnits += item.quantity ?? 1;
+        }
       }
 
       const type = row.orderType ?? "otro";
@@ -112,6 +140,11 @@ export const getSalesByDateRange = tool({
       porDia: Object.entries(byDay).map(
         ([day, data]) => `${day}: ${data.count} pedidos — $${data.revenue.toLocaleString("es-AR")}`
       ),
+      envios: `${enviosCount} envíos cobrados — $${enviosTotal.toLocaleString("es-AR")} a pagar al delivery`,
+      tragos:
+        tragoUnits > 0
+          ? `${tragoUnits} tragos vendidos — liquidar $${(tragoUnits * TRAGO_LIQUIDATION).toLocaleString("es-AR")} ($${TRAGO_LIQUIDATION.toLocaleString("es-AR")} c/u)`
+          : "sin tragos vendidos",
     };
   },
 });
@@ -219,6 +252,7 @@ export const getTopClients = tool({
         phoneNumber: orders.phoneNumber,
         customerName: orders.customerName,
         items: orders.items,
+        deliveryFee: orders.deliveryFee,
       })
       .from(orders)
       .where(
@@ -236,7 +270,7 @@ export const getTopClients = tool({
         clientMap[phone] = { name: row.customerName ?? "Sin nombre", orders: 0, revenue: 0 };
       }
       clientMap[phone].orders += 1;
-      clientMap[phone].revenue += orderTotal(row.items);
+      clientMap[phone].revenue += orderTotal(row.items, row.deliveryFee);
     }
 
     // Resolver nombres desde leads para clientes con pedidos
@@ -309,7 +343,7 @@ export const getAverageTicket = tool({
     }
 
     const rows = await db
-      .select({ items: orders.items, orderType: orders.orderType })
+      .select({ items: orders.items, orderType: orders.orderType, deliveryFee: orders.deliveryFee })
       .from(orders)
       .where(and(...conditions));
 
@@ -323,7 +357,7 @@ export const getAverageTicket = tool({
     const ticketsByType: Record<string, { total: number; count: number }> = {};
 
     for (const row of rows) {
-      const ticket = orderTotal(row.items);
+      const ticket = orderTotal(row.items, row.deliveryFee);
       totalRevenue += ticket;
       if (ticket < minTicket) minTicket = ticket;
       if (ticket > maxTicket) maxTicket = ticket;
