@@ -37,7 +37,14 @@ const CATEGORY_SECTIONS: LandingCategory[] = [
     eyebrow: "Las clásicas",
     title: "Hamburguesas",
     highlight: "artesanales",
-    description: "Carne, pollo y combinaciones con pan de elaboración propia.",
+    description: "100% carne con pan de elaboración propia.",
+  },
+  {
+    category: "pizzas",
+    id: "pizzas",
+    eyebrow: "De la pietra",
+    title: "Pizzas",
+    description: "Pizzas al estilo de la casa.",
   },
   {
     category: "acompanamiento",

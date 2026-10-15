@@ -2,11 +2,10 @@ import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { db } from "./index";
 import { users, agentConfig, products } from "./schema";
-import { LINEA_POLLO } from "@/lib/constants";
+import { LINEA_CARNE } from "@/lib/constants";
 
 // ─── Tipos helpers ──────────────────────────────────────────────────────────────
-type Category = "hamburguesa" | "acompanamiento" | "pan_mayorista" | "tragos_vip" | "bebidas";
-type Line = "pollo" | "carne" | "clasica" | "pan" | "tragos" | "bebidas";
+type Category = "hamburguesa" | "acompanamiento" | "pan_mayorista" | "tragos_vip" | "bebidas" | "alcohol" | "empanadas" | "pizzas";
 
 const TRAGOS_VIP = [
   { name: "Frutilla", price: 6500, sort: 0 },
@@ -88,19 +87,19 @@ async function main() {
   }
 
   // ── Demo catalog (opt-in, replaceable from /admin/products) ─────────────────
-  const polloRows = LINEA_POLLO.map((p, index) => ({
+  const burgerRows = LINEA_CARNE.map((p, index) => ({
     name: p.name,
     description: p.ingredients,
     price: p.price !== null ? String(p.price) : null,
-    category: (p.id === "papas-fritas" ? "acompanamiento" : "hamburguesa") as Category,
-    line: "pollo" as Line,
+    category: "hamburguesa" as Category,
+
     available: true,
     comingSoon: p.comingSoon ?? false,
     sortOrder: index,
   }));
 
-  await db.insert(products).values(polloRows).onConflictDoNothing();
-  console.log(`✓ ${polloRows.length} demo products seeded (LINEA_POLLO)`);
+  await db.insert(products).values(burgerRows).onConflictDoNothing();
+  console.log(`✓ ${burgerRows.length} demo products seeded (LINEA_CARNE)`);
 
   await db
     .insert(products)
@@ -109,7 +108,7 @@ async function main() {
       description: "Gaseosa Coca-Cola 500ml",
       price: "1500",
       category: "bebidas" as Category,
-      line: "bebidas" as Line,
+
       available: true,
       sortOrder: 0,
     })
@@ -124,7 +123,7 @@ async function main() {
         description: `Trago V.I.P de 1 Litro - ${t.name}. Con muchas gomitas y salsas de caramelo.`,
         price: String(t.price),
         category: "tragos_vip" as Category,
-        line: "tragos" as Line,
+
         available: true,
         sortOrder: t.sort,
         variants: [

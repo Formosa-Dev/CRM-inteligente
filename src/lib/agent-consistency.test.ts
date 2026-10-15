@@ -1387,9 +1387,8 @@ test("skeleton exposes a shimmer variant and admin loading adopts it", () => {
   assert.match(loading, /variant="shimmer"/);
 });
 
-test("storefront detail and tragos-vip pages drop animate-pulse and white/amber drift", () => {
+test("storefront detail pages drop animate-pulse and white/amber drift", () => {
   for (const file of [
-    "src/app/(storefront)/tragos-vip/page.tsx",
     "src/app/(storefront)/hamburguesas/[id]/page.tsx",
     "src/app/(storefront)/pan-mayorista/[id]/page.tsx",
   ]) {
@@ -1529,7 +1528,7 @@ test("storefront display headings mix roman with real italic keywords", () => {
   const delivery = readFileSync("src/components/home/delivery-cta.tsx", "utf8");
   assert.match(delivery, /<em>Domicilio<\/em>/);
   const hamburguesas = readFileSync("src/app/(storefront)/hamburguesas/page.tsx", "utf8");
-  assert.match(hamburguesas, /<em className="marker-gold">Hamburguesas<\/em>/);
+  assert.match(hamburguesas, /redirect\("\/carta-digital\?category=hamburguesa"\)/);
   const pan = readFileSync("src/app/(storefront)/pan-mayorista/page.tsx", "utf8");
   assert.match(pan, /<em>Negocio<\/em>/);
   const css = readFileSync("src/app/globals.css", "utf8");
@@ -1669,7 +1668,7 @@ test("storefront CTA cards use the gradient anatomy (no emoji icon)", () => {
   assert.match(home, /cta-card-chevron/);
   assert.doesNotMatch(home, /📱|📲/);
   const hamb = readFileSync("src/app/(storefront)/hamburguesas/page.tsx", "utf8");
-  assert.match(hamb, /className="cta-card/);
+  assert.match(hamb, /redirect\("\/carta-digital/);
   assert.doesNotMatch(hamb, /📱|📲/);
   const pan = readFileSync("src/app/(storefront)/pan-mayorista/page.tsx", "utf8");
   assert.match(pan, /variant="card"/);

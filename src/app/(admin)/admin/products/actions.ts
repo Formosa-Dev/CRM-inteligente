@@ -11,7 +11,6 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 const PAGE_SIZE = 30;
 
 type ProductCategory = (typeof products.$inferSelect)["category"];
-type ProductLine = (typeof products.$inferSelect)["line"];
 
 export type ProductsResponse = {
   products: Array<{
@@ -21,7 +20,6 @@ export type ProductsResponse = {
     price: string | null;
     imageUrl: string | null;
     category: ProductCategory;
-    line: ProductLine;
     stock: number | null;
     available: boolean;
     comingSoon: boolean;
@@ -34,7 +32,6 @@ export type ProductsResponse = {
 export async function fetchProducts(params: {
   page?: number;
   category?: string;
-  line?: string;
 }): Promise<ProductsResponse> {
   const session = await auth();
   if (!session) {
@@ -47,9 +44,6 @@ export async function fetchProducts(params: {
   const conditions: ReturnType<typeof eq>[] = [];
   if (params.category && params.category !== "all") {
     conditions.push(eq(products.category, params.category as ProductCategory));
-  }
-  if (params.line && params.line !== "all") {
-    conditions.push(eq(products.line, params.line as ProductLine));
   }
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
@@ -74,7 +68,6 @@ export async function fetchProducts(params: {
       price: p.price,
       imageUrl: p.imageUrl,
       category: p.category,
-      line: p.line,
       stock: p.stock,
       available: p.available,
       comingSoon: p.comingSoon,
@@ -95,7 +88,7 @@ export async function createProduct(formData: FormData) {
     description: formData.get("description") || undefined,
     price: formData.get("price") ? Number(formData.get("price")) : undefined,
     category: formData.get("category"),
-    line: formData.get("line"),
+
     imageUrl: formData.get("imageUrl") || undefined,
     stock: formData.get("stock") ? Number(formData.get("stock")) : undefined,
     available: formData.get("available") === "true",
@@ -131,7 +124,7 @@ export async function updateProduct(id: number, formData: FormData) {
     description: formData.get("description") || undefined,
     price: formData.get("price") ? Number(formData.get("price")) : undefined,
     category: formData.get("category"),
-    line: formData.get("line"),
+
     imageUrl: formData.get("imageUrl") || undefined,
     stock: formData.get("stock") ? Number(formData.get("stock")) : undefined,
     available: formData.get("available") === "true",

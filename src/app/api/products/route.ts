@@ -43,7 +43,6 @@ export async function GET(req: NextRequest) {
         promoPrice: products.promoPrice,
         stock: products.stock,
         category: products.category,
-        line: products.line,
         imageUrl: products.imageUrl,
         available: products.available,
         comingSoon: products.comingSoon,

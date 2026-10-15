@@ -78,6 +78,20 @@
       "when": 1791793238098,
       "tag": "0010_peaceful_rocket_racer",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792000000000,
+      "tag": "0011_add_pizzas_category",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792000001000,
+      "tag": "0012_drop_product_line",
+      "breakpoints": true
     }
   ]
 }

@@ -19,7 +19,7 @@ export const getAllProducts = tool({
         description: products.description,
         price: products.price,
         category: products.category,
-        line: products.line,
+
         available: products.available,
       })
       .from(products)
@@ -68,7 +68,7 @@ export const getProductsByCategory = tool({
         name: products.name,
         description: products.description,
         price: products.price,
-        line: products.line,
+
         available: products.available,
       })
       .from(products)
@@ -77,12 +77,13 @@ export const getProductsByCategory = tool({
 
     const categoryLabels: Record<string, string> = {
       hamburguesa: "Hamburguesas",
-      acompañamiento: "Acompañamientos",
+      acompanamiento: "Acompañamientos",
       pan_mayorista: "Pan al Por Mayor",
       tragos_vip: "Tragos VIP",
       bebidas: "Bebidas",
       alcohol: "Alcohol",
       empanadas: "Empanadas",
+      pizzas: "Pizzas",
     };
 
     return {
@@ -93,7 +94,7 @@ export const getProductsByCategory = tool({
         name: p.name,
         description: p.description,
         price: p.price,
-        line: p.line,
+
       })),
     };
   },
@@ -113,7 +114,7 @@ export const getProductById = tool({
         description: products.description,
         price: products.price,
         category: products.category,
-        line: products.line,
+
         available: products.available,
         imageUrl: products.imageUrl,
       })
@@ -131,7 +132,7 @@ export const getProductById = tool({
       description: row.description,
       price: row.price,
       category: row.category,
-      line: row.line,
+
       available: row.available,
       image: row.imageUrl,
     };
@@ -141,7 +142,7 @@ export const getProductById = tool({
 // searchProducts - Buscar productos
 export const searchProducts = tool({
   description:
-    "Busca productos por nombre. Preguntas: 'busca hamburguesa crispy', 'tiene vegetariano?'",
+    "Busca productos por nombre. Preguntas: 'busca hamburguesa bookbinder', 'tiene vegetariano?'",
   inputSchema: z.object({
     query: z.string().describe("Término de búsqueda"),
   }),
@@ -183,7 +184,7 @@ export const searchProducts = tool({
 // getProductAvailability - Ver disponibilidad
 export const getProductAvailability = tool({
   description:
-    "Verifica si un producto está disponible. Preguntas: 'tienen stock de X', 'hay crispy?'",
+    "Verifica si un producto está disponible. Preguntas: 'tienen stock de X', 'hay toro?'",
   inputSchema: z.object({
     productName: z.string().describe("Nombre del producto"),
   }),
@@ -230,15 +231,12 @@ export const createProduct = tool({
     description: z.string().optional().describe("Descripción del producto"),
     price: z.number().optional().describe("Precio del producto"),
     category: z
-      .enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas", "alcohol", "empanadas"])
+      .enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas", "alcohol", "empanadas", "pizzas"])
       .describe("Categoría del producto"),
-    line: z
-      .enum(["pollo", "carne", "clasica", "pan", "tragos", "bebidas", "alcohol", "empanadas"])
-      .describe("Línea del producto"),
     available: z.boolean().default(true).describe("Si el producto está disponible"),
     comingSoon: z.boolean().default(false).describe("Si el producto es próximamente"),
   }),
-  execute: async ({ name, description, price, category, line, available, comingSoon }) => {
+  execute: async ({ name, description, price, category, available, comingSoon }) => {
     const [created] = await db
       .insert(products)
       .values({
@@ -246,7 +244,6 @@ export const createProduct = tool({
         description,
         price: price !== undefined ? String(price) : undefined,
         category,
-        line,
         available,
         comingSoon,
       })
@@ -256,7 +253,7 @@ export const createProduct = tool({
         description: products.description,
         price: products.price,
         category: products.category,
-        line: products.line,
+
         available: products.available,
         comingSoon: products.comingSoon,
       });
@@ -279,18 +276,14 @@ export const updateProduct = tool({
     description: z.string().optional().describe("Nueva descripción"),
     price: z.number().optional().describe("Nuevo precio"),
     category: z
-      .enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas", "alcohol", "empanadas"])
+      .enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas", "alcohol", "empanadas", "pizzas"])
       .optional()
       .describe("Nueva categoría"),
-    line: z
-      .enum(["pollo", "carne", "clasica", "pan", "tragos", "bebidas", "alcohol", "empanadas"])
-      .optional()
-      .describe("Nueva línea"),
     available: z.boolean().optional().describe("Disponibilidad"),
     comingSoon: z.boolean().optional().describe("Próximamente"),
     sortOrder: z.number().optional().describe("Orden de visualización"),
   }),
-  execute: async ({ id, name, description, price, category, line, available, comingSoon, sortOrder }) => {
+  execute: async ({ id, name, description, price, category, available, comingSoon, sortOrder }) => {
     const [existing] = await db
       .select({ id: products.id, name: products.name })
       .from(products)
@@ -306,7 +299,7 @@ export const updateProduct = tool({
     if (description !== undefined) updates.description = description;
     if (price !== undefined) updates.price = String(price);
     if (category !== undefined) updates.category = category;
-    if (line !== undefined) updates.line = line;
+
     if (available !== undefined) updates.available = available;
     if (comingSoon !== undefined) updates.comingSoon = comingSoon;
     if (sortOrder !== undefined) updates.sortOrder = sortOrder;
@@ -321,7 +314,7 @@ export const updateProduct = tool({
         description: products.description,
         price: products.price,
         category: products.category,
-        line: products.line,
+
         available: products.available,
         comingSoon: products.comingSoon,
         sortOrder: products.sortOrder,

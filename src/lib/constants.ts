@@ -54,51 +54,6 @@ export interface Product {
   soldCount?: number;
 }
 
-export const LINEA_POLLO: Product[] = [
-  {
-    id: "genesis",
-    name: "Genesis",
-    price: 2600,
-    ingredients: "Pollo crocante, lechuga, tomate, mayonesa de la casa",
-    emoji: "🍔",
-  },
-  {
-    id: "deli-deli",
-    name: "Deli Deli",
-    price: 3200,
-    ingredients: "Pollo grillado, palta, rúcula, queso crema, cebolla caramelizada",
-    emoji: "🥗",
-  },
-  {
-    id: "mamita",
-    name: "Mamita",
-    price: 3700,
-    ingredients: "Pollo crispy, pickles, coleslaw casero, salsa ranch",
-    emoji: "🌿",
-  },
-  {
-    id: "bookbinder",
-    name: "Bookbinder",
-    price: 4800,
-    ingredients: "Pollo ahumado, panceta, queso cheddar, cebolla crispy",
-    emoji: "🔥",
-  },
-  {
-    id: "toro-asado",
-    name: "Toro Asado",
-    price: 5500,
-    ingredients: "Pollo a la brasa, mozzarella, tomates asados, chimichurri",
-    emoji: "🍗",
-  },
-  {
-    id: "papas-fritas",
-    name: "Papas Fritas",
-    price: 2800,
-    ingredients: "Papas fritas artesanales con sal gruesa y especias",
-    emoji: "🍟",
-  },
-];
-
 export const LINEA_CARNE: Product[] = [
   {
     id: "carne-1",

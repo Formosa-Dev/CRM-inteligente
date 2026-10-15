@@ -160,7 +160,7 @@ export async function getMenuData(): Promise<string> {
         name: products.name,
         price: products.price,
         description: products.description,
-        line: products.line,
+        category: products.category,
       })
       .from(products)
       .where(and(
@@ -168,27 +168,27 @@ export async function getMenuData(): Promise<string> {
         eq(products.comingSoon, false)
       ))
       .orderBy(products.sortOrder);
-    
+
     if (items.length === 0) {
       return "No hay productos disponibles en este momento.";
     }
-    
+
     // Format as plain text reference for the agent
-    const byLine: Record<string, string[]> = {};
+    const byCategory: Record<string, string[]> = {};
 
     for (const item of items) {
-      const line = item.line || "clasica";
+      const category = item.category || "otros";
       const price = item.price ? `$${Number(item.price).toLocaleString("es-AR")}` : "a consultar";
       const entry = `${item.name} (${price})${item.description ? ` — ${item.description}` : ""}`;
 
-      if (!byLine[line]) byLine[line] = [];
-      byLine[line].push(entry);
+      if (!byCategory[category]) byCategory[category] = [];
+      byCategory[category].push(entry);
     }
 
     let menu = "PRODUCTOS DISPONIBLES (usá esta info al mostrar el menú, en texto natural, sin listas):\n\n";
 
-    for (const [line, itemsList] of Object.entries(byLine)) {
-      menu += `Línea ${line}: ${itemsList.join(", ")}\n`;
+    for (const [category, itemsList] of Object.entries(byCategory)) {
+      menu += `${category.replace(/_/g, " ")}: ${itemsList.join(", ")}\n`;
     }
 
     return menu;
@@ -405,7 +405,7 @@ El pan mayorista (B2B) SÍ está disponible y es lo que se vende ahora.`);
     // Stock por producto (products table)
     try {
       const productsWithStock = await db
-        .select({ name: products.name, stock: products.stock, line: products.line })
+        .select({ name: products.name, stock: products.stock })
         .from(products)
         .where(and(eq(products.available, true), isNotNull(products.stock)))
         .orderBy(asc(products.name));
@@ -834,7 +834,7 @@ Solo preguntás: delivery/retiro (UNA vez), dirección si no tiene, método de p
 - TENÉS DOS LÍNEAS DE NEGOCIO COMPLETAMENTE SEPARADAS:
   
   **B2C (hamburguesas/tragos)**: Cliente particular que quiere:
-    * Hamburguesas (Bookbinder, Toro, Genesis, Crispy, Deli Deli, Classic, Italiano)
+    * Hamburguesas (Bookbinder, Toro, Genesis, Deli Deli, Classic, Italiano)
     * Tragos V.I.P (Fernet, etc.)
     * Acompañamientos (papas, etc.)
     * Bebidas
@@ -895,8 +895,8 @@ addOrderItem SOLO se ejecuta cuando el cliente EXPLÍCITAMENTE nombra un product
 0. Si el cliente es conocido (tiene historial) -> PRIMERO verificá si tiene un pedido activo con getOrderStatus
    - Si el pedido está "delivered" y pagado -> NO es pedido activo. Empezá de cero.
    - Si el pedido está "pending" o "preparing" -> tienen un pedido en curso.
-0b. Si el cliente pide GENÉRICAMENTE: "una hamburguesa", "2 hamburguesas", "quiero hamburguesas", "dame hamburguesa" SIN especificar variedad -> preguntá "¿cuál querés? Tengo de carne, de pollo y clásicas. Las de carne son la Bookbinder y la Toro, las de pollo la Crispy..." ANTES de ejecutar addOrderItem
-   - Si ya especificó ("bookbinder", "crispy", "deli") -> "Dale" + addOrderItem directo
+0b. Si el cliente pide GENÉRICAMENTE: "una hamburguesa", "2 hamburguesas", "quiero hamburguesas", "dame hamburguesa" SIN especificar variedad -> preguntá "¿cuál querés? Todas son de carne: la Bookbinder, la Toro, la Classic..." ANTES de ejecutar addOrderItem
+   - Si ya especificó ("bookbinder", "genesis", "deli") -> "Dale" + addOrderItem directo
 1. Cliente dice qué quiere -> "Dale" + addOrderItem. Ejecutalo YA, no esperes a preguntar delivery primero.
 1b. 🚨 REGLA DE EJECUCIÓN INMEDIATA: En cuanto el cliente confirma producto + cantidad, ejecutá addOrderItem. No esperés a tener variante (con/sin cebolla, tipo de pan), pack, delivery resuelto, ni confirmación final. Ejecutá con lo que ya está claro. Después preguntá lo que falta. Si el cliente dice "dale" a un producto específico, eso ya es suficiente para addOrderItem. 🚨 EXCEPCIÓN: Si el producto NO está claro (ej: "una hamburguesa" sin especificar variedad), primero preguntá la variedad (rule 0b) y después ejecutá addOrderItem.
 2. Preguntá UNA SOLA VEZ: "¿delivery o buscás?" — y ESPERÁ la respuesta. NO repitas la pregunta.
@@ -963,7 +963,7 @@ addOrderItem SOLO se ejecuta cuando el cliente EXPLÍCITAMENTE nombra un product
 - 🚨 REGLA GENERAL: si el cliente inicia la conversación con INTENCIÓN COMERCIAL (pregunta si están abiertos, qué tienen, precios, o arranca con un producto) -> mandá el menú DIRECTAMENTE sin preguntar "¿querés ver?". El round trip de "¿querés?" es al pedo, el cliente ya demostró interés.
 - 🚨 ANTES DE SENDMENUIMAGE: determiná QUÉ menú mandar según esta prioridad:
   1. Lo que el cliente PIDIÓ en su mensaje actual: si dice "prepizza", "lomito", "pan de hamburguesa", "pancho", "pan" -> sendMenuImage('pan')
-     Si dice "bookbinder", "deli", "mamita", "crispy", "toro", "hamburguesa", "papas", "génesis" -> sendMenuImage('hamburguesas')
+     Si dice "bookbinder", "deli", "mamita", "genesis", "toro", "hamburguesa", "papas", "génesis" -> sendMenuImage('hamburguesas')
   2. 🧠 CLIENTE DETECTADO (del contexto): si el historial muestra que es B2B -> sendMenuImage('pan'), si es B2C -> sendMenuImage('hamburguesas')
   3. Fallback por horario: 🍞 B2B -> sendMenuImage('pan'), 🍔 B2C -> sendMenuImage('hamburguesas')
 - ⚠️ 🧠 CLIENTE DETECTADO NO ES RESTRICTIVO: si mandaste el menú según detectedLine pero el cliente dice "no, quiero hamburguesas" o "no, quiero pan" -> aceptalo sin discutir y mandá el OTRO menú. El detectedLine es solo para decidir cuál mostrar PRIMERO. El cliente elige, no discutas ni digas "pero usted siempre pide pan".
@@ -981,7 +981,7 @@ addOrderItem SOLO se ejecuta cuando el cliente EXPLÍCITAMENTE nombra un product
    -> Si el cliente pregunta "dentro de cuánto?" -> estimá tiempo de espera (~20-30min promedio), NO digas "ya está"
 - Al entregar el pedido (no antes) -> "Me etiquetas en ig porfa"
 - Si el mensaje es SOLO un emoji o varios emojis sin texto (😍, ❤️, 🔥, 👍, etc.) -> NO asumas que quiere comprar. Respondé amable: "Holaa ¿todo bien?" o "Gracias ☺️" — sin preguntar por pedidos, pagos, ni nada de ventas
-- Si el cliente es CONOCIDO (tiene preferencias en el contexto) -> personalizá el saludo: "Holaa de nuevo! ¿Lo de siempre? (Bookbinder y Crispy Pollo)" o "Holaa! ¿Todo bien?" — mostrá que lo reconocés
+- Si el cliente es CONOCIDO (tiene preferencias en el contexto) -> personalizá el saludo: "Holaa de nuevo! ¿Lo de siempre? (Bookbinder y Toro Asado)" o "Holaa! ¿Todo bien?" — mostrá que lo reconocés
 - Si el cliente es conocido pero su mensaje ya especifica un producto -> ignorá preferencias, procesá lo que pidió
 
 [MULTI-INTENT — VARIAS COSAS EN UN MENSAJE]
@@ -1063,7 +1063,7 @@ Cuando el cliente diga VARIAS COSAS en un solo mensaje (o varios mensajes seguid
 ═ Pregunta precio + Método de pago ═
   "A cómo está la bookbinder? y aceptan efectivo?"
   "Cuánto sale la toro? puedo pagar en efectivo?"
-  "Precio de la crispy? aceptan transferencia?"
+  "Precio de la genesis? aceptan transferencia?"
   → Intención 1: Quiere precio de un producto
   → Intención 2: Pregunta por método de pago
   → getProductPrice + "sii, efectivo/transferencia"
@@ -1108,7 +1108,7 @@ Frases típicas:
   "quería saber si tienen prepizzas"
   "necesito 3 docenas de pan de hamburguesa"
   "una deli deli para llevar"
-  "me das una crispy pollo?"
+  "me das una classic?"
   "para hoy tenés?"
 → Si nombra producto exacto: "Dale" + addOrderItem directo
 → Si es genérico ("una hamburguesa") → preguntá variedad primero
@@ -1580,7 +1580,7 @@ FLUJO:
 1. getActivePromos → obtenés la lista completa con items
 2. Decidí QUÉ promos enviar:
    a) Pedido general ("qué promos tienen?", "pasame las promos", "mostrame los combos") → sendPromoImage({ promoIds: [id1, id2, ...] }) con TODAS las que tengan hasImage: true
-   b) Match específico ("coca + burger", "algo con bookbinder?", "algo con papas", "combo 17") → filtrá por items. Ej: si dice "coca" buscá promos donde algún item.productName contenga "coca", "burger" → buscá items que contengan "bookbinder", "toro", "genesis", "crispy". Mandá SOLO las que matchean.
+   b) Match específico ("coca + burger", "algo con bookbinder?", "algo con papas", "combo 17") → filtrá por items. Ej: si dice "coca" buscá promos donde algún item.productName contenga "coca", "burger" → buscá items que contengan "bookbinder", "toro", "genesis". Mandá SOLO las que matchean.
    c) Sin match claro → sendPromoImage con las 3 promos más relevantes
 3. sendPromoImage({ promoIds: [1, 2, 3] }) devuelve TODAS las imágenes en un solo llamado
 4. sendPromoImage devuelve un JSON con { _batch, _media, description }. Usá el campo "description" como fuente para tu respuesta al cliente.
@@ -1624,7 +1624,7 @@ El sistema ya reconoce "Combo 10", "Combo 14", "Combo 17", "Combo 19" como promo
 - "ya voy" NO es un pedido nuevo
 
 [CASERO]
-- Si preguntan "son caseras?" -> "Sii, son 100% carne las de carne y 100% pollo las de pollo"
+- Si preguntan "son caseras?" -> "Sii, son 100% carne, las hacemos acá"
 - Si preguntan por el pan -> "Los panes los hacemos nosotros también, en nuestra fábrica"
 - Si preguntan en general -> "Todo es casero, lo hacemos acá"
 

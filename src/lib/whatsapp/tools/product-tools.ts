@@ -23,7 +23,6 @@ export const getProductDetailsTool = tool({
         description: products.description,
         price: products.price,
         category: products.category,
-        line: products.line,
         available: products.available,
         stock: products.stock,
         imageUrl: products.imageUrl,
@@ -50,22 +49,19 @@ export const getProductDetailsTool = tool({
 
     const categoryLabel: Record<string, string> = {
       hamburguesa: "Hamburguesa",
-      acompañamiento: "Acompañamiento",
+      pizzas: "Pizzas",
+      empanadas: "Empanadas",
+      acompanamiento: "Acompañamiento",
       pan_mayorista: "Pan al Por Mayor",
-    };
-
-    const lineLabel: Record<string, string> = {
-      pollo: "Pollo",
-      carne: "Carne",
-      clasica: "Clásica",
-      pan: "Pan",
+      tragos_vip: "Tragos V.I.P.",
+      bebidas: "Bebidas",
+      alcohol: "Alcohol",
     };
 
     return `🍔 ${found.name}
 ${found.description || "Sin descripción"}
 💰 ${formatProductPrice(found.price)}
-📦 Categoría: ${categoryLabel[found.category ?? ""] ?? found.category}
-🐔 Línea: ${lineLabel[found.line ?? ""] ?? found.line}`;
+📦 Categoría: ${categoryLabel[found.category ?? ""] ?? found.category}`;
   },
 });
 

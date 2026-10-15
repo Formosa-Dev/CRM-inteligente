@@ -67,7 +67,7 @@ export const suggestProductsTool = tool({
       if (linea === "b2b") {
         return "Tenemos pan de lomito x4, prepizza x docena, pan de hamburguesa x4, pan de pancho x4. ¿Cuál te interesa y qué cantidad?";
       }
-      return "Nuestros más pedidos: Classic Carne, Crispy Pollo, Especiale Italiano. ¿Querés que te recomiende algo en especial?";
+      return "Nuestros más pedidos: Bookbinder, Toro Asado y Classic Carne. ¿Querés que te recomiende algo en especial?";
     }
 
     phone = normalizePhone(phone);

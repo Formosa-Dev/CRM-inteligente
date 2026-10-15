@@ -18,8 +18,9 @@ type Promo = { id: number; name: string; description: string | null; imageUrl: s
 type Selection = { type: "product"; data: Product } | { type: "promo"; data: Promo };
 const CATEGORIES = [
   { key: "promos", label: "Promociones" }, { key: "hamburguesa", label: "Hamburguesas" },
+  { key: "pizzas", label: "Pizzas" }, { key: "empanadas", label: "Empanadas" },
   { key: "acompanamiento", label: "Para acompañar" }, { key: "bebidas", label: "Bebidas" },
-  { key: "alcohol", label: "Alcohol" }, { key: "empanadas", label: "Empanadas" },
+  { key: "alcohol", label: "Alcohol" },
   { key: "tragos_vip", label: "Tragos V.I.P." }, { key: "pan_mayorista", label: "Pan mayorista" },
 ];
 // Legacy / marketing deep-link values mapped onto the canonical category keys.
@@ -29,6 +30,7 @@ const CATEGORY_ALIASES: Record<string, string> = {
   acompanamientos: "acompanamiento", acompanar: "acompanamiento", "para_acompanar": "acompanamiento",
   bebida: "bebidas", bebidas: "bebidas",
   empanada: "empanadas", empanadas: "empanadas",
+  pizza: "pizzas", pizzas: "pizzas",
   trago: "tragos_vip", tragos: "tragos_vip", vip: "tragos_vip",
   pan: "pan_mayorista", mayorista: "pan_mayorista", "pan_mayorista": "pan_mayorista",
   alcoholes: "alcohol", alcohol: "alcohol",

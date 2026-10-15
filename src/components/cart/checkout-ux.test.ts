@@ -203,12 +203,19 @@ test("products and promos enter the same shared cart from every card", () => {
     "src/components/home/landing-product-card.tsx",
     "src/components/products/product-card.tsx",
     "src/components/products/upsell-modal.tsx",
-    "src/app/(storefront)/tragos-vip/page.tsx",
   ];
   for (const file of productCards) {
     const src = readFileSync(file, "utf8");
     assert.match(src, /addItem\(/, `${file} must add to the shared cart`);
     assert.match(src, /type: "product"/, `${file} must tag product lines`);
+  }
+  // Las páginas de categoría legacy redirigen a la carta digital (superficie única).
+  for (const file of [
+    "src/app/(storefront)/hamburguesas/page.tsx",
+    "src/app/(storefront)/tragos-vip/page.tsx",
+  ]) {
+    const src = readFileSync(file, "utf8");
+    assert.match(src, /redirect\("\/carta-digital\?category=/, `${file} must redirect to carta-digital`);
   }
   const promos = readFileSync("src/components/home/promos-section.tsx", "utf8");
   assert.match(promos, /addItem\(/);

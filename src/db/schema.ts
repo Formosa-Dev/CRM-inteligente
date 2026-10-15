@@ -27,17 +27,7 @@ export const productCategoryEnum = pgEnum("product_category", [
   "bebidas",
   "alcohol",
   "empanadas",
-]);
-
-export const productLineEnum = pgEnum("product_line", [
-  "pollo",
-  "carne",
-  "clasica",
-  "pan",
-  "tragos",
-  "bebidas",
-  "alcohol",
-  "empanadas",
+  "pizzas",
 ]);
 
 export const conversationStatusEnum = pgEnum("conversation_status", [
@@ -84,7 +74,6 @@ export const products = pgTable("products", {
   price: numeric("price", { precision: 10, scale: 2 }),
   imageUrl: text("image_url"),
   category: productCategoryEnum("category").notNull(),
-  line: productLineEnum("line").notNull(),
   available: boolean("available").notNull().default(true),
   comingSoon: boolean("coming_soon").notNull().default(false),
   stock: integer("stock"),

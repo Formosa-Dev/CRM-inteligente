@@ -1032,7 +1032,7 @@ export const sendMessageAsOperatorTool = tool({
 // ─── injectCustomerNoteTool - Agregar nota interna a un lead ─────────────────
 export const injectCustomerNoteTool = tool({
   description:
-    "AGREGA una nota interna al perfil de un cliente (lead). La nota se ve cuando el agente de WhatsApp procese el próximo mensaje del cliente. Se concatena con las notas existentes con timestamp. PREGUNTAS: 'agregale una nota a Hector', 'dejale una nota a Maria', 'poné que prefiere pollo'",
+    "AGREGA una nota interna al perfil de un cliente (lead). La nota se ve cuando el agente de WhatsApp procese el próximo mensaje del cliente. Se concatena con las notas existentes con timestamp. PREGUNTAS: 'agregale una nota a Hector', 'dejale una nota a Maria', 'poné que prefiere carne'",
   inputSchema: z.object({
     phone: z
       .string()

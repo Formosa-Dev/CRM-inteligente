@@ -38,8 +38,8 @@ export function Footer() {
               <Link href="/" className="text-sm text-foreground/60 hover:text-gold-light transition-all duration-200">
                 Inicio
               </Link>
-              <Link href="/hamburguesas" className="text-sm text-foreground/60 hover:text-gold-light transition-all duration-200">
-                Hamburguesas
+              <Link href="/carta-digital" className="text-sm text-foreground/60 hover:text-gold-light transition-all duration-200">
+                Carta Digital
               </Link>
               <Link href="/pan-mayorista" className="text-sm text-foreground/60 hover:text-gold-light transition-all duration-200">
                 Pan Mayorista

@@ -6,14 +6,13 @@ export const metadata = {
 };
 
 export default async function ProductsPage(props: {
-  searchParams?: Promise<{ page?: string; category?: string; line?: string }>;
+  searchParams?: Promise<{ page?: string; category?: string }>;
 }) {
   const sp = await props.searchParams;
   const page = Number(sp?.page) || 1;
   const category = sp?.category || "all";
-  const line = sp?.line || "all";
 
-  const { products, totalPages } = await fetchProducts({ page, category, line });
+  const { products, totalPages } = await fetchProducts({ page, category });
 
   return (
     <div className="flex flex-col gap-6">
@@ -30,7 +29,6 @@ export default async function ProductsPage(props: {
         currentPage={page}
         totalPages={totalPages}
         currentCategory={category}
-        currentLine={line}
       />
     </div>
   );

@@ -111,13 +111,13 @@ export const getWaitTimeTool = tool({
 export const listAvailableProductsTool = tool({
   description: "Lista todos los productos disponibles actualmente",
   inputSchema: z.object({
-    linea: z.enum(["pollo", "carne", "pan"]).optional().describe("Línea a filtrar"),
+    category: z.enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas", "alcohol", "empanadas", "pizzas"]).optional().describe("Categoría a filtrar"),
   }),
-  execute: async ({ linea }) => {
+  execute: async ({ category }) => {
     const conditions = [eq(products.available, true)];
-    
-    if (linea) {
-      conditions.push(eq(products.line, linea));
+
+    if (category) {
+      conditions.push(eq(products.category, category));
     }
     
     const items = await db

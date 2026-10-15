@@ -15,7 +15,7 @@ type ProductFromAPI = {
   promoPrice?: string | null;
   stock?: number | null;
   category: string;
-  line: string;
+
   imageUrl: string | null;
   available: boolean;
   comingSoon: boolean;

@@ -49,7 +49,6 @@ interface ProductsTableProps {
   currentPage: number;
   totalPages: number;
   currentCategory: string;
-  currentLine: string;
 }
 
 type ActionState = { error?: string; success?: boolean } | null;
@@ -58,36 +57,27 @@ type ActionState = { error?: string; success?: boolean } | null;
 
 const CATEGORY_LABEL: Record<string, string> = {
   hamburguesa: "Hamburguesa",
+  pizzas: "Pizzas",
+  empanadas: "Empanadas",
   acompanamiento: "Acompañamiento",
-  pan_mayorista: "Pan Mayorista",
-  tragos_vip: "Tragos V.I.P",
   bebidas: "Bebidas",
+  alcohol: "Alcohol",
+  tragos_vip: "Tragos V.I.P",
+  pan_mayorista: "Pan Mayorista",
 };
 
-const LINE_LABEL: Record<string, string> = {
-  pollo: "Pollo",
-  carne: "Carne",
-  clasica: "Clásica",
-  pan: "Pan",
-  tragos: "Tragos",
-  bebidas: "Bebidas",
-};
+// Single source for the <select> options — keeps form and filters in sync.
+const CATEGORY_ORDER = Object.keys(CATEGORY_LABEL);
 
 const CATEGORY_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
   hamburguesa: "default",
+  pizzas: "default",
+  empanadas: "secondary",
   acompanamiento: "secondary",
-  pan_mayorista: "outline",
+  bebidas: "secondary",
+  alcohol: "outline",
   tragos_vip: "default",
-  bebidas: "secondary",
-};
-
-const LINE_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
-  pollo: "outline",
-  carne: "secondary",
-  clasica: "default",
-  pan: "outline",
-  tragos: "default",
-  bebidas: "secondary",
+  pan_mayorista: "outline",
 };
 
 // ─── Product Form ─────────────────────────────────────────────────────────────
@@ -215,18 +205,7 @@ function ProductForm({ product, onClose }: ProductFormProps) {
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="category">Categoría *</Label>
         <select id="category" name="category" required defaultValue={product?.category ?? "hamburguesa"} className={selectClass}>
-          <option value="hamburguesa">Hamburguesa</option>
-          <option value="acompanamiento">Acompañamiento</option>
-          <option value="pan_mayorista">Pan Mayorista</option>
-        </select>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="line">Línea *</Label>
-        <select id="line" name="line" required defaultValue={product?.line ?? "clasica"} className={selectClass}>
-          <option value="pollo">Pollo</option>
-          <option value="carne">Carne</option>
-          <option value="clasica">Clásica</option>
-          <option value="pan">Pan</option>
+          {CATEGORY_ORDER.map((key) => <option key={key} value={key}>{CATEGORY_LABEL[key]}</option>)}
         </select>
       </div>
       <div className="flex flex-col gap-1.5">
@@ -290,9 +269,6 @@ function ProductCard({
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant={CATEGORY_VARIANT[product.category]} className="text-[10px]">
             {CATEGORY_LABEL[product.category]}
-          </Badge>
-          <Badge variant={LINE_VARIANT[product.line]} className="text-[10px]">
-            {LINE_LABEL[product.line]}
           </Badge>
         </div>
       </div>
@@ -368,7 +344,6 @@ export default function ProductsTable({
   currentPage,
   totalPages,
   currentCategory,
-  currentLine,
 }: ProductsTableProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -378,7 +353,6 @@ export default function ProductsTable({
   );
 
   const [categoryFilter, setCategoryFilter] = useState<string>(currentCategory);
-  const [lineFilter, setLineFilter] = useState<string>(currentLine);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isNewProductOpen, setIsNewProductOpen] = useState(false);
@@ -395,7 +369,6 @@ export default function ProductsTable({
     (params: Record<string, string>) => {
       const sp = new URLSearchParams();
       if (params.category) sp.set("category", params.category);
-      if (params.line) sp.set("line", params.line);
       if (params.page) sp.set("page", params.page);
       router.push(`/admin/products?${sp.toString()}`);
     },
@@ -447,30 +420,14 @@ export default function ProductsTable({
             value={categoryFilter}
             onChange={(e) => {
               setCategoryFilter(e.target.value);
-              navigate({ category: e.target.value, line: lineFilter, page: "" });
+              navigate({ category: e.target.value, page: "" });
             }}
             className="w-[160px] sm:w-[180px]"
           >
             <option value="all">Todas las categorías</option>
-            <option value="hamburguesa">Hamburguesa</option>
-            <option value="acompanamiento">Acompañamiento</option>
-            <option value="pan_mayorista">Pan Mayorista</option>
+            {CATEGORY_ORDER.map((key) => <option key={key} value={key}>{CATEGORY_LABEL[key]}</option>)}
           </Select>
 
-          <Select
-            value={lineFilter}
-            onChange={(e) => {
-              setLineFilter(e.target.value);
-              navigate({ category: categoryFilter, line: e.target.value, page: "" });
-            }}
-            className="w-[140px] sm:w-[160px]"
-          >
-            <option value="all">Todas las líneas</option>
-            <option value="pollo">Pollo</option>
-            <option value="carne">Carne</option>
-            <option value="clasica">Clásica</option>
-            <option value="pan">Pan</option>
-          </Select>
         </div>
 
         <motion.div whileHover={{ y: -1 }} transition={{ duration: 0.15 }}>
@@ -492,7 +449,7 @@ export default function ProductsTable({
           <div className="col-span-full flex flex-col items-center justify-center py-20 text-foreground/20">
             <span className="text-4xl mb-3 opacity-30">📦</span>
             <p className="text-sm">
-              {currentCategory !== "all" || currentLine !== "all"
+              {currentCategory !== "all"
                 ? "No hay productos que coincidan con los filtros."
                 : "No hay productos. Creá el primero con el botón de arriba."}
             </p>
@@ -519,7 +476,7 @@ export default function ProductsTable({
             type="button"
             size="sm"
             disabled={currentPage <= 1}
-            onClick={() => navigate({ category: categoryFilter, line: lineFilter, page: String(currentPage - 1) })}
+            onClick={() => navigate({ category: categoryFilter, page: String(currentPage - 1) })}
             variant="outline"
             className="h-8 text-xs border-border"
           >
@@ -532,7 +489,7 @@ export default function ProductsTable({
             type="button"
             size="sm"
             disabled={currentPage >= totalPages}
-            onClick={() => navigate({ category: categoryFilter, line: lineFilter, page: String(currentPage + 1) })}
+            onClick={() => navigate({ category: categoryFilter, page: String(currentPage + 1) })}
             variant="outline"
             className="h-8 text-xs border-border"
           >

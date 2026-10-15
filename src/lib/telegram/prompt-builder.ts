@@ -133,7 +133,6 @@ export async function buildTelegramPrompt(): Promise<string> {
         name: products.name,
         price: products.price,
         description: products.description,
-        line: products.line,
         category: products.category,
       })
       .from(products)
@@ -142,15 +141,15 @@ export async function buildTelegramPrompt(): Promise<string> {
 
     if (items.length > 0) {
       let menu = "═══ MENÚ ═══\n";
-      const byLine: Record<string, string[]> = {};
+      const byCategory: Record<string, string[]> = {};
       for (const item of items) {
-        const line = item.line || "otros";
+        const category = item.category || "otros";
         const price = item.price ? `$${Number(item.price).toLocaleString("es-AR")}` : "a consultar";
-        if (!byLine[line]) byLine[line] = [];
-        byLine[line].push(`${item.name} (${price})`);
+        if (!byCategory[category]) byCategory[category] = [];
+        byCategory[category].push(`${item.name} (${price})`);
       }
-      for (const [line, prods] of Object.entries(byLine)) {
-        menu += `${line}: ${prods.join(", ")}\n`;
+      for (const [category, prods] of Object.entries(byCategory)) {
+        menu += `${category}: ${prods.join(", ")}\n`;
       }
       sections.push(menu);
     }

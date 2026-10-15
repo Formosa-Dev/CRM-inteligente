@@ -7,14 +7,14 @@ import { getCatalogProductImage } from "@/lib/catalog-images";
 import { useEditorialMotion, EditorialHeading } from "@/components/storefront/motion";
 import { useBusiness } from "@/lib/hooks/use-business";
 
-type ProductFromAPI = { id: number; name: string; description: string | null; price: string | null; promoPrice?: string | null; isPromo?: boolean; stock?: number | null; category: string; line: string; imageUrl: string | null; available: boolean; comingSoon: boolean; sortOrder: number; ingredients?: string | null; hasFreeShipping?: boolean };
+type ProductFromAPI = { id: number; name: string; description: string | null; price: string | null; promoPrice?: string | null; isPromo?: boolean; stock?: number | null; category: string; imageUrl: string | null; available: boolean; comingSoon: boolean; sortOrder: number; ingredients?: string | null; hasFreeShipping?: boolean };
 export function ProductDetail({ product, onAddToCart }: { product: ProductFromAPI; onAddToCart?: (product: ProductFromAPI) => void }) {
   const { reveal } = useEditorialMotion();
   const business = useBusiness();
   const price = Number(product.isPromo && product.promoPrice != null ? product.promoPrice : product.price);
   const canOrder = product.available && !product.comingSoon && product.stock !== 0 && price > 0 && Number.isFinite(price);
   return <div className="max-w-6xl mx-auto">
-    <Link href={product.category === "pan_mayorista" ? "/pan-mayorista" : "/hamburguesas"} className="inline-flex items-center gap-3 text-xs text-stone-400 hover:text-stone-100 mb-8"><ArrowLeft size={16} /> Volver al catálogo</Link>
+    <Link href={product.category === "pan_mayorista" ? "/pan-mayorista" : `/carta-digital?category=${product.category}`} className="inline-flex items-center gap-3 text-xs text-stone-400 hover:text-stone-100 mb-8"><ArrowLeft size={16} /> Volver al catálogo</Link>
     <motion.div className="public-detail" variants={reveal} initial="hidden" animate="visible">
       <div className="public-detail-photo"><CatalogImage src={getCatalogProductImage(product)} alt={product.name} contain eager sizes="(max-width: 760px) 100vw, 50vw" /></div>
       <div><p className="menu-eyebrow">{business?.name || "La carta"} / Cocina propia</p><h1><EditorialHeading>{product.name}</EditorialHeading></h1>

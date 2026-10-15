@@ -9,10 +9,7 @@ interface ProductToggleProps {
   options?: { id: string; label: string }[];
 }
 
-const DEFAULT_OPTIONS = [
-  { id: "pollo", label: "Línea Pollo" },
-  { id: "carne", label: "Línea Carne" },
-];
+const DEFAULT_OPTIONS = [{ id: "carne", label: "Línea Carne" }];
 
 export function ProductToggle({ value, onChange, showAll = false, options }: ProductToggleProps) {
   const TABS = [

@@ -225,7 +225,7 @@ export default function LinkGeneratorPage() {
                 </span>
               </>
             }
-            placeholder="ej: video-pollo-oferta"
+            placeholder="ej: video-carne-oferta"
             value={ad}
             onChange={setAd}
           />

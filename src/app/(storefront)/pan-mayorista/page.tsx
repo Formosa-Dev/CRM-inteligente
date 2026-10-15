@@ -21,7 +21,7 @@ type ProductFromAPI = {
   description: string | null;
   price: string | null;
   category: string;
-  line: string;
+
   imageUrl: string | null;
   available: boolean;
   comingSoon: boolean;

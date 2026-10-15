@@ -34,7 +34,6 @@ async function loadMenuItems() {
         description: products.description,
         price: products.price,
         category: products.category,
-        line: products.line,
         available: products.available,
       })
       .from(products)

@@ -7,8 +7,7 @@ export const productSchema = z.object({
     .number()
     .positive("El precio debe ser mayor a 0")
     .optional(),
-  category: z.enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas"]),
-  line: z.enum(["pollo", "carne", "clasica", "pan", "tragos", "bebidas"]),
+  category: z.enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas", "alcohol", "empanadas", "pizzas"]),
   imageUrl: z.string().optional().or(z.literal("")),
   stock: z.coerce.number().int().min(0).optional(),
   available: z.boolean().default(true),

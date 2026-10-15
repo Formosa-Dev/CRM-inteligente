@@ -359,7 +359,7 @@ export async function runWhatsAppAgent({
         } else if (preferences.length > 0) {
           // Clasificar por productos favoritos
           const b2bKwd = ["prepizza", "pan de lomito", "pan de hamburguesa", "pancho", "pan ", "lomito"];
-          const b2cKwd = ["bookbinder", "deli deli", "mamita", "crispy", "toro", "papas", "hamburguesa", "genesis"];
+          const b2cKwd = ["bookbinder", "deli deli", "mamita", "toro", "papas", "hamburguesa", "genesis"];
           const b2bScore = preferences.filter(p => b2bKwd.some(k => p.toLowerCase().includes(k))).length;
           const b2cScore = preferences.filter(p => b2cKwd.some(k => p.toLowerCase().includes(k))).length;
           if (b2bScore > b2cScore) detectedLine = "b2b";

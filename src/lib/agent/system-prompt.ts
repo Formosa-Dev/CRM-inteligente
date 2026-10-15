@@ -3,7 +3,6 @@ interface MenuItem {
   description?: string | null;
   price?: string | null;
   category: string;
-  line: string;
   available: boolean;
 }
 
@@ -11,7 +10,7 @@ function formatMenu(menu: MenuItem[]): string {
   const grouped = new Map<string, MenuItem[]>();
 
   for (const item of menu) {
-    const key = `${item.category} - ${item.line}`;
+    const key = item.category;
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key)!.push(item);
   }
@@ -60,7 +59,7 @@ Hoy es ${today}. Tu trabajo es atender a los clientes por WhatsApp de manera cá
 6. **Siempre preguntá el nombre del cliente** si no lo sabés todavía — es obligatorio para el pedido
 
 ## Líneas de negocio
-- **Hamburguesas (🍔)**: Rotisería nocturna, pedidos individuales, línea pollo y carne
+- **Hamburguesas (🍔)**: Rotisería nocturna, pedidos individuales, línea carne
 - **Pan Mayorista (🍞)**: Pedidos al por mayor, pan brioche, semillas, integral, papa
 - Preguntá al cliente qué tipo de pedido quiere para clasificarlo correctamente
 

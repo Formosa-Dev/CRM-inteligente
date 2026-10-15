@@ -65,7 +65,6 @@ export const getMenu = tool({
           description: products.description,
           price: products.price,
           category: products.category,
-          line: products.line,
         })
         .from(products)
         .where(and(...conditions))

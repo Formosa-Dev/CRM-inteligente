@@ -61,24 +61,24 @@ export const internalSellerTools = {
 async function getMenuData(): Promise<string> {
   try {
     const items = await db
-      .select({ name: products.name, price: products.price, line: products.line, category: products.category })
+      .select({ name: products.name, price: products.price, category: products.category })
       .from(products)
       .where(and(eq(products.available, true), eq(products.comingSoon, false)))
       .orderBy(products.sortOrder);
 
     if (items.length === 0) return "No hay productos disponibles.";
-    
-    const byLine: Record<string, { name: string; price: string }[]> = {};
+
+    const byCategory: Record<string, { name: string; price: string }[]> = {};
     for (const item of items) {
-      const line = item.line || "clasica";
+      const category = item.category || "otros";
       const price = item.price ? `$${Number(item.price).toLocaleString("es-AR")}` : "a consultar";
-      if (!byLine[line]) byLine[line] = [];
-      byLine[line].push({ name: item.name, price });
+      if (!byCategory[category]) byCategory[category] = [];
+      byCategory[category].push({ name: item.name, price });
     }
-    
+
     let menu = "═══ MENÚ ACTUAL ═══\n";
-    for (const [line, prods] of Object.entries(byLine)) {
-      menu += `\n${line.toUpperCase()}:\n`;
+    for (const [category, prods] of Object.entries(byCategory)) {
+      menu += `\n${category.replace(/_/g, " ").toUpperCase()}:\n`;
       for (const p of prods) menu += `  • ${p.name} (${p.price})\n`;
     }
     return menu;
@@ -211,9 +211,9 @@ Vendedor: "cargá una deli para florencia, no tengo su número"
 Bot: createOrder({customerName:"florencia", items:[{name:"Deli Deli", quantity:1}], orderType:"hamburguesas"})
 → "Dale. Pedido creado; informá ID y total reales devueltos por la herramienta."
 
-Vendedor: "agregale una crispy al pedido de juan"
+Vendedor: "agregale una toro al pedido de juan"
 Bot: searchClient("juan") -> addItemToOrder
-→ "Dale. Agregada 1 Crispy Pollo al pedido de Juan."
+→ "Dale. Agregada 1 Toro Asado al pedido de Juan."
 
 Vendedor: "decile a juan que ya estoy afuera"
 Bot: searchClient("juan") -> sendWhatsAppMessage({to:"549370...", message:"Llegué, ya estoy afuera"})
@@ -238,9 +238,6 @@ Productos CARNE:
 "torro", "toro", "toro asado", "la toro" -> Toro Asado
 "book simple", "simple", "la simple" -> Book Simple
 "classic", "clasica", "classic carne" -> Classic Carne
-
-Productos POLLO:
-"crispy", "crispy pollo", "la crispy" -> Crispy Pollo
 
 Acompañamientos:
 "papas con queso", "chesse", "cheese" -> Papas Chesse

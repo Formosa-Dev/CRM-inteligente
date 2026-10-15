@@ -20,11 +20,12 @@ import { useBusiness } from "@/lib/hooks/use-business";
 
 const NAV_LINKS = [
   { href: "/", label: "Inicio" },
-  { href: "/hamburguesas", label: "Hamburguesas" },
   { href: "/carta-digital", label: "Carta Digital" },
+  { href: "/carta-digital?category=hamburguesa", label: "Hamburguesas" },
+  { href: "/carta-digital?category=pizzas", label: "Pizzas" },
   { href: "/carta-digital?category=empanadas", label: "Empanadas" },
   { href: "/carta-digital?category=alcohol", label: "Alcohol" },
-  { href: "/tragos-vip", label: "Tragos VIP" },
+  { href: "/carta-digital?category=tragos_vip", label: "Tragos VIP" },
   { href: "/pan-mayorista", label: "Pan Mayorista" },
 ];
 

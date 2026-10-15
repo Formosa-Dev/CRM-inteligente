@@ -5,9 +5,9 @@ import { products, agentConfig } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 
 export const getMenuTool = tool({
-  description: "Obtiene el menú de productos disponibles. Categorías: hamburguesa, acompanamiento, pan_mayorista, tragos_vip (Tragos V.I.P), bebidas",
+  description: "Obtiene el menú de productos disponibles. Categorías: hamburguesa, pizzas, empanadas, acompanamiento, pan_mayorista, tragos_vip (Tragos V.I.P), bebidas, alcohol",
   inputSchema: z.object({
-    category: z.enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas"]).optional()
+    category: z.enum(["hamburguesa", "acompanamiento", "pan_mayorista", "tragos_vip", "bebidas", "alcohol", "empanadas", "pizzas"]).optional()
       .describe("Categoría para filtrar. tragos_vip = Tragos V.I.P de 1 Litro. Si no se especifica, devuelve todo el menú"),
   }),
   execute: async ({ category }) => {
@@ -50,7 +50,6 @@ export const getMenuTool = tool({
         description: products.description,
         price: products.price,
         category: products.category,
-        line: products.line,
         imageUrl: products.imageUrl,
       })
       .from(products)
@@ -59,6 +58,6 @@ export const getMenuTool = tool({
 
     if (items.length === 0) return "No hay productos disponibles en este momento.";
 
-    return items.map(i => `• ${i.name} (${i.line}) - $${i.price}${i.description ? ` — ${i.description}` : ""}`).join("\n");
+    return items.map(i => `• ${i.name} - $${i.price}${i.description ? ` — ${i.description}` : ""}`).join("\n");
   },
 });
