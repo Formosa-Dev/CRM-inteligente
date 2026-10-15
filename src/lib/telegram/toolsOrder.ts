@@ -671,12 +671,71 @@ export const createDeliveredOrder = tool({
   },
 });
 
+// updateOrder - Editar campos de un pedido existente (cliente, teléfono, lead, entrega)
+export const updateOrder = tool({
+  description:
+    "EDITA campos de un pedido ya creado: nombre del cliente, teléfono, lead asociado, dirección, costo de envío, notas. USAR cuando: 'poné el teléfono X al pedido N', 'corregí el nombre del pedido', 'asocialo al lead de Benegas', 'agregale dirección'. Evita cancelar y recrear el pedido.",
+  inputSchema: z.object({
+    orderId: z.number().describe("ID del pedido a editar"),
+    customerName: z.string().trim().min(1).optional().describe("Nuevo nombre del cliente"),
+    phone: z.string().optional().describe("Nuevo teléfono (se normaliza y vincula al lead si existe)"),
+    leadId: z.number().optional().describe("ID del lead a asociar"),
+    address: z.string().optional().describe("Dirección de entrega"),
+    deliveryFee: z.number().min(0).optional().describe("Costo de envío"),
+    notes: z.string().optional().describe("Notas del pedido"),
+  }),
+  execute: async ({ orderId, customerName, phone, leadId, address, deliveryFee, notes }) => {
+    const [existing] = await db
+      .select({ id: orders.id, customerName: orders.customerName, phoneNumber: orders.phoneNumber, leadId: orders.leadId })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1);
+
+    if (!existing) {
+      return { success: false, message: "Pedido no encontrado" };
+    }
+
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (customerName !== undefined) updates.customerName = customerName;
+    if (leadId !== undefined) {
+      const [lead] = await db.select({ id: leads.id, name: leads.name }).from(leads).where(eq(leads.id, leadId)).limit(1);
+      if (!lead) return { success: false, message: `Lead #${leadId} no existe` };
+      updates.leadId = lead.id;
+      if (customerName === undefined && lead.name) updates.customerName = lead.name;
+    }
+    if (phone !== undefined) {
+      const cleaned = normalizePhone(phone);
+      if (cleaned && !isValidPhone(cleaned)) {
+        return { success: false, message: `El teléfono "${phone}" no es válido.` };
+      }
+      updates.phoneNumber = cleaned || null;
+      // Si hay lead con ese teléfono y el pedido no tiene lead, vincularlo.
+      if (cleaned && updates.leadId === undefined && !existing.leadId) {
+        const [byPhone] = await db.select({ id: leads.id }).from(leads).where(eq(leads.phone, cleaned)).limit(1);
+        if (byPhone) updates.leadId = byPhone.id;
+      }
+    }
+    if (address !== undefined) updates.address = address;
+    if (deliveryFee !== undefined) updates.deliveryFee = String(deliveryFee);
+    if (notes !== undefined) updates.notes = notes;
+
+    await db.update(orders).set(updates).where(eq(orders.id, orderId));
+
+    const changed = Object.keys(updates).filter(k => k !== "updatedAt").join(", ");
+    return {
+      success: true,
+      message: `Pedido #${orderId} actualizado (${changed})`,
+    };
+  },
+});
+
 // Export all manageOrder tools
 export const manageOrderTools = {
   createOrder,
   addItemToOrder,
   removeItemFromOrder,
   updateOrderStatus,
+  updateOrder,
   cancelOrder,
   calculateTotal,
   confirmOrder,

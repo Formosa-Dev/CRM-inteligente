@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useSearchParams } from "next/navigation";
 import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
 import { ArrowLeft, ArrowUpRight, Minus, Plus, Search, ShoppingBag } from "lucide-react";
@@ -79,7 +79,9 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
   const { items: cartItems, addItem, removeItem, updateQuantity } = useCart();
 
   const selections = useMemo<Selection[]>(() => [...promos.map(data => ({ type: "promo" as const, data })), ...products.map(data => ({ type: "product" as const, data }))], [products, promos]);
-  const categories = CATEGORIES.filter(c => c.key === "promos" ? promos.length : products.some(p => p.category === c.key));
+  // Every canonical category stays visible (empty ones show the "preparando"
+  // state); only Promociones hides when there are no active promos.
+  const categories = promos.length ? CATEGORIES : CATEGORIES.filter(c => c.key !== "promos");
   const fallbackCategory = promos.length ? "promos" : products[0]?.category ?? "hamburguesa";
   const activeCategory = selectedCategory ?? requestedCategory ?? fallbackCategory;
 
@@ -116,7 +118,26 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
   }
   const controls = (item: Selection) => available(item) ? <QuantityControl quantity={quantity(item)} onAdd={() => updateItem(item, 1)} onRemove={() => updateItem(item, -1)} max={item.type === "product" ? Math.min(99, item.data.stock ?? 99) : 99} /> : <span className="menu-unavailable">{item.type === "product" && item.data.comingSoon ? "Próximamente" : priceOf(item) ? "No disponible" : "Precio a consultar"}</span>;
   const heading = query.trim() ? "Tu búsqueda" : CATEGORIES.find(c => c.key === activeCategory)?.label ?? "La carta";
-  const hero = products.find(p => p.category === "hamburguesa" && getCatalogProductImage(p)) ?? products.find(p => getCatalogProductImage(p));
+  // Hero carousel: rotates through a randomized pool of products with photos.
+  // First paint is deterministic (index 0) so SSR/CSR match; the first tick
+  // jumps to a random slide, then rotates in order.
+  const heroPool = useMemo(() => products.filter(p => getCatalogProductImage(p)), [products]);
+  const heroStartRef = useRef(true);
+  const [heroIndex, setHeroIndex] = useState(0);
+  const [heroPaused, setHeroPaused] = useState(false);
+  useEffect(() => {
+    if (reduced || heroPaused || heroPool.length < 2) return;
+    const id = window.setInterval(() => setHeroIndex(i => {
+      if (heroStartRef.current) {
+        heroStartRef.current = false;
+        return Math.floor(Math.random() * heroPool.length);
+      }
+      return (i + 1) % heroPool.length;
+    }), 4200);
+    return () => window.clearInterval(id);
+  }, [reduced, heroPaused, heroPool.length]);
+  const hero = heroPool.length ? heroPool[heroIndex % heroPool.length] : null;
+  const heroSelection: Selection | null = hero ? { type: "product", data: hero } : null;
   const checkoutLines = resolvedCart.filter(item => available(item.selected)).map(item => ({ type: item.selected.type, id: item.selected.data.id, quantity: item.quantity }));
 
   return <LayoutGroup id="digital-menu"><div className="digital-menu">
@@ -133,9 +154,14 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
           <motion.p variants={reveal} initial="hidden" animate="visible" className="menu-hero-description">Tu próxima favorita está acá. Elegí, armá tu pedido y coordinamos el resto por WhatsApp.</motion.p>
           <a href="#carta" className="menu-text-link">Explorá la carta <ArrowUpRight size={17} /></a>
         </div>
-        {hero && <motion.figure className="menu-hero-photo" initial={reduced ? false : { opacity: 0, clipPath: "inset(12% 8% 12% 8%)" }} animate={{ opacity: 1, clipPath: "inset(0% 0% 0% 0%)" }} transition={{ duration: 1.1, ease: editorialEase }}>
-          <CatalogImage src={getCatalogProductImage(hero)} alt={hero.name} eager sizes="(max-width: 760px) 90vw, 45vw" />
-          <figcaption><span>De nuestra cocina</span><strong>{hero.name}</strong></figcaption>
+        {hero && heroSelection && <motion.figure className="menu-hero-photo" initial={reduced ? false : { opacity: 0, clipPath: "inset(12% 8% 12% 8%)" }} animate={{ opacity: 1, clipPath: "inset(0% 0% 0% 0%)" }} transition={{ duration: 1.1, ease: editorialEase }} onPointerEnter={() => setHeroPaused(true)} onPointerLeave={() => setHeroPaused(false)} onFocus={() => setHeroPaused(true)} onBlur={() => setHeroPaused(false)}>
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.button key={hero.id} type="button" className="menu-hero-slide" onClick={() => setDetail(heroSelection)} aria-label={`Ver ${hero.name}`} initial={{ opacity: 0, scale: reduced ? 1 : 1.06 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduced ? 0 : .55, ease: editorialEase }}>
+              <CatalogImage src={getCatalogProductImage(hero)} alt={hero.name} eager sizes="(max-width: 760px) 90vw, 45vw" />
+              <span className="menu-hero-caption"><span>De nuestra cocina</span><strong>{hero.name}</strong>{priceOf(heroSelection) > 0 && <em>{money(priceOf(heroSelection))}</em>}</span>
+            </motion.button>
+          </AnimatePresence>
+          {heroPool.length > 1 && heroPool.length <= 8 && <div className="menu-hero-dots" aria-hidden="true">{heroPool.map((p, i) => <i key={p.id} className={i === heroIndex % heroPool.length ? "on" : undefined} />)}</div>}
         </motion.figure>}
       </section>
       <nav className="menu-category-nav" aria-label="Categorías de la carta" id="carta"><div>{categories.map((category, i) => <button type="button" key={category.key} style={{ "--i": i } as CSSProperties} aria-pressed={activeCategory === category.key && !query} onClick={(event) => { setSelectedCategory(category.key); setQuery(""); event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reduced ? "instant" : "smooth" }); }}>

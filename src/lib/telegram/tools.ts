@@ -97,6 +97,7 @@ export const internalAgentTools = {
   addItemToOrder: manageOrderTools.addItemToOrder,
   removeItemFromOrder: manageOrderTools.removeItemFromOrder,
   updateOrderStatus: manageOrderTools.updateOrderStatus,
+  updateOrder: manageOrderTools.updateOrder,
   cancelOrder: manageOrderTools.cancelOrder,
   calculateTotal: manageOrderTools.calculateTotal,
   confirmOrder: manageOrderTools.confirmOrder,
