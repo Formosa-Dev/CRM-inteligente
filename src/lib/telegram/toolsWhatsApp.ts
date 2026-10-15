@@ -3,7 +3,14 @@ import { z } from "zod";
 import { db } from "@/db";
 import { agentConfig } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { broadcastText, getBroadcastRecipients } from "@/lib/whatsapp/broadcast";
+import {
+  broadcastText,
+  getBroadcastRecipients,
+  countRecentBroadcastSends,
+  shouldBlockDuplicateBroadcast,
+  formatBroadcastPreview,
+  DUPLICATE_BROADCAST_WINDOW_MINUTES,
+} from "@/lib/whatsapp/broadcast";
 import type { BroadcastFilter } from "@/lib/whatsapp/broadcast";
 import { normalizePhone, isValidPhone } from "@/lib/phone-utils";
 
@@ -52,14 +59,14 @@ Filtros disponibles:
 - "todos" → Todos los leads registrados
 - "b2b" → Solo clientes mayoristas
 - "b2c" → Solo clientes consumidor final (hamburguesas)
-- "24h" → Solo los que tienen la ventana de 24h activa (mensaje gratuito)
+- "24h" → Solo los que tienen la ventana de 24h activa (mensaje gratuito) — clientes cuyo ÚLTIMO MENSAJE ENTRANTE fue hace menos de 24h
 - "con-pedido" → Solo los que ya hicieron algún pedido
 - "buscar: TEXTO" → Busca por nombre o teléfono (ej: "buscar: hector")
 `;
 
 export const broadcastWhatsApp = tool({
   description:
-    `Envía un mensaje MASIVO de WhatsApp a múltiples clientes con filtros inteligentes. Los mensajes se guardan automáticamente en el historial de chats.\n${filterDescriptions}`,
+    `Envía un mensaje MASIVO de WhatsApp a múltiples clientes con filtros inteligentes. Los mensajes se guardan automáticamente en el historial de chats.\n${filterDescriptions}\nFlujo recomendado: 1) llamá con dryRun=true para ver la audiencia real (count + lista), 2) mostrás texto + audiencia al admin, 3) si aprueba, ejecutás con dryRun=false con el MISMO filtro y mensaje. Sin repreguntar una vez confirmado.`,
   inputSchema: z.object({
     filter: z.string().describe(
       "Filtro: 'todos', 'b2b', 'b2c', '24h', 'con-pedido', o 'buscar: TEXTO'"
@@ -69,17 +76,31 @@ export const broadcastWhatsApp = tool({
       .number()
       .int()
       .min(1)
-      .max(50)
+      .max(200)
       .optional()
-      .default(10)
-      .describe("Máximo de destinatarios (default 10, máximo 50)"),
+      .default(50)
+      .describe("Máximo de destinatarios (default 50, máximo 200)"),
     attachMenu: z
       .boolean()
       .optional()
       .default(false)
       .describe("Si es true, adjunta el menú de hamburguesas al mensaje"),
+    dryRun: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        "Si es true, NO envía nada: devuelve la audiencia real (count + lista de nombres/teléfonos). Usalo SIEMPRE primero para mostrarle al admin quiénes recibirían el mensaje antes de confirmar el envío."
+      ),
+    allowDuplicate: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        "Si es true, fuerza el envío aunque el mismo texto ya se haya mandado recién. Solo si el admin pide reenviar explícitamente."
+      ),
   }),
-  execute: async ({ filter, message, maxRecipients, attachMenu }) => {
+  execute: async ({ filter, message, maxRecipients, attachMenu, dryRun, allowDuplicate }) => {
     // 1. Resolver filtro
     let broadcastFilter: BroadcastFilter;
 
@@ -101,14 +122,37 @@ export const broadcastWhatsApp = tool({
       return `Filtro no válido. Usá uno de: todos, b2b, b2c, 24h, con-pedido, buscar: TEXTO`;
     }
 
-    // 2. Obtener destinatarios
-    const recipients = await getBroadcastRecipients(broadcastFilter, maxRecipients);
+    // 2. Resolver TODOS los destinatarios que matchean (para reportar el total real)
+    const matched = await getBroadcastRecipients(broadcastFilter);
+    const recipients = matched.slice(0, maxRecipients);
+    const capped = matched.length > recipients.length;
 
-    if (recipients.length === 0) {
+    if (matched.length === 0) {
       return `No se encontraron destinatarios para el filtro "${filter}".`;
     }
 
-    // 3. Obtener URL del menú si attachMenu
+    // 3. dryRun → preview de audiencia sin enviar
+    if (dryRun) {
+      return formatBroadcastPreview({
+        filterLabel: filter,
+        totalMatched: matched.length,
+        recipients,
+        maxRecipients,
+        capped,
+      });
+    }
+
+    // 4. Guard anti doble-envío: mismo texto no sale dos veces en una ventana corta
+    const recentSends = await countRecentBroadcastSends(message);
+    if (shouldBlockDuplicateBroadcast(recentSends, allowDuplicate)) {
+      return (
+        `⚠️ No mandé el broadcast: ese mismo texto ya se envió a ${recentSends} conversaciones ` +
+        `hace menos de ${DUPLICATE_BROADCAST_WINDOW_MINUTES} minutos. ` +
+        `Si es un reenvío intencional, confirmalo con el admin y ejecutá con allowDuplicate=true.`
+      );
+    }
+
+    // 5. Obtener URL del menú si attachMenu
     let imageUrl: string | undefined;
     if (attachMenu) {
       try {
@@ -123,7 +167,7 @@ export const broadcastWhatsApp = tool({
       }
     }
 
-    // 4. Enviar broadcast
+    // 6. Enviar broadcast
     const { results, sent, failed } = await broadcastText(
       recipients,
       message,
@@ -131,15 +175,19 @@ export const broadcastWhatsApp = tool({
       imageUrl,
     );
 
-    // 5. Armar resumen
+    // 7. Armar resumen
     const lines: string[] = [
       `📨 Broadcast completado:`,
       `✅ Enviados: ${sent}`,
       `❌ Fallaron: ${failed}`,
-      `👥 Destinatarios: ${recipients.length}`,
+      `👥 Destinatarios: ${recipients.length} de ${matched.length} que matchean`,
       ``,
       `Detalle:`,
     ];
+
+    if (capped) {
+      lines.splice(4, 0, `⚠️ El filtro matchea ${matched.length} pero el límite es ${maxRecipients} — quedaron ${matched.length - recipients.length} sin enviar. Subí maxRecipients o afiná el filtro si querés llegar a todos.`);
+    }
 
     for (const r of results.slice(0, 20)) {
       const icon = r.success ? "✅" : "❌";
