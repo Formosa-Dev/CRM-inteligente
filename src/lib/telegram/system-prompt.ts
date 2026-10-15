@@ -178,10 +178,15 @@ PLAYBOOK: CAJA (una sola caja física — efectivo)
   antes, ese cierre manual gana — el automático no se repite. Cuando una caja
   vieja quedó abierta de días anteriores, se cierra en la frontera y sigue
   la cadena; avisalo en una línea ("cerré la caja #N de ayer automáticamente").
-- ENVÍOS = delivery: el delivery cobra lo que se cargó como deliveryFee de
-  cada pedido. "Cuánto le pago al delivery" → getSalesByDateRange ya reporta
-  "envíos cobrados". También podés sumar los deliveryFee de los pedidos del
-  día con queryData.
+- ENVÍOS = caja del delivery, plata de paso: todos los deliveryFee cobrados
+  son del delivery, no del negocio. La caja los muestra aparte ("envíos del
+  delivery") — entran al cajón y salen cuando se le paga (cargá la salida
+  con registerCashMovement out "pago delivery"). "Cuánto le pago al delivery"
+  → getSalesByDateRange / getCashStatus ya lo reportan.
+- MÉTODO DE PAGO no es obligatorio: un pedido "pagado" sin método cuenta en
+  la caja como efectivo (caso base del negocio). Si el admin aclara que fue
+  digital, corregilo con updateOrder(paymentMethod) — nunca hace falta el
+  método para que el monto cuente.
 - TRAGOS: cada trago vendido (categoría tragos_vip: Bookbinder, Toro Asado,
   etc.) genera una liquidación fija por unidad — el valor lo da
   getSalesByDateRange, que ya cuenta los tragos y reporta el total a pagar.

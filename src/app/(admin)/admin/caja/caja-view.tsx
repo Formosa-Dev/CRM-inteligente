@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/table";
 import { cardEntrance, fadeUpSmall, staggerContainer } from "@/lib/animation-variants";
 import { formatCurrency } from "@/lib/client-utils";
+import { addCashMovementAction } from "./actions";
 import type { ClosedSessionLine, OpenSessionView } from "./queries";
 
 interface CajaViewProps {
@@ -80,6 +81,48 @@ function StatCard({
 }
 
 // ─── Movimientos ──────────────────────────────────────────────────────────────
+
+function MovementForm() {
+  return (
+    <form
+      action={async (formData) => {
+        await addCashMovementAction(formData);
+      }}
+      className="flex flex-wrap items-center gap-2 border-b border-border px-6 py-3"
+    >
+      <select
+        name="direction"
+        defaultValue="out"
+        className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-foreground"
+      >
+        <option value="out">Salida</option>
+        <option value="in">Entrada</option>
+      </select>
+      <input
+        name="amount"
+        type="number"
+        min="1"
+        step="0.01"
+        required
+        placeholder="Monto"
+        className="h-9 w-28 rounded-lg border border-border bg-background px-3 text-sm text-foreground tabular-nums"
+      />
+      <input
+        name="reason"
+        type="text"
+        required
+        placeholder="Motivo — ej: insumos, pago delivery, retiro"
+        className="h-9 min-w-52 flex-1 rounded-lg border border-border bg-background px-3 text-sm text-foreground"
+      />
+      <button
+        type="submit"
+        className="h-9 rounded-lg border border-primary/30 bg-primary/10 px-4 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+      >
+        Cargar
+      </button>
+    </form>
+  );
+}
 
 function MovementsTable({ movements }: { movements: OpenSessionView["movements"] }) {
   return (
@@ -295,13 +338,16 @@ export function CajaView({ open, history }: CajaViewProps) {
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Abierta el {formatDateTime(open.openedAt)} · ventas del
                   período: digital {formatCurrency(open.digitalTotal)} (
-                  {open.digitalCount}) · sin método {formatCurrency(open.unknownTotal)} (
-                  {open.unknownCount}) · pendientes de cobro{" "}
-                  {formatCurrency(open.pendingTotal)} ({open.pendingCount})
+                  {open.digitalCount}) · sin método (en caja){" "}
+                  {formatCurrency(open.unknownTotal)} ({open.unknownCount}) ·
+                  pendientes de cobro {formatCurrency(open.pendingTotal)} (
+                  {open.pendingCount}) · 🛵 envíos del delivery{" "}
+                  {formatCurrency(open.deliveryFees)} ({open.deliveryCount})
                 </p>
               </div>
             </div>
 
+            <MovementForm />
             <MovementsTable movements={open.movements} />
           </motion.div>
         </>

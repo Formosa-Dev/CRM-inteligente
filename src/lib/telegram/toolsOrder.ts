@@ -671,10 +671,10 @@ export const createDeliveredOrder = tool({
   },
 });
 
-// updateOrder - Editar campos de un pedido existente (cliente, teléfono, lead, entrega)
+// updateOrder - Editar campos de un pedido existente (cliente, teléfono, lead, entrega, pago)
 export const updateOrder = tool({
   description:
-    "EDITA campos de un pedido ya creado: nombre del cliente, teléfono, lead asociado, dirección, costo de envío, notas. USAR cuando: 'poné el teléfono X al pedido N', 'corregí el nombre del pedido', 'asocialo al lead de Benegas', 'agregale dirección'. Evita cancelar y recrear el pedido.",
+    "EDITA campos de un pedido ya creado: nombre del cliente, teléfono, lead asociado, dirección, costo de envío, notas, método/estado de pago. USAR cuando: 'poné el teléfono X al pedido N', 'corregí el nombre', 'ese pagó por MP', 'agregale dirección'. Evita cancelar y recrear el pedido.",
   inputSchema: z.object({
     orderId: z.number().describe("ID del pedido a editar"),
     customerName: z.string().trim().min(1).optional().describe("Nuevo nombre del cliente"),
@@ -683,8 +683,10 @@ export const updateOrder = tool({
     address: z.string().optional().describe("Dirección de entrega"),
     deliveryFee: z.number().min(0).optional().describe("Costo de envío"),
     notes: z.string().optional().describe("Notas del pedido"),
+    paymentMethod: z.string().optional().describe("Método de pago: 'efectivo', 'mp', 'transferencia', etc."),
+    paymentStatus: z.enum(["pending", "paid"]).optional().describe("Estado de cobro"),
   }),
-  execute: async ({ orderId, customerName, phone, leadId, address, deliveryFee, notes }) => {
+  execute: async ({ orderId, customerName, phone, leadId, address, deliveryFee, notes, paymentMethod, paymentStatus }) => {
     const [existing] = await db
       .select({ id: orders.id, customerName: orders.customerName, phoneNumber: orders.phoneNumber, leadId: orders.leadId })
       .from(orders)
@@ -718,6 +720,8 @@ export const updateOrder = tool({
     if (address !== undefined) updates.address = address;
     if (deliveryFee !== undefined) updates.deliveryFee = String(deliveryFee);
     if (notes !== undefined) updates.notes = notes;
+    if (paymentMethod !== undefined) updates.paymentMethod = paymentMethod;
+    if (paymentStatus !== undefined) updates.paymentStatus = paymentStatus;
 
     await db.update(orders).set(updates).where(eq(orders.id, orderId));
 

@@ -103,6 +103,8 @@ export interface CashSnapshot {
   pendingTotal: number;
   movementsIn: number;
   movementsOut: number;
+  deliveryFees: number;
+  deliveryCount: number;
   expectedCash: number;
   totalSold: number;
 }
@@ -343,6 +345,8 @@ export async function getSnapshot(sessionId: number, windowEndOverride?: Date): 
   let unknownTotal = 0;
   let pendingTotal = 0;
   let totalSold = 0;
+  let deliveryFees = 0;
+  let deliveryCount = 0;
 
   for (const o of orderRows) {
     const line: OrderLine = {
@@ -358,6 +362,13 @@ export async function getSnapshot(sessionId: number, windowEndOverride?: Date): 
       continue;
     }
     totalSold += line.total;
+    // Los envíos son plata de paso: la cobra el cliente pero es del delivery.
+    // Entra al cajón físico y sale cuando se le paga — va contada aparte.
+    const fee = Number(o.deliveryFee ?? 0);
+    if (Number.isFinite(fee) && fee > 0) {
+      deliveryFees += fee;
+      deliveryCount += 1;
+    }
     const kind = classifyMethod(o.paymentMethod);
     if (kind === "cash") {
       cashOrders.push(line);
@@ -401,7 +412,12 @@ export async function getSnapshot(sessionId: number, windowEndOverride?: Date): 
     pendingTotal: round2(pendingTotal),
     movementsIn: round2(movementsIn),
     movementsOut: round2(movementsOut),
-    expectedCash: round2(openingCash + cashTotal + movementsIn - movementsOut),
+    deliveryFees: round2(deliveryFees),
+    deliveryCount,
+    // Un pedido cobrado sin método cargado cuenta igual: el caso base del
+    // negocio es efectivo. Se reporta aparte para que el admin lo corrija si
+    // fue digital, pero la plata se asume física en el cajón.
+    expectedCash: round2(openingCash + cashTotal + unknownTotal + movementsIn - movementsOut),
     totalSold: round2(totalSold),
   };
 }

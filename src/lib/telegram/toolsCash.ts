@@ -67,8 +67,9 @@ function buildCloseReport(r: CloseResult): string {
     `📊 Ventas del período:`,
     `   Efectivo: ${r.cashOrders.length} pedidos · ${fmtMoney(r.cashTotal)}`,
     `   Digital:  ${dc} pedidos · ${fmtMoney(r.digitalTotal)}${breakdown ? `  (${breakdown})` : ""}`,
-    `   Sin método: ${r.unknownOrders.length} pedidos · ${fmtMoney(r.unknownTotal)}`,
+    `   Sin método (cuenta en caja): ${r.unknownOrders.length} pedidos · ${fmtMoney(r.unknownTotal)}`,
     `   Total vendido: ${fmtMoney(r.totalSold)} (${soldCount} pedidos)`,
+    `   🛵 Envíos (son del delivery): ${r.deliveryCount} · ${fmtMoney(r.deliveryFees)}`,
     ``,
     `⏳ Cobros pendientes: ${r.pendingOrders.length} · ${fmtMoney(r.pendingTotal)}`,
     `📤 Movimientos: +${fmtMoney(r.movementsIn)} entradas / −${fmtMoney(r.movementsOut)} salidas`,
@@ -125,8 +126,9 @@ export const getCashStatus = tool({
     return [
       `💰 CAJA ABIERTA #${snapData.sessionId} — desde ${fmtDateTime(snapData.openedAt)}`,
       `🟢 Esperado en caja: ${fmtMoney(snapData.expectedCash)} (inicial ${fmtMoney(snapData.openingCash)} + efectivo ${fmtMoney(snapData.cashTotal)} + entradas ${fmtMoney(snapData.movementsIn)} − salidas ${fmtMoney(snapData.movementsOut)})`,
-      `📊 Ventas: efectivo ${snapData.cashOrders.length} · ${fmtMoney(snapData.cashTotal)} | digital ${dc} · ${fmtMoney(snapData.digitalTotal)} | sin método ${snapData.unknownOrders.length} · ${fmtMoney(snapData.unknownTotal)}`,
+      `📊 Ventas: efectivo ${snapData.cashOrders.length} · ${fmtMoney(snapData.cashTotal)} | digital ${dc} · ${fmtMoney(snapData.digitalTotal)} | sin método (en caja) ${snapData.unknownOrders.length} · ${fmtMoney(snapData.unknownTotal)}`,
       `   Total vendido: ${fmtMoney(snapData.totalSold)}`,
+      `   🛵 Envíos cobrados (del delivery): ${snapData.deliveryCount} · ${fmtMoney(snapData.deliveryFees)}`,
       `⏳ Cobros pendientes: ${snapData.pendingOrders.length} · ${fmtMoney(snapData.pendingTotal)}`,
       `📤 Movimientos: +${fmtMoney(snapData.movementsIn)} / −${fmtMoney(snapData.movementsOut)}`,
     ].join("\n");

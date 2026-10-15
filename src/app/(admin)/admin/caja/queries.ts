@@ -26,6 +26,8 @@ export interface OpenSessionView {
   unknownCount: number;
   pendingTotal: number;
   pendingCount: number;
+  deliveryFees: number;
+  deliveryCount: number;
   movementsIn: number;
   movementsOut: number;
   expectedCash: number;
@@ -89,6 +91,8 @@ export async function getOpenSessionView(): Promise<OpenSessionView | null> {
   let unknownCount = 0;
   let pendingTotal = 0;
   let pendingCount = 0;
+  let deliveryFees = 0;
+  let deliveryCount = 0;
 
   for (const order of periodOrders) {
     const total = orderTotal({ items: order.items, deliveryFee: order.deliveryFee });
@@ -96,6 +100,11 @@ export async function getOpenSessionView(): Promise<OpenSessionView | null> {
       pendingTotal += total;
       pendingCount += 1;
       continue;
+    }
+    const fee = Number(order.deliveryFee ?? 0);
+    if (Number.isFinite(fee) && fee > 0) {
+      deliveryFees += fee;
+      deliveryCount += 1;
     }
     switch (classifyMethod(order.paymentMethod)) {
       case "cash":
@@ -148,9 +157,13 @@ export async function getOpenSessionView(): Promise<OpenSessionView | null> {
     unknownCount,
     pendingTotal,
     pendingCount,
+    deliveryFees,
+    deliveryCount,
     movementsIn,
     movementsOut,
-    expectedCash: openingCash + cashSalesTotal + movementsIn - movementsOut,
+    // Cobrado sin método cuenta en caja (efectivo = caso base del negocio);
+    // se sigue mostrando aparte para que el admin lo corrija si fue digital.
+    expectedCash: openingCash + cashSalesTotal + unknownTotal + movementsIn - movementsOut,
     movements,
   };
 }
