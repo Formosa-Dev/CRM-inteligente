@@ -38,10 +38,14 @@ architecture roadmap §1 cites `src/lib/db/index.ts`; the real driver file is
    do not build a versioned path.
 2. **Contract freeze**: use evidence §4 verbatim for `MessagingProvider`,
    `NormalizedInboundEvent`, `OutboundMessage`, `SendResult`,
-   `signatureScheme`; merge in roadmap §2.2 `ChannelAccount` fields
-   (`tenantId`, `isDefault`, `displayAddress`, `status`). On name conflicts
-   prefer evidence names (`providerAccountId`, `deliveryId`).
-   `parseWebhook` returns an **array**.
+   `signatureScheme`, and `ChannelAccount` (`id`, `tenantId`, `provider`,
+   `channel`, `providerAccountId`, `senderAddress`, `credentials`,
+   `status`). **No** `isDefault`/`displayAddress` — account defaulting is a
+   schema/resolver concern and `senderAddress` covers the display role
+   (final-review R-1). Channels are `whatsapp`, `instagram`, `facebook`,
+   `telegram`, `sms`; `comment`/`messenger` are event kinds, never channel
+   values. On name conflicts prefer evidence names (`providerAccountId`,
+   `deliveryId`). `parseWebhook` returns an **array**.
 3. **`channel_accounts` timing**: do NOT create the table in the early
    slices. Hard-code the registry `whatsapp → ycloud`; resolve credentials
    via `agent_config → env` (existing pattern). The table lands in slice B3,
@@ -63,19 +67,20 @@ architecture roadmap §1 cites `src/lib/db/index.ts`; the real driver file is
 
 ```
 Track A — installability/self-hosted            Track B — provider seam
-A0 repo hygiene ──► A1 render.yaml+install ──►  B0 contract+YCloudAdapter (new files only)
-   │                    │                            │            │
-   │                    └─► A3 ops polish (later)    ├─► B1 send facade call sites
-   │                                                 │            │
-   └─► A2 journal repair + de-brand vertical ──►     └─► B2 inbound extraction (webhook route slim)
-        (deferred, large)                                         │
-                                              GATE: provider #2 decision (Zernio creds/account)
+A0 repo hygiene ──► P0 journal repair (S6) ──►  B0 contract+YCloudAdapter (new files only)
+   │                P0 /setup + clients       │            │
+   │                neon-http fix (S7)        ├─► B1 send facade call sites
+   │                    │                     │            │
+   └──────────► A1 render.yaml+install ──►    └─► B2 inbound extraction (webhook route slim)
+                  (S3 publishes ONLY                     │
+                   after P0 is green)             GATE: provider #2 decision (Zernio creds/account)
                                                                 ▼
                                           B3 channel_accounts table+resolver
                                                                 ▼
                                           B4 unified ingress (ycloud delegates)
                                                                 ▼
                                           B5 ZernioAdapter (IG/FB) ─► B6 Kapso spike (no prod wiring)
+   A3 ops polish (later, incl. de-brand vertical)
 ```
 
 Rules: B0–B2 are pure refactors — zero behavior change, each commit
@@ -89,12 +94,14 @@ Status legend: `queued` `running` `in-review` `integrated` `blocked`.
 
 | ID | Slice | Owns (files) | Depends on | Commits | Acceptance | Status |
 |---|---|---|---|---|---|---|
-| S1 | `socialcrm-messaging-core` | `src/lib/messaging/**` (new only) | none | 1: `feat(messaging): add provider abstraction core and ycloud adapter` | Contract per §2.2; YCloudAdapter delegates to existing modules; contract+adapter tests with fixtures; zero edits to existing files; all gates green | queued |
-| S2 | `socialcrm-repo-hygiene` | root scratch/PII files (list below), `.env.example`, `docs/socialcrm/repo-hygiene-report.md` | none | 1: `chore(repo): remove client PII scripts and scratch artifacts` 2: `docs(socialcrm): add repo hygiene audit report` | `git grep` finds no customer names/phones in removed set; `.env.example` `BUSINESS_OWNER_NAME` fixed; audit lists drizzle journal anomalies (verify-only, no fix); gates green | queued |
-| S3 | `socialcrm-render-blueprint` | `render.yaml`, `docs/socialcrm/install-render-neon.md`, `.env.example` (sync comment only if needed) | none | 1: `feat(infra): add render.yaml blueprint and Render+Neon install guide` | Blueprint declares web service, required env prompts, `healthCheckPath: /api/health`, cron jobs; guide covers provision→migrate→/setup→config→webhooks→verify; no secret values; lint/typecheck unaffected | queued |
-| S4 | B1 send facade | `broadcast.ts`, `queue/worker.ts`, `cron/followup`, `tools{WhatsApp,Management}.ts`, `create-order.ts`, `channels/router.ts`, `response-sender.ts` | S1 | `refactor(whatsapp): route outbound sends through messaging facade` (+test updates same commit) | Identical send behavior; tests incl. C10 source-readers updated | not launched |
+| S1 | `socialcrm-messaging-core` | `src/lib/messaging/**` (new only) | none | 1: `feat(messaging): add provider abstraction core and ycloud adapter` | Contract = evidence §4 verbatim (no `isDefault`/`displayAddress`; channels exclude `comment`/`messenger`); YCloudAdapter delegates; contract+adapter tests; all gates green | in-review (S8 alignment pending) |
+| S2 | `socialcrm-repo-hygiene` | root scratch/PII files (list below), `.env.example`, `docs/socialcrm/repo-hygiene-report.md` | none | 1: `chore(repo): remove client PII scripts and scratch artifacts` 2: `docs(socialcrm): add repo hygiene audit report` | `git grep` finds no customer names/phones in removed set; `.env.example` `BUSINESS_OWNER_NAME` fixed; audit lists drizzle journal anomalies (verify-only, no fix); gates green | integrated (see §8) |
+| S3 | `socialcrm-render-blueprint` | `render.yaml`, `docs/socialcrm/install-render-neon.md`, `.env.example` (sync comment only if needed) | S6+S7 green | 1: `feat(infra): add render.yaml blueprint and Render+Neon install guide` | Blueprint declares web service, required env prompts, `healthCheckPath: /api/health`, cron jobs; guide covers provision→migrate→/setup→config→webhooks→verify; no secret values; lint/typecheck unaffected | blocked (R1–R3 in `slices-review.md`) |
+| S4 | B1 send facade | `broadcast.ts`, `queue/worker.ts`, `cron/followup`, `tools{WhatsApp,Management}.ts`, `create-order.ts`, `channels/router.ts`, `response-sender.ts` | S1+S8 | `refactor(whatsapp): route outbound sends through messaging facade` (+test updates same commit) | Identical send behavior; tests incl. C10 source-readers updated | not launched |
 | S5 | B2 inbound extraction | `api/whatsapp/webhook/route.ts`, adapter parse | S4 | `refactor(whatsapp): extract inbound parsing into ycloud adapter` | Ordering tests updated; fixture parity | not launched |
-| S6 | A2 journal repair | `drizzle/**`, `docs/socialcrm/migration-safety.md` | S2 report | `fix(db): repair migration journal integrity` | `drizzle-kit migrate` runs clean on ephemeral branch | not launched |
+| S6 | A2 journal repair | `drizzle/**`, `docs/socialcrm/migration-safety.md` | S2 report | `fix(db): repair migration journal integrity` | `drizzle-kit migrate` runs clean on ephemeral branch | P0 — not launched |
+| S7 | /setup neon-http fix | `src/app/setup/actions.ts`, `src/app/(admin)/admin/clients/actions.ts`, tests | none | `fix(setup): replace neon-http transaction with atomic bootstrap` | `/setup` creates first admin without `db.transaction`/advisory locks; same fix applied to `clients/actions.ts:206`; tests cover concurrency path | P0 — not launched |
+| S8 | S1 contract alignment | `src/lib/messaging/**`, `package.json` test list | S1 reviewed | `fix(messaging): align provider contract with canonical evidence` | Drops `isDefault`/`displayAddress` and `comment`/`messenger` channels; `idempotencyKey`→`externalId` passthrough; correct `retryable` classification; empty `deliveryId` handled; new tests wired into `test:agents` | not launched |
 
 S2 deletion set (from roadmap G8): `scripts/find-hector*.mjs`,
 `scripts/wipe-conv15*.mjs`, `scripts/del-order*.mjs`,
@@ -151,3 +158,6 @@ Docs-only slices run gates 1–4 only if they touched executable files.
 | 2026-10-18 | `docs(socialcrm): provider integration evidence for ycloud, zernio, kapso` | `socialcrm-provider-research` ab7ae2f | 8bdc7be |
 | 2026-10-18 | `docs(socialcrm): add self-hosted product roadmap for Render + Neon` | `socialcrm-selfhosted-readiness` 1425a9f | de8901e |
 | 2026-10-18 | `docs(socialcrm): promote multiprovider source spec to canonical doc` | main (root file promotion) | fe04b2b |
+| 2026-10-19 | `docs(socialcrm): add execution control plan ...` | main | 400daa1 |
+| 2026-10-19 | Review+repair chain: evidence `37821fd`, roadmaps-review `5dbc72f`, plans-rereview `036d106`, architecture r1+r2 `ae708c1`+`d497619`, self-hosted r1+r2 `9a5c20f`+`8fa6788`, final-review `36d2a99`, slices-review `be457b6` | review branches (all docs-only, `diff --check` clean, verdicts APPROVE) | `0b1c6b1..bc6b176` |
+| 2026-10-19 | `chore(repo): remove client PII scripts and scratch artifacts` + `docs(socialcrm): add repo hygiene audit report` | `socialcrm-repo-hygiene` `332acf0`+`31ea0f6` | pending below |
