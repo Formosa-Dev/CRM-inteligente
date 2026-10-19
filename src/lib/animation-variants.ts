@@ -25,15 +25,6 @@ export const fadeUpSmall: Variants = {
   },
 };
 
-export const scaleIn: Variants = {
-  hidden: { opacity: 0, scale: 0.95 },
-  visible: {
-    opacity: 1,
-    scale: 1,
-    transition: { duration: 0.5, ease: "easeOut" },
-  },
-};
-
 export const staggerContainer: Variants = {
   hidden: {},
   visible: {
@@ -93,22 +84,6 @@ export const clipReveal: Variants = {
     clipPath: "inset(0% 0% 0% 0% round 16px)",
     scale: 1,
     transition: { duration: 0.7, ease: [0.33, 1, 0.68, 1] },
-  },
-};
-
-export const wordRevealContainer: Variants = {
-  hidden: {},
-  visible: {
-    transition: { staggerChildren: 0.09, delayChildren: 0.1 },
-  },
-};
-
-export const wordReveal: Variants = {
-  hidden: { y: "115%", rotate: 4 },
-  visible: {
-    y: "0%",
-    rotate: 0,
-    transition: { duration: 0.65, ease: [0.33, 1, 0.68, 1] },
   },
 };
 

@@ -114,12 +114,3 @@ export function sanitizePersistedField(value: string | null | undefined): string
     .slice(0, MAX_PERSISTED_FIELD_LENGTH);
   return `«${cleaned}»`;
 }
-
-// Server-side version for agent
-export function createPromptSecurityServer() {
-  return {
-    sanitizeInput,
-    detectInjection,
-    sanitizePersistedField,
-  };
-}

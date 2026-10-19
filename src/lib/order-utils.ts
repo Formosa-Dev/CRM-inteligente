@@ -1,7 +1,6 @@
 import { db } from "@/db";
 import { orders, products, promotions } from "@/db/schema";
 import { eq, and, sql } from "drizzle-orm";
-import { normalizePhone, isValidPhone as normalizedIsValid } from "@/lib/phone-utils";
 
 type InputItem = { name: string; quantity: number; price?: number; unitPrice?: number };
 export type ResolvedItem = { name: string; quantity: number; price: number; unitPrice: number; productId?: number };
@@ -29,22 +28,6 @@ export function matchCatalog<T extends { name: string }>(input: string, catalog:
 // FIX CRITICAL: resolveItems() IGNORA item.price e item.unitPrice del LLM.
 // Solo usa precios reales de la DB. Si no hay match en DB, unitPrice = 0.
 // Ver: docs/aprendizaje-chats-dueno.md + sdd/rediseno-bot-ventas/
-
-// ─── Validar teléfono Argentino ────────────────────────────────────────
-/**
- * @deprecated Usar `normalizePhone()` de `@/lib/phone-utils` en nuevos desarrollos.
- * Esta función se mantiene por retrocompatibilidad.
- */
-export function cleanPhone(phone: string): string {
-  return normalizePhone(phone);
-}
-
-/**
- * @deprecated Usar `isValidPhone()` de `@/lib/phone-utils` en nuevos desarrollos.
- */
-export function isValidPhone(phone: string): boolean {
-  return normalizedIsValid(phone);
-}
 
 /**
  * Resuelve items contra productos reales de la DB.

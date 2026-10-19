@@ -72,17 +72,3 @@ export function computeOrderTotal(
   const fee = Number(deliveryFee) || 0;
   return subtotal + (fee > 0 ? fee : 0);
 }
-
-export function parseTags(notes: string | null): string[] {
-  if (!notes) return [];
-  try {
-    const parsed = JSON.parse(notes);
-    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-export function stringifyTags(tags: string[]): string {
-  return JSON.stringify(tags);
-}

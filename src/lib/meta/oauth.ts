@@ -1,4 +1,4 @@
-import { encrypt, decrypt } from "@/lib/encryption";
+import { encrypt } from "@/lib/encryption";
 
 const META_GRAPH_VERSION = "v22.0";
 
@@ -76,8 +76,4 @@ export async function getMetaBusinessInfo(accessToken: string): Promise<{
 
 export function encryptToken(token: string): string {
   return encrypt(token);
-}
-
-export function decryptToken(encrypted: string): string {
-  return decrypt(encrypted);
 }

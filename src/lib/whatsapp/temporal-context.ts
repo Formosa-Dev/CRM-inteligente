@@ -78,20 +78,8 @@ export function isSameArgentinaDay(a: Date | string | number, b: Date | string |
   return argentinaDayKey(a) === argentinaDayKey(b);
 }
 
-export function isTodayArgentina(value: Date | string | number, now: Date = new Date()): boolean {
-  return isSameArgentinaDay(value, now);
-}
-
 export function ageInHours(createdAt: Date | string | number, now: Date = new Date()): number {
   return (toDate(now).getTime() - toDate(createdAt).getTime()) / 3_600_000;
-}
-
-export function isWithinActiveWindow(
-  createdAt: Date | string | number,
-  now: Date = new Date(),
-  hours: number = ACTIVE_ORDER_LIFECYCLE_HOURS,
-): boolean {
-  return ageInHours(createdAt, now) < hours;
 }
 
 function timeZoneOffsetMs(timeZone: string, date: Date): number {

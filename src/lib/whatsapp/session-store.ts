@@ -16,7 +16,6 @@ import {
 } from "@/db/schema";
 import {
   classifyBoundary,
-  createInitialSessionState,
   SessionPolicyService,
   type AssetKind,
   type BoundarySignal,
@@ -253,9 +252,4 @@ export async function loadSessionState(
   conversationId: number
 ): Promise<ConversationSessionState | null> {
   return new DrizzleSessionPolicyRepository().load(conversationId);
-}
-
-/** Creates the initial in-memory state for callers that need a fallback shape. */
-export function initialSessionState(conversationId: number): ConversationSessionState {
-  return createInitialSessionState(conversationId);
 }
