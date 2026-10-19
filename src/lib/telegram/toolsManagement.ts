@@ -6,6 +6,12 @@ import { eq, desc, ilike, or, gte, lte, count, and, asc, sql, type Column, type 
 import type { PgTable } from "drizzle-orm/pg-core";
 import { normalizePhone } from "@/lib/phone-utils";
 import { getArgentinaDayIndex } from "@/lib/argentina-time";
+import {
+  argentinaDayStart,
+  argentinaMonthStart,
+  argentinaTodayRange,
+  argentinaWeekStart,
+} from "./ar-time";
 
 // Formatos soportados de agent_config.business_hours: array por día (admin UI)
 // u objeto legacy { enabled, days, open, close }
@@ -232,17 +238,14 @@ export const getAnalyticsTool = tool({
   }),
   execute: async ({ period }) => {
     const now = new Date();
-    let start: Date;
-
-    if (period === "today") {
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    } else if (period === "week") {
-      const day = now.getDay(); // 0=dom, 1=lun...
-      const diff = (day === 0 ? 6 : day - 1); // lunes como inicio
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff);
-    } else {
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
-    }
+    // Los bordes de período se calculan en calendario Argentina (el servidor
+    // corre en UTC): hoy/semana/mes son días locales del negocio.
+    const start =
+      period === "today"
+        ? argentinaDayStart(now)
+        : period === "week"
+          ? argentinaWeekStart(now)
+          : argentinaMonthStart(now);
 
     const end = new Date(now.getTime() + 1); // +1ms para incluir ahora
 
@@ -613,8 +616,8 @@ export const getBusinessSummaryTool = tool({
   execute: async () => {
     const [config] = await db.select().from(agentConfig).where(eq(agentConfig.id, 1)).limit(1);
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // "Hoy" es el día calendario Argentina, no el UTC del servidor.
+    const { start: todayStart, end: todayEnd } = argentinaTodayRange();
 
     const [pendingOrders] = await db
       .select({ count: count() }).from(orders)
@@ -622,11 +625,11 @@ export const getBusinessSummaryTool = tool({
 
     const [todayOrders] = await db
       .select({ count: count() }).from(orders)
-      .where(and(gte(orders.createdAt, today), lte(orders.createdAt, new Date(today.getTime() + 86400000))));
+      .where(and(gte(orders.createdAt, todayStart), lte(orders.createdAt, todayEnd)));
 
     const [newLeads] = await db
       .select({ count: count() }).from(leads)
-      .where(gte(leads.createdAt, today));
+      .where(gte(leads.createdAt, todayStart));
 
     const lines = [
       `📊 *RESUMEN DEL NEGOCIO*`,

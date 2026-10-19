@@ -4,8 +4,32 @@ import { db } from "@/db";
 import { orders, products } from "@/db/schema";
 import { and, gte, lte, eq, ne } from "drizzle-orm";
 import { resolveClientNamesBatch } from "@/lib/lead-utils";
+import {
+  argentinaDayStartFromInput,
+  argentinaMonthStart,
+  argentinaTodayRange,
+  argentinaWeekStart,
+} from "./ar-time";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// Los períodos son calendario Argentina: el servidor corre en UTC y
+// `new Date(y,m,d)`/`getDay()` locales sesgaría las ventanas 3 horas.
+function periodStart(
+  period: "today" | "week" | "month" | "all",
+  now: Date
+): Date {
+  switch (period) {
+    case "today":
+      return argentinaTodayRange(now).start;
+    case "week":
+      return argentinaWeekStart(now);
+    case "month":
+      return argentinaMonthStart(now);
+    default:
+      return new Date(2020, 0, 1);
+  }
+}
 
 interface OrderItem {
   name: string;
@@ -58,9 +82,12 @@ export const getSalesByDateRange = tool({
       .describe("Filtrar por tipo: hamburguesas | pan_mayorista"),
   }),
   execute: async ({ startDate, endDate, orderType }) => {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
+    // Las fechas del rango son días calendario Argentina: el servidor corre
+    // en UTC, así que `new Date(ymd)`/`setHours` sesgaría la ventana 3hs.
+    const start = argentinaDayStartFromInput(startDate);
+    const end = new Date(
+      argentinaDayStartFromInput(endDate).getTime() + 24 * 60 * 60 * 1000 - 1
+    );
 
     const conditions = [
       gte(orders.createdAt, start),
@@ -162,17 +189,7 @@ export const getTopProducts = tool({
   }),
   execute: async ({ period = "month", limit = 10 }) => {
     const now = new Date();
-    let start: Date;
-
-    if (period === "week") {
-      const day = now.getDay();
-      const diff = day === 0 ? 6 : day - 1;
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff);
-    } else if (period === "month") {
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
-    } else {
-      start = new Date(2020, 0, 1);
-    }
+    const start = periodStart(period, now);
 
     const rows = await db
       .select({ items: orders.items, orderType: orders.orderType })
@@ -235,17 +252,7 @@ export const getTopClients = tool({
   }),
   execute: async ({ period = "month", sortBy = "orders", limit = 10 }) => {
     const now = new Date();
-    let start: Date;
-
-    if (period === "week") {
-      const day = now.getDay();
-      const diff = day === 0 ? 6 : day - 1;
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff);
-    } else if (period === "month") {
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
-    } else {
-      start = new Date(2020, 0, 1);
-    }
+    const start = periodStart(period, now);
 
     const rows = await db
       .select({
@@ -319,19 +326,7 @@ export const getAverageTicket = tool({
   }),
   execute: async ({ period = "month", orderType }) => {
     const now = new Date();
-    let start: Date;
-
-    if (period === "today") {
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    } else if (period === "week") {
-      const day = now.getDay();
-      const diff = day === 0 ? 6 : day - 1;
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff);
-    } else if (period === "month") {
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
-    } else {
-      start = new Date(2020, 0, 1);
-    }
+    const start = periodStart(period, now);
 
     const conditions = [
       gte(orders.createdAt, start),

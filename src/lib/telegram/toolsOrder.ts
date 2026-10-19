@@ -7,6 +7,7 @@ import { resolveItems, validateResolvedOrderItems, decrementStockBestEffort } fr
 import { normalizePhone, isValidPhone } from "@/lib/phone-utils";
 import { resolveClientName } from "@/lib/lead-utils";
 import { isSafeCustomerNameMatch } from "./customer-match";
+import { argentinaWallTime } from "./ar-time";
 
 
 // ─── manageOrder: Herramientas de gestión de pedidos
@@ -605,26 +606,35 @@ export const createDeliveredOrder = tool({
       leadId = newLead.id;
     }
 
-    // 2. Parsear fecha de entrega
+    // 2. Parsear fecha de entrega — siempre como hora de pared Argentina
+    //    (el servidor corre en UTC; `new Date(y,m,d,h)` la armaría en UTC y
+    //    el pedido caería fuera de la ventana de caja del turno real).
     let deliveredTimestamp: Date;
     if (deliveredAt) {
-      // Intentar parsear la fecha
       const clean = deliveredAt.trim();
-      // Formatos soportados: "DD/MM" (asume hoy), "DD/MM HH:MM", "YYYY-MM-DD HH:MM"
       const now = new Date();
       if (/^\d{1,2}\/\d{1,2}$/.test(clean)) {
-        // Solo día/mes → asume este año
+        // Solo día/mes → mediodía AR del año corriente
         const [d, m] = clean.split("/").map(Number);
-        deliveredTimestamp = new Date(now.getFullYear(), m - 1, d, 12, 0);
+        deliveredTimestamp = argentinaWallTime(d, m, 12, 0, now);
       } else if (/^\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2}$/.test(clean)) {
-        const [dm, h] = clean.split(" ");
+        const [dm, h] = clean.split(/\s+/);
         const [d, m] = dm.split("/").map(Number);
         const [hh, mi] = h.split(":").map(Number);
-        deliveredTimestamp = new Date(now.getFullYear(), m - 1, d, hh, mi);
-      } else if (/^\d{4}-\d{2}-\d{2}/.test(clean)) {
-        deliveredTimestamp = new Date(clean);
+        deliveredTimestamp = argentinaWallTime(d, m, hh, mi, now);
+      } else if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+        // Solo fecha ISO → mediodía AR de ese día
+        const [y, m, d] = clean.split("-").map(Number);
+        deliveredTimestamp = argentinaWallTime(d, m, 12, 0, now, y);
+      } else if (/^\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}/.test(clean) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(clean)) {
+        // ISO sin zona → hora de pared AR (con zona explícita se respeta tal cual)
+        const [ymd, hm] = clean.split(/[T ]/);
+        const [y, m, d] = ymd.split("-").map(Number);
+        const [hh, mi] = hm.split(":").map(Number);
+        deliveredTimestamp = argentinaWallTime(d, m, hh, mi ?? 0, now, y);
       } else {
-        deliveredTimestamp = now;
+        const parsed = new Date(clean);
+        deliveredTimestamp = Number.isNaN(parsed.getTime()) ? now : parsed;
       }
     } else {
       deliveredTimestamp = new Date();
@@ -657,6 +667,7 @@ export const createDeliveredOrder = tool({
     await decrementStockBestEffort(resolvedItems);
 
     const dateStr = deliveredTimestamp.toLocaleDateString("es-AR", {
+      timeZone: "America/Argentina/Buenos_Aires",
       day: "2-digit", month: "2-digit",
       hour: "2-digit", minute: "2-digit",
     });
