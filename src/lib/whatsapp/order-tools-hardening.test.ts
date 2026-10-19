@@ -8,6 +8,11 @@ import {
   detectInjection,
   MAX_PERSISTED_FIELD_LENGTH,
 } from "./tools/prompt-security";
+import {
+  createSendDocumentTool,
+  createSendImageTool,
+  isAllowedMediaUrl,
+} from "./tools/send-media-tools";
 
 const toolsSource = readFileSync(
   new URL("./tools/order-management-tools.ts", import.meta.url),
@@ -27,6 +32,10 @@ const lifecycleSource = readFileSync(
 );
 const agentSource = readFileSync(
   new URL("./agent.ts", import.meta.url),
+  "utf8",
+);
+const sendMediaSource = readFileSync(
+  new URL("./tools/send-media-tools.ts", import.meta.url),
   "utf8",
 );
 
@@ -199,3 +208,69 @@ describe("A-22 persisted prompt fields are neutralized", () => {
     assert.match(agentSource, /screenItems\(.*pendingOrder|screenItems\(customerContext\.pendingOrder\.items/);
   });
 });
+
+// A-23: the inbound pipeline does not implement document sending — the tool
+// must fail explicitly instead of emitting a fake "Documento enviado" _media.
+describe("A-23 sendDocument fails instead of faking success", () => {
+  test("execute returns a failure message, never a _media payload", async () => {
+    const tool = createSendDocumentTool(1, "5493704111111");
+    const execute = tool.execute as (args: unknown, opts: unknown) => Promise<string>;
+    const out = await execute(
+      { documentUrl: "https://evil.example.com/x.pdf", caption: "c", fileName: "f.pdf" },
+      {},
+    );
+    assert.match(out, /no está disponible/i);
+    assert.doesNotMatch(out, /_media|"document"/);
+  });
+
+  test("source emits no _media document payload and description stops advertising", () => {
+    const docSection = sendMediaSource.slice(sendMediaSource.indexOf("export function createSendDocumentTool"));
+    assert.doesNotMatch(docSection, /_media/, "document tool must not produce a media payload");
+    assert.match(docSection, /NO está disponible/i);
+    // prompt tools list must not advertise document sending
+    assert.doesNotMatch(promptSource, /sendDocument ->/, "prompt must not list sendDocument as usable");
+  });
+});
+
+// A-24: outbound media URLs are allowlisted — same-origin, media-library or
+// operator-configured hosts only; arbitrary model URLs are rejected.
+describe("A-24 sendImage media URL allowlist", () => {
+  const ENV_KEY = "WHATSAPP_MEDIA_ALLOWED_HOSTS";
+
+  test("rejects non-https, malformed and non-allowlisted hosts", async () => {
+    const prev = process.env[ENV_KEY];
+    process.env[ENV_KEY] = "cdn.example.com";
+    try {
+      assert.equal(await isAllowedMediaUrl("not a url"), false);
+      assert.equal(await isAllowedMediaUrl("http://cdn.example.com/x.png"), false, "http rejected");
+      assert.equal(await isAllowedMediaUrl("https://evil.example.net/x.png"), false);
+      assert.equal(await isAllowedMediaUrl("https://cdn.example.com/x.png"), true, "configured host allowed");
+      assert.equal(
+        await isAllowedMediaUrl("https://user:pass@cdn.example.com/x.png"),
+        false,
+        "userinfo URLs rejected",
+      );
+    } finally {
+      if (prev === undefined) delete process.env[ENV_KEY];
+      else process.env[ENV_KEY] = prev;
+    }
+  });
+
+  test("sendImage returns failure text for a blocked host", async () => {
+    const prev = process.env[ENV_KEY];
+    delete process.env[ENV_KEY];
+    try {
+      const tool = createSendImageTool(1, "5493704111111");
+      const execute = tool.execute as (args: unknown, opts: unknown) => Promise<string>;
+      const out = await execute(
+        { imageUrl: "https://attacker.invalid/x.png", caption: "" },
+        {},
+      );
+      assert.match(out, /no pertenece a los medios/i);
+      assert.doesNotMatch(out, /_media/);
+    } finally {
+      if (prev !== undefined) process.env[ENV_KEY] = prev;
+    }
+  });
+});
+
