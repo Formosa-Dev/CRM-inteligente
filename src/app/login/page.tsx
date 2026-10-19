@@ -6,6 +6,7 @@ import LoginShell from "./login-shell";
 
 export const metadata = {
   title: "Iniciar sesión — Admin",
+  robots: { index: false },
 };
 
 export const dynamic = "force-dynamic";

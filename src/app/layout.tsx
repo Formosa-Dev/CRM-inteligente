@@ -4,7 +4,8 @@ import "./globals.css";
 import { MetaPixelProvider } from "@/components/meta/meta-pixel-provider";
 import { CartProvider } from "@/lib/cart/cart-context";
 import { PublicToaster } from "@/components/layout/public-toaster";
-import { getBusinessInfo, type BusinessInfo } from "@/lib/business";
+import { getBusinessInfo } from "@/lib/business";
+import { getSiteUrl } from "@/lib/site-url";
 
 const poppins = Poppins({
   variable: "--font-poppins",
@@ -34,21 +35,12 @@ const geistMono = Geist_Mono({
 
 const OG_FALLBACK_IMAGE = "/assets/images/logo.png";
 
-function resolveMetadataBase(biz: BusinessInfo): URL {
-  const raw = process.env.NEXT_PUBLIC_APP_URL || biz.website || "";
-  try {
-    return new URL(raw.startsWith("http") ? raw : `https://${raw}`);
-  } catch {
-    return new URL("http://localhost:3000");
-  }
-}
-
 export async function generateMetadata(): Promise<Metadata> {
   const biz = await getBusinessInfo();
   const description =
     biz.description || `${biz.name} — pedidos online por WhatsApp.`;
   return {
-    metadataBase: resolveMetadataBase(biz),
+    metadataBase: new URL(getSiteUrl()),
     title: {
       default: biz.name,
       template: `%s — ${biz.name}`,

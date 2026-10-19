@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Configuración inicial",
+  robots: { index: false },
 };
 
 export default async function SetupPage() {
