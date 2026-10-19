@@ -50,6 +50,9 @@ services:
 
       # ---------- Cron auth (auto-generated; cron jobs below copy it via envVarKey) ----------
       # Gates GET /api/cron/*. Not prompted — Render generates a random value.
+      # The generated value is base64 and can contain `+`/`/`/`=`, so the cron
+      # commands below URL-encode it (`--data-urlencode`) — interpolating it raw
+      # into the query string would decode `+` as a space and 401.
       # Note: a value set later in /admin/agent (DB) takes precedence over this
       # env var — keep them equal or leave the admin field empty (see guide).
       - key: CRON_SECRET
@@ -89,7 +92,7 @@ services:
     runtime: node
     schedule: "*/15 * * * *"
     buildCommand: "true"
-    startCommand: 'curl -fsS "${APP_URL%/}/api/cron/followup?key=${CRON_SECRET}"'
+    startCommand: 'curl -fsS --get "${APP_URL%/}/api/cron/followup" --data-urlencode "key=${CRON_SECRET}"'
     envVars:
       - key: APP_URL
         fromService:
@@ -109,7 +112,7 @@ services:
     runtime: node
     schedule: "*/30 * * * *"
     buildCommand: "true"
-    startCommand: 'curl -fsS "${APP_URL%/}/api/cron/reconcile?key=${CRON_SECRET}"'
+    startCommand: 'curl -fsS --get "${APP_URL%/}/api/cron/reconcile" --data-urlencode "key=${CRON_SECRET}"'
     envVars:
       - key: APP_URL
         fromService:
@@ -129,7 +132,7 @@ services:
     runtime: node
     schedule: "0 13 * * *"
     buildCommand: "true"
-    startCommand: 'curl -fsS "${APP_URL%/}/api/cron/reconcile?key=${CRON_SECRET}&mode=sweep"'
+    startCommand: 'curl -fsS --get "${APP_URL%/}/api/cron/reconcile" --data-urlencode "key=${CRON_SECRET}" --data-urlencode "mode=sweep"'
     envVars:
       - key: APP_URL
         fromService:
