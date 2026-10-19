@@ -205,6 +205,7 @@ export async function updateOrderStatus(
           }
         );
         if (!notified.ok) {
+          revalidatePath("/admin/orders");
           return {
             success: false,
             message: `Estado actualizado, pero no se pudo notificar: ${notified.error}`,
@@ -237,6 +238,7 @@ export async function updateOrderStatus(
           );
         }
       } catch (e) {
+        revalidatePath("/admin/orders");
         return {
           success: false,
           message: `Estado actualizado, pero no se pudo notificar: ${
