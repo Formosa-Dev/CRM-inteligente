@@ -121,19 +121,41 @@ test("only clearing after success rotates the id", () => {
 test("response mapping clears only on confirmed success", () => {
   assert.equal(interpretCheckoutOutcome(true, 200), "success");
   assert.equal(shouldClearAfter("success"), true);
-  for (const [status, expected] of [
-    [400, "rejected"],
-    [413, "rejected"],
-    [415, "rejected"],
-    [429, "rejected"],
-    [409, "ambiguous"],
-    [500, "ambiguous"],
-    [503, "ambiguous"],
+  for (const [status, code, expected] of [
+    [400, null, "rejected"],
+    [413, null, "rejected"],
+    [415, null, "rejected"],
+    [422, null, "rejected"],
+    [422, "catalog_changed", "rejected"],
+    [429, null, "rejected"],
+    // The 409 idempotency/replay path stays ambiguous — an order may exist.
+    [409, null, "ambiguous"],
+    [500, null, "ambiguous"],
+    [503, null, "ambiguous"],
   ] as const) {
-    const outcome = interpretCheckoutOutcome(false, status);
+    const outcome = interpretCheckoutOutcome(false, status, code);
     assert.equal(outcome, expected, `status ${status}`);
     assert.equal(shouldClearAfter(outcome), false, `status ${status} must not clear`);
   }
+});
+
+test("catalog conflicts are rejected with an update-the-cart message, never ambiguous", () => {
+  const outcome = interpretCheckoutOutcome(false, 422, "catalog_changed");
+  assert.equal(outcome, "rejected");
+  assert.equal(shouldClearAfter(outcome), false);
+  // The server tells the customer what changed; the fallback asks to fix the cart.
+  assert.equal(
+    checkoutFailureMessage(outcome, "Genesis no tiene disponibilidad para esa cantidad.", "catalog_changed"),
+    "Genesis no tiene disponibilidad para esa cantidad.",
+  );
+  assert.match(checkoutFailureMessage(outcome, null, "catalog_changed"), /Actualizá tu carrito/);
+  assert.doesNotMatch(checkoutFailureMessage(outcome, null, "catalog_changed"), /Verificá el estado/);
+});
+
+test("a catalog conflict still carries the code at status 409", () => {
+  // Even if a proxy rewrites the status, an explicit catalog_changed code is
+  // always a pre-creation rejection — never the ambiguous replay path.
+  assert.equal(interpretCheckoutOutcome(false, 409, "catalog_changed"), "rejected");
 });
 
 test("a reused-confirmation 409 is reported as ambiguous, never auto-retried", () => {

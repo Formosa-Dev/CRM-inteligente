@@ -130,6 +130,29 @@ test("persists a promotion with database pricing and component stock", async () 
   assert.equal(products[0].stock, 2);
 });
 
+test("catalog conflicts reject with 422 + catalog_changed, never the ambiguous 409", async () => {
+  const { deps } = fakeDeps();
+  await assert.rejects(
+    submitCheckout(parse({ items: [{ type: "product", id: 1, quantity: 99 }] }), deps),
+    (error: unknown) =>
+      error instanceof CheckoutError &&
+      error.status === 422 &&
+      error.code === "catalog_changed",
+  );
+});
+
+test("a deactivated promo rejects as a catalog conflict", async () => {
+  const { deps } = fakeDeps();
+  deps.listPromos = async () => [{ ...PROMOS[0], active: false }];
+  await assert.rejects(
+    submitCheckout(parse({ items: [{ type: "promo", id: 8, quantity: 1 }] }), deps),
+    (error: unknown) =>
+      error instanceof CheckoutError &&
+      error.status === 422 &&
+      error.code === "catalog_changed",
+  );
+});
+
 test("persists the delivery address and includes it in the WhatsApp message", async () => {
   const { deps, orders } = fakeDeps();
   const receipt = await submitCheckout(parse({ fulfillmentMode: "delivery", deliveryAddress: "Av. Siempre Viva 742, Formosa" }), deps);

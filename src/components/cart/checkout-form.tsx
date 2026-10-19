@@ -95,16 +95,16 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
           ...fulfillmentPayload(fulfillmentMode, deliveryAddress),
         }),
       });
-      let data: Partial<CheckoutReceipt> & { error?: string } = {};
+      let data: Partial<CheckoutReceipt> & { error?: string; code?: string } = {};
       try {
         data = await response.json();
       } catch {
         data = {};
       }
-      const outcome = interpretCheckoutOutcome(response.ok, response.status);
+      const outcome = interpretCheckoutOutcome(response.ok, response.status, data.code);
       if (!shouldClearAfter(outcome)) {
         // Keep the stable attempt id and the cart. No automatic retry.
-        setError(checkoutFailureMessage(outcome, data.error));
+        setError(checkoutFailureMessage(outcome, data.error, data.code));
         return;
       }
       if (completed.current) return;
