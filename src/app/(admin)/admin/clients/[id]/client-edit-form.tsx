@@ -7,7 +7,7 @@ import { updateClient } from "../actions";
 interface LeadData {
   id: number;
   name: string | null;
-  phone: string;
+  phone: string | null;
   email: string | null;
   address: string | null;
   notes: string | null;
@@ -41,7 +41,7 @@ export function ClientEditForm({ lead }: { lead: LeadData | null }) {
       const tags = tagsStr.split(",").map((t) => t.trim()).filter(Boolean);
 
       // Usar lead.phone (prop original) en vez de phone (state editable)
-      const result = await updateClient(lead.phone, {
+      const result = await updateClient(lead.phone ?? "", {
         name,
         email: email || undefined,
         address: address || undefined,

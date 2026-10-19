@@ -89,6 +89,7 @@ export async function fetchClients(params: {
   }
 
   for (const l of leadPhones) {
+    if (!l.phone) continue;
     const existing = phoneMap.get(l.phone);
     if (existing) {
       existing.leadStatus = l.status;

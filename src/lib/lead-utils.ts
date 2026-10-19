@@ -73,6 +73,8 @@ export async function resolveClientNamesBatch(
   // First row per phone wins — matches resolveClientName's ORDER BY id ASC LIMIT 1
   const leadNameMap = new Map<string, string | null>();
   for (const l of leadRows) {
+    // leads.phone is nullable (S11); nulls can't match uniquePhones anyway.
+    if (!l.phone) continue;
     if (!leadNameMap.has(l.phone)) leadNameMap.set(l.phone, l.name);
   }
   const result = new Map<string, string>();

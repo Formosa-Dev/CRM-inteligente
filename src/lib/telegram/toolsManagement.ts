@@ -99,7 +99,7 @@ export const getClientDetailTool = tool({
         createdAt: orders.createdAt,
       })
       .from(orders)
-      .where(eq(orders.phoneNumber, lead.phone))
+      .where(eq(orders.phoneNumber, lead.phone ?? ""))
       .orderBy(desc(orders.createdAt))
       .limit(3);
 
@@ -779,7 +779,7 @@ export const getCustomerFullProfileTool = tool({
     const clientOrders = await db
       .select()
       .from(orders)
-      .where(eq(orders.phoneNumber, lead.phone))
+      .where(eq(orders.phoneNumber, lead.phone ?? ""))
       .orderBy(desc(orders.createdAt))
       .limit(10);
 
@@ -799,7 +799,7 @@ export const getCustomerFullProfileTool = tool({
     // 3. Direcciones guardadas
     try {
       const { getCustomerAddresses } = await import("@/lib/addresses");
-      const addrs = await getCustomerAddresses(lead.phone);
+      const addrs = await getCustomerAddresses(lead.phone ?? "");
       if (addrs.length > 0) {
         sections.push(`\n📍 DIRECCIONES (${addrs.length}):`);
         for (const a of addrs) {

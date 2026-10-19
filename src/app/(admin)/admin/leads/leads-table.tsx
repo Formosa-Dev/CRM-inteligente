@@ -32,7 +32,7 @@ type LeadStatus = "new" | "contacted" | "converted" | "lost";
 interface Lead {
   id: number;
   name: string | null;
-  phone: string;
+  phone: string | null;
   email: string | null;
   firstMessage: string | null;
   refCode: string | null;
@@ -385,7 +385,7 @@ export default function LeadsTable({
                       <button
                         onClick={async () => {
                           setDeleting(true);
-                          await deleteLead(selectedLead!.phone);
+                          if (selectedLead?.phone) await deleteLead(selectedLead.phone);
                           setSheetOpen(false);
                           setConfirmDelete(false);
                           setDeleting(false);
@@ -424,7 +424,7 @@ export default function LeadsTable({
           open={orderModalOpen}
           onClose={() => setOrderModalOpen(false)}
           clientName={selectedLead.name ?? undefined}
-          clientPhone={selectedLead.phone}
+          clientPhone={selectedLead.phone ?? undefined}
         />
       )}
     </>

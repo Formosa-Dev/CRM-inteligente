@@ -16,6 +16,10 @@ interface ReplyInputProps {
 const channelLabels: Record<Channel, string> = {
   whatsapp: "WhatsApp",
   telegram: "Telegram",
+  instagram: "Instagram",
+  facebook: "Facebook",
+  sms: "SMS",
+  reddit: "Reddit",
 };
 
 export function ReplyInput({

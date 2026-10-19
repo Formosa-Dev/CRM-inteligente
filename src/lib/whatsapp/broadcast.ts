@@ -42,7 +42,7 @@ export async function getBroadcastRecipients(
   filter: BroadcastFilter,
   hardLimit: number = BROADCAST_HARD_LIMIT
 ): Promise<BroadcastRecipient[]> {
-  let rows: { phone: string; name: string | null }[] = [];
+  let rows: { phone: string | null; name: string | null }[] = [];
 
   switch (filter.type) {
     case "b2b":
@@ -158,7 +158,7 @@ export async function getBroadcastRecipients(
       break;
   }
 
-  return rows.filter((r) => r.phone?.trim());
+  return rows.filter((r): r is BroadcastRecipient => !!r.phone?.trim());
 }
 
 // ─── Dedup guard: misma copy no se manda dos veces en una ventana corta ────

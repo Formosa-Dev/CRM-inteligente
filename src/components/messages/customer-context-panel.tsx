@@ -141,7 +141,7 @@ export function CustomerContextPanel({ conversationId, className, onNewOrder }: 
         <p className="text-[10px] font-semibold text-muted-foreground tracking-wider mb-2.5">ACCIONES</p>
         {onNewOrder ? (
           <button
-            onClick={() => onNewOrder(profile.phone, profile.name ?? "")}
+            onClick={() => onNewOrder(profile.phone ?? "", profile.name ?? "")}
             className="flex items-center justify-center gap-2 w-full rounded-lg bg-primary/10 hover:bg-primary/20 border border-primary/20 px-4 py-2.5 text-xs font-medium text-primary transition-colors"
           >
             <ShoppingBag className="h-3.5 w-3.5" />
@@ -164,7 +164,7 @@ export function CustomerContextPanel({ conversationId, className, onNewOrder }: 
           Agendar entrega
         </a>
         <a
-          href={`/admin/clients?search=${encodeURIComponent(profile.phone)}`}
+          href={`/admin/clients?search=${encodeURIComponent(profile.phone ?? "")}`}
           className="flex items-center justify-center gap-2 w-full rounded-lg bg-muted/40 hover:bg-muted border border-border px-4 py-2.5 text-xs font-medium text-foreground transition-colors"
         >
           <Shield className="h-3.5 w-3.5" />

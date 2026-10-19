@@ -92,6 +92,13 @@
       "when": 1792000001000,
       "tag": "0012_drop_product_line",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792389838432,
+      "tag": "0013_channel_accounts",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,10 @@
-export type Channel = "whatsapp" | "telegram";
+export type Channel =
+  | "whatsapp"
+  | "telegram"
+  | "instagram"
+  | "facebook"
+  | "sms"
+  | "reddit";
 
 export type MessageRole = "user" | "assistant" | "system" | "human";
 
@@ -43,7 +49,7 @@ export type ConversationFilter = "all" | "whatsapp" | "sellers" | "telegram" | "
 export interface CustomerProfile {
   id: number;
   name: string | null;
-  phone: string;
+  phone: string | null;
   email: string | null;
   address: string | null;
   status: "new" | "contacted" | "converted" | "lost";

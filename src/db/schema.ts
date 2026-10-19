@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   pgEnum,
@@ -45,7 +46,14 @@ export const leadStatusEnum = pgEnum("lead_status", [
 
 export const clientTypeEnum = pgEnum("client_type", ["b2c", "b2b"]);
 
-export const channelEnum = pgEnum("channel", ["whatsapp", "telegram"]);
+export const channelEnum = pgEnum("channel", [
+  "whatsapp",
+  "telegram",
+  "instagram",
+  "facebook",
+  "sms",
+  "reddit",
+]);
 export const messageRoleEnum = pgEnum("message_role", ["user", "assistant", "system", "human"]);
 export const sessionModeEnum = pgEnum("conversation_session_mode", ["commercial", "personal_acknowledged", "handed_off"]);
 export const sessionIntentEnum = pgEnum("conversation_session_intent", ["catalog", "order", "delivery", "support", "other"]);
@@ -182,9 +190,40 @@ export const agentConfig = pgTable("agent_config", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// ─── Channel Accounts (one row per connected provider account/number) ────────
+// Multi-provider support: each row is a concrete sender (WhatsApp number via
+// YCloud/Kapso, social account via Zernio). `credentialsRef` stores WHERE the
+// secrets live (`env:YCLOUD_*`, `agent_config`, future vault ref) — never the
+// secret itself. `tenantId` stays the constant "default" (single install).
+
+export const channelAccounts = pgTable("channel_accounts", {
+  id: serial("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().default("default"),
+  provider: text("provider").notNull(), // ycloud | zernio | kapso
+  channel: channelEnum("channel").notNull(),
+  // Provider's own id for the account: ycloud E.164 sender · zernio accountId · kapso phoneNumberId
+  providerAccountId: text("provider_account_id").notNull(),
+  // E.164 number, @handle, or page id — the surface customers see
+  senderAddress: text("sender_address").notNull(),
+  displayName: text("display_name"),
+  credentialsRef: text("credentials_ref"),
+  agentConfigId: integer("agent_config_id").references(() => agentConfig.id),
+  status: text("status").notNull().default("active"), // active | disconnected | error
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  providerAccountUq: uniqueIndex("channel_accounts_provider_account_uq").on(table.provider, table.providerAccountId),
+}));
+
 export const conversations = pgTable("conversations", {
   id: serial("id").primaryKey(),
-  whatsappId: varchar("whatsapp_id", { length: 255 }).notNull().unique(),
+  // Nullable since multi-channel (S11): social identities have no whatsappId.
+  // The legacy UNIQUE constraint stays — Postgres allows multiple NULLs, so
+  // non-null dedup is preserved; identity-level uniqueness now also lives on
+  // the (channel, external_user_id) partial unique index below.
+  whatsappId: varchar("whatsapp_id", { length: 255 }).unique(),
+  channelAccountId: integer("channel_account_id").references(() => channelAccounts.id),
+  externalThreadId: text("external_thread_id"), // provider thread/conversation id
   customerName: varchar("customer_name", { length: 255 }),
   customerPhone: varchar("customer_phone", { length: 50 }),
   messages: jsonb("messages").$type<Record<string, unknown>[]>().default([]),
@@ -205,7 +244,11 @@ export const conversations = pgTable("conversations", {
   }>().default({ repromptCount: 0, lastUserMessageType: "other", lastSuggestedProducts: [], lastTools: [] }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  channelExternalUserUq: uniqueIndex("conversations_channel_external_user_uq")
+    .on(table.channel, table.externalUserId)
+    .where(sql`external_user_id is not null`),
+}));
 
 // Durable boundary state only: business entities remain authoritative in their own tables.
 export const conversationSessionStates = pgTable("conversation_session_states", {
@@ -274,6 +317,7 @@ export const chatMessages = pgTable("chat_messages", {
     description?: string;
   }[]>().default([]),
   platformMessageId: varchar("platform_message_id", { length: 255 }),
+  channelAccountId: integer("channel_account_id").references(() => channelAccounts.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   platformMsgUq: uniqueIndex("idx_chat_messages_platform_id").on(table.platformMessageId),
@@ -282,7 +326,12 @@ export const chatMessages = pgTable("chat_messages", {
 export const leads = pgTable("leads", {
   id: serial("id").primaryKey(),
   name: varchar("name", { length: 255 }),
-  phone: varchar("phone", { length: 50 }).notNull().unique(),
+  // Nullable since S11: social identities may have no phone. UNIQUE stays —
+  // Postgres allows multiple NULLs, so legacy phone dedup is preserved.
+  phone: varchar("phone", { length: 50 }).unique(),
+  channel: channelEnum("channel"), // set when the lead is channel-identified
+  externalUserId: text("external_user_id"), // provider-native user id (BSUID, social id)
+  channelAccountId: integer("channel_account_id").references(() => channelAccounts.id),
   email: varchar("email", { length: 255 }),
   address: text("address"),
   firstMessage: text("first_message"),
@@ -302,7 +351,11 @@ export const leads = pgTable("leads", {
   conversationId: integer("conversation_id").references(() => conversations.id),
   tags: jsonb("tags").$type<string[]>().default([]),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  channelExternalUserUq: uniqueIndex("leads_channel_external_user_uq")
+    .on(table.channel, table.externalUserId)
+    .where(sql`external_user_id is not null`),
+}));
 
 export const attachments = pgTable("attachments", {
   id: serial("id").primaryKey(),

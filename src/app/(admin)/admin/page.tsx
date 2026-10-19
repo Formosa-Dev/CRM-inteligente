@@ -65,7 +65,7 @@ async function getStats() {
 }
 
 export type ActivityItem =
-  | { type: "lead"; id: number; name: string | null; phone: string; createdAt: Date; timeLabel: string }
+  | { type: "lead"; id: number; name: string | null; phone: string | null; createdAt: Date; timeLabel: string }
   | { type: "order"; id: number; name: string | null; phone: string; createdAt: Date; timeLabel: string };
 
 async function getRecentActivity(): Promise<ActivityItem[]> {
@@ -383,7 +383,7 @@ async function getActionCards() {
       items: freshLeads.map((l) => ({
         id: l.id,
         label: l.name || "Sin nombre",
-        subtitle: l.phone,
+        subtitle: l.phone ?? "",
         phone: l.phone || undefined,
         type: "lead" as const,
       })),
