@@ -199,7 +199,7 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
           <div className="menu-cart-lines"><AnimatePresence initial={false}>{resolvedCart.map(({ selected, quantity: qty }) => <motion.div layout={!reduced} key={keyOf(selected)} className="menu-cart-line" exit={{ opacity: 0, height: 0, margin: 0, paddingTop: 0, paddingBottom: 0 }} transition={{ duration: reduced ? 0 : .2 }}><div className="menu-cart-thumb"><CatalogImage src={imageOf(selected)} alt={selected.data.name} sizes="64px" /></div><div className="menu-cart-line-copy"><h3>{selected.data.name}</h3><p>{money(priceOf(selected) * qty)}</p></div><QuantityControl quantity={qty} onAdd={() => updateItem(selected, 1)} onRemove={() => updateItem(selected, -1)} /></motion.div>)}</AnimatePresence></div>
           {hasUnavailable && <p role="alert" className="checkout-error">Hay productos que ya no están disponibles. <button type="button" onClick={() => resolvedCart.filter(item => !available(item.selected)).forEach(item => removeItem(cartKey(item.selected.type, item.selected.data.id)))}>Quitarlos del pedido</button></p>}
           <div className="menu-cart-total"><div><span>Subtotal</span><small>Envío a coordinar</small></div><motion.strong key={total} initial={reduced ? false : { opacity: .3, y: 8 }} animate={{ opacity: 1, y: 0 }}>{money(total)}</motion.strong></div>
-          {!hasUnavailable && <CheckoutForm key={cartItems.map(line => `${cartKey(line.type, line.product.id)}:${line.quantity}`).join(",")} items={checkoutLines} />}
+          {!hasUnavailable && <CheckoutForm key={checkoutLines.map(line => `${line.type}:${line.id}`).join(",")} items={checkoutLines} />}
         </>}
       </div>
     </CatalogDialog>}</AnimatePresence>

@@ -218,6 +218,21 @@ test("checkout form only completes the order on confirmed success, exactly once"
   assert.doesNotMatch(catchBlock, /completeOrder|clearCart|clearAttempt/);
 });
 
+test("checkout form remounts on line-set changes only, not quantity edits", () => {
+  // Keying the form on `key:qty` remounted it on every stepper tap and wiped
+  // the customer's name/phone mid-checkout.
+  for (const file of [
+    "src/components/cart/cart-drawer.tsx",
+    "src/app/carta-digital/menu-digital-client.tsx",
+  ]) {
+    const src = readFileSync(file, "utf8");
+    const keyStart = src.indexOf("CheckoutForm key=");
+    assert.notEqual(keyStart, -1, `${file} must render CheckoutForm`);
+    const keyExpr = src.slice(keyStart, src.indexOf("items=", keyStart));
+    assert.doesNotMatch(keyExpr, /quantity/, `${file} key must use line identity only`);
+  }
+});
+
 test("checkout form keeps one stable attempt id per signature", () => {
   assert.match(formSource, /normalizeAttemptSignature\(/);
   assert.match(formSource, /resolveAttempt\(/);

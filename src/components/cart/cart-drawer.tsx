@@ -185,7 +185,7 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
               )}
 
               {!hasStale && (
-                <CheckoutForm key={items.map(i => `${cartKey(i.type, i.product.id)}:${i.quantity}`).join(",")} items={checkoutable.map(i => ({ type: i.type, id: Number(i.product.id), quantity: i.quantity }))} />
+                <CheckoutForm key={checkoutable.map(i => cartKey(i.type, i.product.id)).join(",")} items={checkoutable.map(i => ({ type: i.type, id: Number(i.product.id), quantity: i.quantity }))} />
               )}
 
               <div className="flex justify-center">
