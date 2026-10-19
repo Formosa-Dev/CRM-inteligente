@@ -8,6 +8,7 @@ import {
 } from "./registry";
 import { kapsoProvider } from "./providers/kapso";
 import { ycloudProvider } from "./providers/ycloud";
+import { zernioProvider } from "./providers/zernio";
 import type { MessagingProvider, ProviderId } from "./types";
 
 const VALID_PROVIDER_IDS: ProviderId[] = ["ycloud", "zernio", "kapso"];
@@ -100,22 +101,27 @@ export function describeMessagingProviderContract(
 
 describeMessagingProviderContract(ycloudProvider);
 describeMessagingProviderContract(kapsoProvider);
+describeMessagingProviderContract(zernioProvider);
 
 describe("provider registry", () => {
   test("getProvider returns the registered adapters", () => {
     assert.equal(getProvider("ycloud"), ycloudProvider);
     assert.equal(getProvider("kapso"), kapsoProvider);
+    assert.equal(getProvider("zernio"), zernioProvider);
   });
 
-  test("getProvider throws for unregistered providers", () => {
-    assert.throws(() => getProvider("zernio"), /No messaging provider/);
+  test("getProvider throws for unknown provider strings", () => {
+    assert.throws(
+      () => getProvider("nope" as ProviderId),
+      /No messaging provider/
+    );
   });
 
   test("hasProvider / listProviders reflect the explicit map", () => {
     assert.equal(hasProvider("ycloud"), true);
     assert.equal(hasProvider("kapso"), true);
-    assert.equal(hasProvider("zernio"), false);
-    assert.deepEqual(listProviders(), [ycloudProvider, kapsoProvider]);
+    assert.equal(hasProvider("zernio"), true);
+    assert.deepEqual(listProviders(), [ycloudProvider, kapsoProvider, zernioProvider]);
   });
 
   test("channel 'whatsapp' is hard-wired to ycloud; other channels unassigned", () => {

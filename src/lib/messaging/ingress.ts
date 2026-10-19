@@ -35,6 +35,7 @@ import {
   findOrCreateConversation,
   insertMessage,
   isMessageDuplicate,
+  stampConversationThreadId,
 } from "@/lib/channels/router";
 
 import {
@@ -374,6 +375,15 @@ export async function handlePassiveChannelEvent(
       event.sender.phone,
       ctx.channelAccountId ?? null
     );
+
+    // Provider-native thread id → conversations.external_thread_id, the
+    // send-routing handle for conversation-scoped providers (zernio). Echoes
+    // key providerConversationId by the customer, so the thread arrives on
+    // providerThreadId instead.
+    const threadId = event.providerThreadId ?? event.providerConversationId;
+    if (threadId) {
+      await stampConversationThreadId(conversationId, threadId);
+    }
 
     const text = event.text?.trim() || `[${event.type ?? event.kind}]`;
     const content =

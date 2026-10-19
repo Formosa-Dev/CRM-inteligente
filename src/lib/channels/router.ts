@@ -686,6 +686,28 @@ export async function resolveLegacyWhatsAppCredentials(): Promise<LegacyWhatsApp
   return { kind: "resolved", credentials: { apiKey, senderAddress } };
 }
 
+/**
+ * Persists the provider-native thread id (zernio conversationId) onto the
+ * conversation — the send-routing handle for conversation-scoped providers.
+ * Best-effort: never throws; a failed stamp is retried by the next inbound.
+ */
+export async function stampConversationThreadId(
+  conversationId: number,
+  threadId: string
+): Promise<void> {
+  try {
+    await db
+      .update(conversations)
+      .set({ externalThreadId: threadId })
+      .where(eq(conversations.id, conversationId));
+  } catch (error) {
+    console.warn(
+      `[router] external_thread_id stamp failed for conv=${conversationId}`,
+      error
+    );
+  }
+}
+
 // Send outbound message via the correct channel
 export async function sendOutboundMessage(
   conversationId: number,
@@ -803,6 +825,11 @@ export async function sendOutboundMessage(
       mediaUrl && mediaType
         ? { to, type: mediaType, mediaUrl, text: content || undefined }
         : { to, type: "text", text: content || " " };
+    // Conversation-scoped providers (zernio) send into the stored thread;
+    // when it is absent the adapter opens a conversation to `to` instead.
+    if (conv.externalThreadId) {
+      msg.providerConversationId = conv.externalThreadId;
+    }
     const res = await messenger.send(msg, { channel, account });
     if (!res.ok) throw new Error(res.error);
   }

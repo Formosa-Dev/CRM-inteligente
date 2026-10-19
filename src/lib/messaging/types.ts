@@ -45,6 +45,12 @@ export interface OutboundMessage {
   interactive?: unknown; // provider-native passthrough
   replyToMessageId?: string;
   idempotencyKey?: string; // → ycloud externalId / zernio Idempotency-Key
+  /**
+   * Provider-native thread to send into (zernio conversationId, from
+   * conversations.external_thread_id). When absent, conversation-scoped
+   * providers open a new conversation addressed to `to` instead.
+   */
+  providerConversationId?: string;
 }
 
 export type SendResult =
@@ -71,6 +77,13 @@ export interface NormalizedInboundEvent {
   /** routing key: wabaId | zernio accountId | kapso phone_number_id */
   providerAccountId: string;
   providerConversationId?: string; // zernio conversationId / kapso conv.id
+  /**
+   * Provider-native thread id when `providerConversationId` carries a
+   * customer routing key instead (zernio echoes key by participantId; the
+   * zernio conversation.id lands here). Persisted to
+   * conversations.external_thread_id for conversation-scoped sends.
+   */
+  providerThreadId?: string;
   platformMessageId?: string; // wamid / mid — durable message dedup
   sender: {
     phone?: string;
