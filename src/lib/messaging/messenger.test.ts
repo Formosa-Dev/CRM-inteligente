@@ -114,7 +114,7 @@ describe("send facade — migrated call sites (C10)", () => {
     "src/lib/whatsapp/tools/create-order.ts",
     "src/lib/channels/router.ts",
     "src/lib/buffer/response-sender.ts",
-    "src/app/api/whatsapp/webhook/route.ts",
+    "src/lib/messaging/inbound-pipeline.ts",
     "src/app/(admin)/admin/orders/actions.ts",
     "src/app/(admin)/admin/dashboard-actions-server.ts",
   ];

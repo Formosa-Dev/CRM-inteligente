@@ -2,8 +2,11 @@ import { db } from "@/db";
 import { conversations, chatMessages, leads, attachments } from "@/db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { normalizePhone } from "@/lib/phone-utils";
+import type { ChannelKind } from "@/lib/messaging/types";
 
-export type Channel = "whatsapp" | "telegram";
+// Full channel universe (parity with schema channelEnum / ChannelKind).
+// Widened in S12 — social channels persist conversations without a phone.
+export type Channel = ChannelKind;
 
 export interface MediaAttachment {
   type: "image" | "audio" | "document" | "video";
@@ -26,15 +29,18 @@ export interface IncomingMessage {
 }
 
 // Find or create conversation, returns { id, isNew }
+// channelAccountId (optional, S12): stamps the channel_accounts row that owns
+// this conversation — set on create, backfilled on match when the row lacks it.
 export async function findOrCreateConversation(
   channel: Channel,
   externalUserId: string,
   customerName?: string,
-  customerPhone?: string
+  customerPhone?: string,
+  channelAccountId?: number | null
 ): Promise<{ id: number; isNew: boolean }> {
   // Try to find existing by channel + externalUserId
   const existing = await db
-    .select({ id: conversations.id })
+    .select({ id: conversations.id, channelAccountId: conversations.channelAccountId })
     .from(conversations)
     .where(
       and(
@@ -45,13 +51,19 @@ export async function findOrCreateConversation(
     .limit(1);
 
   if (existing[0]) {
+    if (channelAccountId && existing[0].channelAccountId == null) {
+      await db
+        .update(conversations)
+        .set({ channelAccountId })
+        .where(eq(conversations.id, existing[0].id));
+    }
     return { id: existing[0].id, isNew: false };
   }
 
   // For WhatsApp, also check by whatsappId (backward compat)
   if (channel === "whatsapp") {
     const byWaId = await db
-      .select({ id: conversations.id })
+      .select({ id: conversations.id, channelAccountId: conversations.channelAccountId })
       .from(conversations)
       .where(eq(conversations.whatsappId, externalUserId))
       .limit(1);
@@ -63,22 +75,36 @@ export async function findOrCreateConversation(
         .set({
           channel: "whatsapp",
           externalUserId,
+          ...(channelAccountId && byWaId[0].channelAccountId == null
+            ? { channelAccountId }
+            : {}),
         })
         .where(eq(conversations.id, byWaId[0].id));
       return { id: byWaId[0].id, isNew: false };
     }
   }
 
-  // Create new
+  // Create new. whatsappId/customerPhone only apply to phone-shaped channels:
+  // social identities (instagram/facebook/reddit) leave them null (S11 made
+  // whatsappId nullable; the legacy "tg_" prefix stays for telegram only).
+  const phoneBacked = channel === "whatsapp" || channel === "telegram";
   const [conv] = await db
     .insert(conversations)
     .values({
       whatsappId:
-        channel === "whatsapp" ? externalUserId : `tg_${externalUserId}`,
+        channel === "whatsapp"
+          ? externalUserId
+          : channel === "telegram"
+            ? `tg_${externalUserId}`
+            : null,
       customerName: customerName || null,
-      customerPhone: normalizePhone(customerPhone || externalUserId),
+      customerPhone:
+        phoneBacked || customerPhone
+          ? normalizePhone(customerPhone || externalUserId)
+          : null,
       channel,
       externalUserId,
+      channelAccountId: channelAccountId ?? null,
       status: "active",
       lastMessageAt: new Date(),
       lastMessagePreview: null,
@@ -135,7 +161,8 @@ export async function insertMessage(
   role: "user" | "assistant" | "system" | "human",
   content: string,
   contentAttributes?: MediaAttachment[],
-  platformMessageId?: string
+  platformMessageId?: string,
+  channelAccountId?: number | null
 ): Promise<InsertMessageResult> {
   const preview = content.slice(0, 250);
 
@@ -150,6 +177,7 @@ export async function insertMessage(
         content,
         contentAttributes: contentAttributes || [],
         platformMessageId: platformMessageId || null,
+        channelAccountId: channelAccountId ?? null,
       })
       .returning({ id: chatMessages.id });
   } catch (err: unknown) {

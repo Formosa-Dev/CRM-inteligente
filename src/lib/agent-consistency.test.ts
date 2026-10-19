@@ -528,9 +528,11 @@ test("dedup and CAS failures fail closed without routing or output", async () =>
 });
 
 test("webhook orders protocol filter before lookup and session before agent", () => {
-  const route = readFileSync("src/app/api/whatsapp/webhook/route.ts", "utf8");
-  const post = route.slice(route.indexOf("export async function POST"));
-  assert.ok(post.length > 0, "webhook must define POST");
+  // S12: the per-event app pipeline lives in the shared module — the route
+  // delegates to it, so ordering markers are asserted there.
+  const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
+  const post = pipeline.slice(pipeline.indexOf("export async function handleNormalizedEvent"));
+  assert.ok(post.length > 0, "inbound pipeline must define handleNormalizedEvent");
   const protocolGate =
     post.indexOf("isProtocolArtifact(payload)");
   const lookup = post.indexOf("findOrCreateConversation(");
@@ -562,9 +564,16 @@ test("webhook orders protocol filter before lookup and session before agent", ()
 test("webhook delegates signature verify + envelope parsing to the provider adapter", () => {
   const route = readFileSync("src/app/api/whatsapp/webhook/route.ts", "utf8");
   const postStart = route.indexOf("export async function POST");
-  const helperStart = route.indexOf("async function handleNormalizedEvent");
-  assert.ok(postStart !== -1 && helperStart > postStart, "POST must delegate to handleNormalizedEvent");
-  const post = route.slice(postStart, helperStart);
+  assert.ok(postStart !== -1, "webhook must define POST");
+  // S12: per-event handling moved to the shared inbound pipeline module —
+  // POST delegates through its exported handleNormalizedEvent.
+  const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
+  assert.ok(
+    pipeline.indexOf("export async function handleNormalizedEvent") !== -1,
+    "shared pipeline must export handleNormalizedEvent",
+  );
+  assert.match(route, /@\/lib\/messaging\/inbound-pipeline/);
+  const post = route.slice(postStart);
 
   // Signature verification stays first and goes through the provider
   // boundary — the route no longer calls the signature module directly.
@@ -840,9 +849,10 @@ test("transfer tool delegates effects to the shared handoff service", () => {
 });
 
 test("handoff and blocked paths never invoke GPT or tools", () => {
-  const route = readFileSync("src/app/api/whatsapp/webhook/route.ts", "utf8");
-  const post = route.slice(route.indexOf("export async function POST"));
-  assert.ok(post.length > 0, "webhook must define POST");
+  // S12: the guarded flow lives in the shared inbound pipeline.
+  const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
+  const post = pipeline.slice(pipeline.indexOf("export async function handleNormalizedEvent"));
+  assert.ok(post.length > 0, "inbound pipeline must define handleNormalizedEvent");
   const guard = post.indexOf('sessionDecision.kind === "blocked"');
   assert.ok(guard !== -1, "webhook must guard blocked/handoff decisions");
   assert.match(post, /sessionDecision\.kind === "handoff"/);
@@ -1088,9 +1098,10 @@ test("N8 delay complaint acknowledges with status check and deadline or handoff"
 });
 
 test("W1 fixed paths never reach buffer or GPT and thread routing into the agent", () => {
-  const route = readFileSync("src/app/api/whatsapp/webhook/route.ts", "utf8");
-  const post = route.slice(route.indexOf("export async function POST"));
-  assert.ok(post.length > 0, "webhook must define POST");
+  // S12: session-routing guards live in the shared inbound pipeline.
+  const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
+  const post = pipeline.slice(pipeline.indexOf("export async function handleNormalizedEvent"));
+  assert.ok(post.length > 0, "inbound pipeline must define handleNormalizedEvent");
   const fixedGuard = post.indexOf('sessionDecision.kind === "fixed_ack"');
   assert.ok(fixedGuard !== -1, "webhook must branch on fixed_ack decisions");
   assert.match(post, /sessionDecision\.kind === "fixed_clarification"/);
@@ -1163,8 +1174,9 @@ test("W2 webhook handoff delivers owner transport without customer sends while A
 
   // Webhook handoff branch must perform the minimal transport (override
   // write + owner notification) and never send WhatsApp to the customer.
-  const route = readFileSync("src/app/api/whatsapp/webhook/route.ts", "utf8");
-  const post = route.slice(route.indexOf("export async function POST"));
+  // S12: the flow + helper live in the shared inbound pipeline module.
+  const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
+  const post = pipeline.slice(pipeline.indexOf("export async function handleNormalizedEvent"));
   const handoffGuard = post.indexOf('sessionDecision.kind === "handoff"');
   assert.ok(handoffGuard !== -1, "webhook must branch on handoff decisions");
   const handoffBranch = post.slice(handoffGuard, handoffGuard + 1200);
@@ -1173,10 +1185,10 @@ test("W2 webhook handoff delivers owner transport without customer sends while A
   assert.doesNotMatch(handoffBranch, /sendWhatsAppBubbles|sendWhatsAppMessage/);
   // The transport helper itself writes the 24h override and notifies the
   // owner, with no customer WhatsApp send on any path.
-  const helperStart = route.indexOf("async function deliverWebhookHandoff");
-  assert.ok(helperStart !== -1, "webhook must define deliverWebhookHandoff");
-  const helperEnd = route.indexOf("export async function POST", helperStart);
-  const helper = route.slice(helperStart, helperEnd === -1 ? helperStart + 3000 : helperEnd);
+  const helperStart = pipeline.indexOf("async function deliverWebhookHandoff");
+  assert.ok(helperStart !== -1, "inbound pipeline must define deliverWebhookHandoff");
+  const helperEnd = pipeline.indexOf("export async function handleNormalizedEvent", helperStart);
+  const helper = pipeline.slice(helperStart, helperEnd === -1 ? helperStart + 4000 : helperEnd);
   assert.match(helper, /humanOverrideUntil/);
   assert.match(helper, /sendEscalationEmail/);
   assert.doesNotMatch(helper, /sendWhatsAppBubbles|sendWhatsAppMessage/);
@@ -1201,12 +1213,13 @@ test("W3 conversation lock documents neon-http limits with CAS plus uniqueness s
 });
 
 test("W4 human-override check fails closed on DB errors", () => {
-  const route = readFileSync("src/app/api/whatsapp/webhook/route.ts", "utf8");
-  const guardStart = route.indexOf("async function checkHumanOverride");
-  assert.ok(guardStart !== -1, "webhook must define checkHumanOverride");
-  const fnEnd = route.indexOf("\n}", guardStart);
+  // S12: checkHumanOverride moved to the shared inbound pipeline module.
+  const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
+  const guardStart = pipeline.indexOf("async function checkHumanOverride");
+  assert.ok(guardStart !== -1, "inbound pipeline must define checkHumanOverride");
+  const fnEnd = pipeline.indexOf("\n}", guardStart);
   assert.ok(fnEnd !== -1, "checkHumanOverride must be a closed function");
-  const fn = route.slice(guardStart, fnEnd);
+  const fn = pipeline.slice(guardStart, fnEnd);
   const catchAt = fn.indexOf("catch");
   assert.ok(catchAt !== -1, "checkHumanOverride must handle DB errors");
   const catchBlock = fn.slice(catchAt);

@@ -24,16 +24,14 @@ import { db } from "@/db";
 import { channelAccounts } from "@/db/schema";
 import { getIntegrationSecrets, getYCloudApiKey } from "@/lib/integrations";
 
-import { providerForChannel } from "./registry";
+import {
+  PROVIDER_IDS,
+  isProviderId,
+  providerForChannel,
+} from "./registry";
 import type { ChannelAccount, ChannelKind, ProviderId } from "./types";
 
 export type ChannelAccountRow = typeof channelAccounts.$inferSelect;
-
-const PROVIDER_IDS: ProviderId[] = ["ycloud", "zernio", "kapso"];
-
-function isProviderId(value: string): value is ProviderId {
-  return (PROVIDER_IDS as readonly string[]).includes(value);
-}
 
 function toAccountStatus(value: string): ChannelAccount["status"] {
   return value === "disconnected" || value === "error" ? value : "active";

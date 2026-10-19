@@ -17,6 +17,27 @@ const CHANNEL_PROVIDER = new Map<ChannelKind, ProviderId>([
   ["whatsapp", "ycloud"],
 ]);
 
+/** All contract provider ids — registered or not (evidence §4 union). */
+export const PROVIDER_IDS: ProviderId[] = ["ycloud", "zernio", "kapso"];
+
+/** All contract channels — kept in sync with `channelEnum` (schema) and `ChannelKind`. */
+export const CHANNEL_KINDS: ChannelKind[] = [
+  "whatsapp",
+  "instagram",
+  "facebook",
+  "telegram",
+  "sms",
+  "reddit",
+];
+
+export function isProviderId(value: string): value is ProviderId {
+  return PROVIDER_IDS.includes(value as ProviderId);
+}
+
+export function isChannelKind(value: string): value is ChannelKind {
+  return CHANNEL_KINDS.includes(value as ChannelKind);
+}
+
 export function getProvider(id: ProviderId): MessagingProvider {
   const provider = PROVIDERS.get(id);
   if (!provider) {
@@ -25,8 +46,20 @@ export function getProvider(id: ProviderId): MessagingProvider {
   return provider;
 }
 
-export function hasProvider(id: ProviderId): boolean {
-  return PROVIDERS.has(id);
+export function hasProvider(id: string): boolean {
+  return PROVIDERS.has(id as ProviderId);
+}
+
+/**
+ * Inverse of CHANNEL_PROVIDER — first channel routed to this provider.
+ * Unambiguous in v1 (whatsapp → ycloud only); when one provider serves
+ * several channels, event-level channel hints win (see ingress.ts).
+ */
+export function channelForProvider(id: ProviderId): ChannelKind | undefined {
+  for (const [channel, providerId] of CHANNEL_PROVIDER) {
+    if (providerId === id) return channel;
+  }
+  return undefined;
 }
 
 export function listProviders(): MessagingProvider[] {
