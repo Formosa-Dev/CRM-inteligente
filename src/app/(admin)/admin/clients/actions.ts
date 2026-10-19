@@ -7,6 +7,7 @@ import { auth } from "@/auth";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { revalidatePath } from "next/cache";
 import { normalizePhone } from "@/lib/phone-utils";
+import { deleteLeadCascade } from "@/lib/leads/delete-lead";
 
 const PAGE_SIZE = 30;
 
@@ -187,7 +188,8 @@ export type DeleteLeadDeps = {
   /** Returns the lead id for a normalized phone, or null. */
   findLeadIdByPhone(phone: string): Promise<number | null>;
   /**
-   * Deletes the lead's orders and the lead itself in ONE statement: a
+   * Deletes the lead, its attachments, and its orders (by `lead_id` or
+   * `phone_number`) in ONE statement — see `deleteLeadCascade`. A
    * data-modifying CTE runs as a single implicit transaction, which preserves
    * all-or-nothing deletion on the neon-http driver (`db.transaction()`
    * throws there — it has no transaction support).
@@ -207,12 +209,7 @@ function createDbDeleteLeadDeps(): DeleteLeadDeps {
       return lead?.id ?? null;
     },
     async deleteLeadWithOrders(phone, leadId) {
-      await db.execute(sql`
-        WITH deleted_orders AS (
-          DELETE FROM orders WHERE phone_number = ${phone}
-        )
-        DELETE FROM leads WHERE id = ${leadId}
-      `);
+      await deleteLeadCascade({ leadId, phone });
     },
   };
 }

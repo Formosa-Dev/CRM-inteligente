@@ -155,6 +155,13 @@
       "when": 1792443904448,
       "tag": "0021_thin_plazm",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792442890957,
+      "tag": "0022_hot_path_indexes",
+      "breakpoints": true
     }
   ]
 }

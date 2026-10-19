@@ -165,3 +165,64 @@ Then `npm run db:migrate` is a no-op until the next generated migration.
   (`0003_session_memory.sql`, `0010_peaceful_rocket_racer.sql`) — future
   migration cleanup must keep those files or update the test (owned outside
   this slice).
+
+## 8. Pending DRAFT — A-47: naive `timestamp` → `timestamptz`
+
+`drizzle/0023_timestamptz_DRAFT.sql` is **not journaled and not applied** —
+it exists for review + staging rehearsal only.
+
+### What it converts
+
+| Table | Columns |
+| --- | --- |
+| `users` | `created_at`, `updated_at` |
+| `products` | `created_at`, `updated_at` |
+| `agent_config` | `updated_at` (naive, missed by the finding's column list) |
+| `conversations` | `created_at`, `updated_at` |
+| `leads` | `created_at` |
+
+`ALTER COLUMN ... TYPE timestamptz USING <col> AT TIME ZONE 'UTC'` reads each
+naive value **as if it were UTC** — the pinned `'UTC'` is deliberate, it does
+not defer to the session timezone.
+
+### Which timezone were existing rows probably written in?
+
+Almost certainly **UTC** — but verify, don't trust:
+
+- `defaultNow()` is server-side and Neon clusters default to `TimeZone=UTC`;
+  JS `Date` writes through `neon-http` serialize as UTC instants.
+- The risk: anything written by a session with a non-UTC `TimeZone` (e.g. a
+  manual `psql` session in `America/Argentina/Cordoba`) stored local
+  wall-clock; converting as UTC shifts those rows by +3h.
+
+### Verify on staging BEFORE activating
+
+1. `SHOW TimeZone;` on the production DB — confirm UTC (or record the real
+   value and adjust the `AT TIME ZONE` argument).
+2. Sanity-check adjacent columns: `conversations.created_at` vs
+   `last_message_at` (timestamptz) written at the same moment, or
+   `leads.created_at` vs `lead_identities.created_at`. A consistent ~3h
+   offset = Argentina wall-clock values, not UTC.
+3. Exercise the TZ-sensitive read paths (`toolsManagement.ts`-style day
+   filters, followup cron windows) on staging copies.
+4. Apply in low traffic: each `ALTER TYPE` rewrites the column under an
+   `ACCESS EXCLUSIVE` lock. The draft wraps all five tables in one
+   `BEGIN/COMMIT` — keep it that way.
+5. Ship the matching `src/db/schema.ts` change (`{ withTimezone: true }`)
+   **in the same deploy** — otherwise Drizzle keeps writing naive values
+   that Postgres re-coerces via session TZ, recreating the bug.
+
+### Rollback shape
+
+Only clean **before** new timestamptz writes accumulate. Per column:
+
+```sql
+ALTER TABLE <table>
+  ALTER COLUMN <col> TYPE timestamp
+  USING <col> AT TIME ZONE 'UTC';
+```
+
+Stores the UTC wall-clock of each instant — identical to pre-migration
+state iff the UTC assumption held. Rows written while the column was
+timestamptz lose their TZ marker; if any exist, decide per-table whether
+they were authored in UTC or local time — there is no automatic way back.

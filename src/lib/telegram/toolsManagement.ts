@@ -1154,10 +1154,11 @@ export const deleteLeadTool = tool({
   }),
   execute: async ({ id }) => {
     try {
-      const [lead] = await db.select({ id: leads.id, name: leads.name }).from(leads).where(eq(leads.id, id)).limit(1);
+      const [lead] = await db.select({ id: leads.id, name: leads.name, phone: leads.phone }).from(leads).where(eq(leads.id, id)).limit(1);
       if (!lead) return `No encontre un lead con ID ${id}.`;
-      await db.delete(orders).where(eq(orders.leadId, id));
-      await db.delete(leads).where(eq(leads.id, id));
+      // Dynamic import: file-top imports are owned by a parallel change slice.
+      const { deleteLeadCascade } = await import("@/lib/leads/delete-lead");
+      await deleteLeadCascade({ leadId: id, phone: lead.phone });
       return `✅ Lead #${id} (${lead.name || "sin nombre"}) eliminado.`;
     } catch (e) {
       return `Error al eliminar: ${e instanceof Error ? e.message : "desconocido"}`;
