@@ -37,7 +37,9 @@ This revision adopts the reconciled decisions from the review:
   approved; Zernio next; **Kapso is spike-only — no production wiring and no
   embedded signup in v1** (CR-6).
 - **Ingress path**: `/api/webhooks/ingress/[provider]` (Next.js dynamic
-  segment). There is no `/api/v1` surface; versioning deferred (W-1).
+  segment) — **Phase 4 only**. v1 keeps the existing
+  `/api/whatsapp/webhook` binding; there is no `src/app/api/webhooks/` route
+  yet and no `/api/v1` surface; versioning deferred (W-1, N-3).
 - **Routing v1**: a single `whatsappProvider` field (`ycloud`, later
   `kapso`). A routing matrix is deferred until multiple accounts per channel
   are real (W-13, review §3).
@@ -48,6 +50,13 @@ This revision adopts the reconciled decisions from the review:
 - **Installability is a P0 blocker, not a polish item.** The two defects
   below (G3, G4) make a fresh install fail today; every claim in §1 depends
   on them being fixed first.
+- **Sequencing**: journal repair (G3) and the `/setup` driver fix (G4) are
+  hard P0 prerequisites that land **before** the install guide or blueprint
+  is published — matching the integration order that sequences repo-trust
+  repair ahead of blueprint/guide publication (N-4). No published install
+  path may work around the journal (e.g. bulk-`psql` apply of
+  `drizzle/*.sql`), because that replays the destructive orphan migration
+  and then aborts on a duplicate `leads_phone_unique`.
 
 ## 1. Target deployment & configuration experience
 
@@ -78,9 +87,12 @@ access, shell access to the app, or knowledge of the codebase:
    business identity, AI provider, YCloud, Cloudinary, Meta, Telegram, cron,
    escalation email. Roadmap work extends this to a `channel_accounts` model
    once a second provider is approved (Phase 4).
-6. **Wire webhooks** — each configured channel account surfaces its exact
-   inbound URL (`/api/webhooks/ingress/[provider]`) in the admin UI,
-   copy-pasteable into the provider console.
+6. **Wire webhooks** — in v1 the WhatsApp binding is the existing
+   `/api/whatsapp/webhook` route (legacy alias `/api/webhook/whatsapp`); the
+   admin surface shows the exact URL to paste into the provider console.
+   The unified ingress `/api/webhooks/ingress/[provider]` does not exist
+   until Phase 4 (provider-#2 approval) — no install step references it
+   before then.
 7. **Verify** — post-install checklist is split into two tiers (W-9):
    - **Deployable**: health 200, migrations applied, `/setup` creates admin,
      login works.
@@ -135,14 +147,18 @@ Install blockers first — these make the §1 golden path fail today.
   - `drizzle/meta/_journal.json` entry `idx: 1` points to
     `0001_handy_tombstone`, but `drizzle/0001_handy_tombstone.sql` does not
     exist — `drizzle-kit migrate` aborts on it.
-  - The directory contains **two** `0002` files: `0002_unique_phone.sql`
-    (tracked but absent from the journal; performs a destructive `leads`
-    dedupe, reassigns `orders`, adds `leads_phone_unique`) and
-    `0002_woozy_valkyrie.sql`.
-  - `src/db/schema.ts:285` declares `leads.phone` `.notNull().unique()` — a
-    journal-migrated fresh DB lacks that constraint.
+  - The directory contains **two** `0002` files: `0002_woozy_valkyrie.sql`
+    (journaled; it already adds `leads_phone_unique` at line 121) and
+    `0002_unique_phone.sql` (tracked but absent from the journal — an orphan
+    that performs a destructive `leads` dedupe, reassigns `orders`, and adds
+    the same constraint).
   - Snapshots missing for journal entries `0003`, `0006`, `0007`, `0011`,
     `0012`.
+  - The real defects are the missing `0001` file and the orphan migration.
+    Once `0001` is restored, a normal journal run reaches `0002_woozy` and
+    gets `leads_phone_unique` — there is **no** missing-constraint path for
+    journal installs, and no new unique-constraint migration is needed
+    unless an install is found that ran neither `0002` file.
   - Also: README quickstart uses `db:push`
     (`drizzle-kit push --force 2>/dev/null || echo …` — POSIX-only,
     error-masking) while `/setup` says `db:migrate`. `push` is dev-only.
@@ -226,17 +242,21 @@ is green and the social-identity schema is approved.
 
 **Deliverables**
 - **Migration journal repair (G3):** restore or renumber the missing `0001`
-  entry; introduce a new guarded/idempotent migration that adds the
-  `leads.phone` unique constraint for installs that never ran the orphan
-  `0002_unique_phone.sql` (do **not** blindly journal the destructive
-  dedupe — existing installs may already have run it); regenerate missing
+  entry; quarantine the orphan `0002_unique_phone.sql` — do **not** journal
+  its destructive dedupe as-is (existing installs may already have run it;
+  handle its effects only where verified needed); regenerate missing
   snapshots; align README/`/setup`/`.env.example` on `db:migrate` as the
-  canonical path (`db:push` documented dev-only).
+  canonical path (`db:push` documented dev-only). A bulk
+  `psql`-every-`*.sql` fallback is not a substitute — it replays the
+  destructive orphan, then aborts when `0002_woozy` re-adds
+  `leads_phone_unique`.
 - **`/setup` fix (G4):** rewrite first-admin creation without
-  `db.transaction` — e.g. a single conditional
-  `INSERT … WHERE NOT EXISTS (SELECT 1 FROM users)` plus a session-level
-  `pg_advisory_lock` via raw SQL, or a `db.batch` path. Apply the same fix
-  to `src/app/(admin)/admin/clients/actions.ts:206`. Add a concurrent-submit
+  `db.transaction` — primary mechanism: one atomic
+  `INSERT … SELECT … WHERE NOT EXISTS (SELECT 1 FROM users)` statement (or a
+  proven `db.batch` path). Do not rely on a session-level
+  `pg_advisory_lock`: the stateless HTTP driver is not a durable lock
+  context. Apply the same fix to
+  `src/app/(admin)/admin/clients/actions.ts:206`. Add a concurrent-submit
   test proving a single admin results from parallel first-access requests.
 - **Doc truth (G5, G9, G14):** README and `.env.example` corrected to
   Neon-required (or `pg` driver path landed); `.env.example` DLQ claim and
@@ -249,9 +269,13 @@ is green and the social-identity schema is approved.
 
 **Acceptance criteria**
 - `drizzle-kit migrate` succeeds on an **empty Neon branch**; a subsequent
-  `drizzle-kit generate` produces **no diff**; `leads.phone` unique exists.
+  `drizzle-kit generate` produces **no diff**; `leads_phone_unique` is
+  present (it arrives via journaled `0002_woozy` — no new constraint
+  migration is asserted).
 - `/setup` verified on `neon-http`: creates one admin under concurrent
   submits, then self-locks.
+- The P1 install guide and `render.yaml` are not published until this
+  phase's acceptance passes (N-4 sequencing).
 - `git grep` finds no customer names/phones; `npm run test:agents`,
   `typecheck`, `lint`, `build` green, unchanged.
 
@@ -288,17 +312,18 @@ is green and the social-identity schema is approved.
 
 ### Phase 3 — Messaging seam + YCloudAdapter (contract-adherent, no table)
 
-**Deliverables** — canonical units 2–4; new files only, no behavior change.
-- Messaging core implementing the canonical contract (evidence §4 +
-  `tenantId` constant + `sendTemplate?`). Interface seam only — **no
+**Deliverables** — canonical units 2–4, split by edit surface (N-8):
+- *Seam — new files only, no behavior change:* messaging core implementing
+  the canonical contract (evidence §4 + `tenantId` constant +
+  `sendTemplate?`) and `YCloudAdapter`. Interface seam only — **no
   `channel_accounts` table yet** (it waits for an approved second provider).
-- `YCloudAdapter` satisfying the contract; outbound facade
-  (`messenger.send`) covering the **complete** send-site inventory:
-  dashboard, orders, webhook, queue, cron, Telegram tools, channel router —
-  not just the obvious clients (W-5).
-- Inbound parse extraction preserving today's gate order (signature →
-  dedup → buffer → agent); signature/fixture tests proving old and new paths
-  produce identical DB effects.
+- *Facade — edits existing call sites:* outbound facade (`messenger.send`)
+  covering the **complete** send-site inventory: broadcast, dashboard,
+  orders, webhook, queue worker, cron, Telegram tools, channel router — not
+  just the obvious clients (W-5).
+- *Inbound extraction:* parse path preserving today's gate order
+  (signature → dedup → buffer → agent); signature/fixture tests proving old
+  and new paths produce identical DB effects.
 - Contract test suite (`provider-contract.test.ts`, `ycloud.test.ts`) run
   explicitly and wired into `test:agents` (W-7).
 
@@ -334,11 +359,12 @@ is green and the social-identity schema is approved.
 ### Phase 5 — Zernio adapter + social identity (gated: research + product approval)
 
 **Deliverables** — canonical unit 7.
-- **Prerequisite — social-identity schema (CR-4):** nullable `leads.phone`
-  or a `lead_identities(channel, external_id)` table; synthetic conversation
-  key convention (e.g. `${channel}:${externalUserId}`) or nullable
-  `whatsappId`; `Channel`/`channel` enum/`BUFFER_CONFIG` extended; a
-  phone-less Instagram fixture exercising persistence + dedup.
+- **Prerequisite — social-identity schema (CR-4):** the model chosen in
+  `architecture-roadmap.md` §2.4 — a `lead_identities(channel, external_id)`
+  table **plus** nullable `leads.phone` with a partial unique index, plus
+  synthetic conversation keys and `Channel`/enum/`BUFFER_CONFIG` extension —
+  not an either/or choice (N-10). Include a phone-less Instagram fixture
+  exercising persistence + dedup.
 - **Prerequisite — durable media store (G6):** inbound media off ephemeral
   `public/uploads` before Zernio media lands.
 - `ZernioAdapter`: Instagram/FB channels, raw-body HMAC webhook validation,
