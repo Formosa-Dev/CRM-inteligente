@@ -1,33 +1,29 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
 import { db } from "@/db";
 import { reconcileRuns } from "@/db/schema";
 import { and, gt, isNull } from "drizzle-orm";
 import { runReconcile, type ReconcileMode } from "@/lib/reconcile/runner";
+import { authorizeCronRequest } from "@/lib/auth/cron-auth";
 
 /**
  * Reconciler: detecta ventas cerradas en chats de WhatsApp que no quedaron
  * cargadas como pedidos y las carga sola. Reporta por Telegram.
  *
- *   GET /api/cron/reconcile?key=CRON_SECRET              → scan (≥4 msgs nuevos, 36h)
- *   GET /api/cron/reconcile?key=CRON_SECRET&mode=sweep   → barrido (≥1 msg, 72h)
+ *   POST /api/cron/reconcile             → scan (≥4 msgs nuevos, 36h)
+ *   POST /api/cron/reconcile?mode=sweep  → barrido (≥1 msg, 72h)
  *   &limit=N   → máx conversaciones por corrida (default 8)
  *
+ * Auth: `Authorization: Bearer <cronSecret>` (F12 — el secret nunca viaja en
+ * la URL; `?key=` solo se acepta con CRON_ALLOW_QUERY_KEY=1). GET se mantiene
+ * para schedulers sin body; ambos métodos exigen el header.
  * Sugerido: cron-job.org cada 30 min para scan; sweep 1-2 veces al día.
  * Solo el deep pass usa LLM — el scan es SQL barato y sale temprano si no hay trabajo.
  */
-export async function GET(request: Request) {
+async function handle(request: Request) {
+  const denied = await authorizeCronRequest(request);
+  if (denied) return denied;
+
   const { searchParams } = new URL(request.url);
-  const key = searchParams.get("key");
-
-  const { getIntegrationSecrets } = await import("@/lib/integrations");
-  const secret = (await getIntegrationSecrets()).cronSecret;
-  const a = Buffer.from(key ?? "");
-  const b = Buffer.from(secret ?? "");
-  if (!secret || a.length !== b.length || !timingSafeEqual(a, b)) {
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  }
-
   const mode: ReconcileMode = searchParams.get("mode") === "sweep" ? "sweep" : "scan";
   const limit = Math.min(Math.max(Number(searchParams.get("limit")) || 8, 1), 20);
 
@@ -59,3 +55,8 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+// POST is the preferred trigger (state changes); GET stays for schedulers
+// that cannot send a body — both require the Bearer header.
+export const GET = handle;
+export const POST = handle;
