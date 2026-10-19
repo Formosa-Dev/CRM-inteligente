@@ -1,0 +1,143 @@
+# ============================================================================
+# SocialCRM — Render Blueprint (self-hosted, single install)
+#
+# One web service + cron jobs that ping the CRON_SECRET-gated endpoints.
+# No `databases:` block on purpose: the app requires an EXTERNAL Neon Postgres
+# (src/db/index.ts uses the neon-http driver — a Render Postgres URL will not
+# work). Paste the Neon connection string into the DATABASE_URL prompt.
+#
+# Install guide: docs/socialcrm/install-render-neon.md
+# ============================================================================
+
+services:
+  # ---------- Web service (the app itself) ----------
+  - type: web
+    name: socialcrm
+    runtime: node
+    # starter: always-on, no cold starts — a webhook-driven agent should not
+    # spin down. `free` works for evaluation but sleeps when idle.
+    plan: starter
+    # Closest Render region to LATAM; pick the same region for your Neon project.
+    region: virginia
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    # Verified route: src/app/api/health/route.ts (200 when DB reachable, 500 otherwise).
+    healthCheckPath: /api/health
+    envVars:
+      # Pinned to the documented runtime (.env.example: NODE_VERSION=20;
+      # package.json has no engines field and there is no .nvmrc).
+      - key: NODE_VERSION
+        value: "20"
+      # `next build --webpack` can OOM on default heap (see AGENTS.md).
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=8192"
+
+      # ---------- REQUIRED — prompted at deploy (leave none empty) ----------
+      # Neon Postgres connection string (pooled host, sslmode=require).
+      - key: DATABASE_URL
+        sync: false
+      # NextAuth v5 secret; also derives the AES-256-GCM key that encrypts all
+      # stored credentials — NEVER rotate without a re-encryption plan (G6).
+      # Generate: openssl rand -base64 32
+      - key: AUTH_SECRET
+        sync: false
+      # Full public URL of this service, e.g. https://socialcrm.onrender.com
+      - key: AUTH_URL
+        sync: false
+      # Same public URL — checkout origin allowlist + generated links.
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+
+      # ---------- Cron auth (auto-generated; cron jobs below copy it via envVarKey) ----------
+      # Gates GET /api/cron/*. Not prompted — Render generates a random value.
+      # Note: a value set later in /admin/agent (DB) takes precedence over this
+      # env var — keep them equal or leave the admin field empty (see guide).
+      - key: CRON_SECRET
+        generateValue: true
+
+      # ---------- OPTIONAL — safe to leave blank ----------
+      # Everything below can also be configured later from /admin/agent
+      # (DB values take precedence over env vars). UPSTASH_* is env-only.
+      # Upstash Redis: durable agent buffer / DLQ / rate-limit across redeploys.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      # Cloudinary: durable image/media uploads.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      # YCloud (WhatsApp provider): API key, webhook signature secret, bot number.
+      - key: YCLOUD_API_KEY
+        sync: false
+      - key: YCLOUD_WEBHOOK_SECRET
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER
+        sync: false
+
+  # ---------- Cron jobs (HTTP pings; all schedules UTC) ----------
+  # Each job curls a /api/cron/* endpoint with the CRON_SECRET key. buildCommand
+  # is a no-op — the job only needs curl, which ships in the node runtime image.
+
+  # Sends follow-up messages for delivered orders. The route itself skips sends
+  # outside 9–22h Argentina time, so every-15-min is safe.
+  - type: cron
+    name: socialcrm-cron-followup
+    runtime: node
+    schedule: "*/15 * * * *"
+    buildCommand: "true"
+    startCommand: 'curl -fsS "${APP_URL%/}/api/cron/followup?key=${CRON_SECRET}"'
+    envVars:
+      - key: APP_URL
+        fromService:
+          type: web
+          name: socialcrm
+          envVarKey: NEXT_PUBLIC_APP_URL
+      - key: CRON_SECRET
+        fromService:
+          type: web
+          name: socialcrm
+          envVarKey: CRON_SECRET
+
+  # Reconcile scan: cheap SQL pass that detects WhatsApp chats with closed
+  # sales not registered as orders. Code comment suggests every 30 min.
+  - type: cron
+    name: socialcrm-cron-reconcile-scan
+    runtime: node
+    schedule: "*/30 * * * *"
+    buildCommand: "true"
+    startCommand: 'curl -fsS "${APP_URL%/}/api/cron/reconcile?key=${CRON_SECRET}"'
+    envVars:
+      - key: APP_URL
+        fromService:
+          type: web
+          name: socialcrm
+          envVarKey: NEXT_PUBLIC_APP_URL
+      - key: CRON_SECRET
+        fromService:
+          type: web
+          name: socialcrm
+          envVarKey: CRON_SECRET
+
+  # Reconcile sweep: deeper pass (uses LLM) over wider windows.
+  # Code comment suggests 1–2×/day. 13:00 UTC = 10:00 Argentina (UTC-3).
+  - type: cron
+    name: socialcrm-cron-reconcile-sweep
+    runtime: node
+    schedule: "0 13 * * *"
+    buildCommand: "true"
+    startCommand: 'curl -fsS "${APP_URL%/}/api/cron/reconcile?key=${CRON_SECRET}&mode=sweep"'
+    envVars:
+      - key: APP_URL
+        fromService:
+          type: web
+          name: socialcrm
+          envVarKey: NEXT_PUBLIC_APP_URL
+      - key: CRON_SECRET
+        fromService:
+          type: web
+          name: socialcrm
+          envVarKey: CRON_SECRET
