@@ -27,6 +27,17 @@ const CreateLeadSchema = z.object({
   adsetId: z.string().max(120).optional(),
 });
 
+/**
+ * Postgres 23505 (unique_violation) — neon-http surfaces it on `code`, but
+ * match the message too so wrapped errors still classify correctly.
+ */
+export function isUniqueViolation(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  if (code === "23505") return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return /23505|duplicate key|unique constraint/i.test(message);
+}
+
 export async function POST(req: NextRequest) {
   try {
     // Public lead-capture endpoint — rate limited to prevent spam floods
@@ -39,11 +50,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
 
-    // Reject oversized bodies before parsing — the endpoint is public.
+    // Reject oversized bodies before parsing — the endpoint is public. The
+    // header is only a fast path: content-length is client-supplied and may
+    // be absent (chunked), so the actual body is measured too.
     if (Number(req.headers.get("content-length")) > 8000) {
       return NextResponse.json({ error: "Payload demasiado grande" }, { status: 413 });
     }
-    const body = await req.json();
+    const rawBody = await req.text();
+    if (Buffer.byteLength(rawBody, "utf8") > 8000) {
+      return NextResponse.json({ error: "Payload demasiado grande" }, { status: 413 });
+    }
+
+    let body: unknown;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+    }
     const parsed = CreateLeadSchema.safeParse(body);
 
     if (!parsed.success) {
@@ -55,6 +78,15 @@ export async function POST(req: NextRequest) {
 
     const data = parsed.data;
     data.phone = normalizePhone(data.phone);
+    // normalizePhone strips non-digits — "abc" becomes "". Re-validate after
+    // normalization or empty/undersized phones slip past zod's min(1) and
+    // collide on leads.phone's unique index (second "" → unhandled 23505).
+    if (!/^\d{7,15}$/.test(data.phone)) {
+      return NextResponse.json(
+        { error: "Teléfono inválido" },
+        { status: 400 }
+      );
+    }
     const refCode = data.firstMessage ? extractRefCode(data.firstMessage) : null;
 
     // Attribution resolution — fail-open: errors must never block lead creation
@@ -89,24 +121,47 @@ export async function POST(req: NextRequest) {
       resolvedPlatform = resolvedPlatform ?? "organic";
     }
 
-    const [lead] = await db
-      .insert(leads)
-      .values({
-        phone: data.phone,
-        name: data.name ?? null,
-        email: data.email || null,
-        firstMessage: data.firstMessage ?? null,
-        refCode: refCode ?? null,
-        utmSource: resolvedUtmSource,
-        utmMedium: data.utmMedium ?? null,
-        utmCampaign: data.utmCampaign ?? null,
-        utmContent: data.utmContent ?? null,
-        platform: resolvedPlatform,
-        campaignId: resolvedCampaignId,
-        adsetId: resolvedAdsetId,
-        adId: resolvedAdId,
-      })
-      .returning();
+    let lead: typeof leads.$inferSelect | undefined;
+    try {
+      [lead] = await db
+        .insert(leads)
+        .values({
+          phone: data.phone,
+          name: data.name ?? null,
+          email: data.email || null,
+          firstMessage: data.firstMessage ?? null,
+          refCode: refCode ?? null,
+          utmSource: resolvedUtmSource,
+          utmMedium: data.utmMedium ?? null,
+          utmCampaign: data.utmCampaign ?? null,
+          utmContent: data.utmContent ?? null,
+          platform: resolvedPlatform,
+          campaignId: resolvedCampaignId,
+          adsetId: resolvedAdsetId,
+          adId: resolvedAdId,
+        })
+        .returning();
+    } catch (insertErr) {
+      // A repeat signup (or a retry) hits leads.phone's unique index. That is
+      // a conflict, not a server fault: return the existing lead so the
+      // caller can reconcile instead of a 500.
+      if (!isUniqueViolation(insertErr)) throw insertErr;
+      const [existing] = await db
+        .select({
+          id: leads.id,
+          phone: leads.phone,
+          name: leads.name,
+          status: leads.status,
+          createdAt: leads.createdAt,
+        })
+        .from(leads)
+        .where(eq(leads.phone, data.phone))
+        .limit(1);
+      return NextResponse.json(
+        { error: "El teléfono ya está registrado", lead: existing ?? null },
+        { status: 409 }
+      );
+    }
 
     return NextResponse.json(lead, { status: 201 });
   } catch (err) {
