@@ -10,6 +10,9 @@ const ENV_KEYS = [
   "NODE_ENV",
 ] as const;
 
+// NODE_ENV is readonly on ProcessEnv — writes go through a mutable view.
+const writableEnv = process.env as Record<string, string | undefined>;
+
 let saved: Record<(typeof ENV_KEYS)[number], string | undefined>;
 
 beforeEach(() => {
@@ -24,7 +27,7 @@ afterEach(() => {
   for (const key of ENV_KEYS) {
     const value = saved[key];
     if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
+    else writableEnv[key] = value;
   }
 });
 
@@ -101,7 +104,7 @@ describe("isAllowedCheckoutOrigin", () => {
     // request.url is derived from the client-controlled Host header — a
     // scripted client can mint a matching Host/Origin pair, so in production
     // it must not legitimize the request on its own.
-    process.env.NODE_ENV = "production";
+    writableEnv.NODE_ENV = "production";
     const request = new Request("https://attacker.example/api/checkout", {
       headers: { origin: "https://attacker.example" },
     });
@@ -109,8 +112,8 @@ describe("isAllowedCheckoutOrigin", () => {
   });
 
   it("accepts the configured origin in production even if Host is spoofed", () => {
-    process.env.NODE_ENV = "production";
-    process.env.NEXT_PUBLIC_APP_URL = "https://tienda.example.com";
+    writableEnv.NODE_ENV = "production";
+    writableEnv.NEXT_PUBLIC_APP_URL = "https://tienda.example.com";
     const request = new Request("https://attacker.example/api/checkout", {
       headers: { origin: "https://tienda.example.com" },
     });
