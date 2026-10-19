@@ -1,7 +1,6 @@
 "use server";
 
 import { db } from "@/db";
-import { users } from "@/db/schema";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
@@ -15,14 +14,50 @@ const setupSchema = z.object({
 
 export type SetupState = { error: string };
 
+export type FirstAdminStore = {
+  /**
+   * Atomically inserts the first admin iff the users table is empty.
+   * Returns true when this call created the row, false when setup already ran.
+   */
+  insertFirstAdmin(values: {
+    email: string;
+    hashedPassword: string;
+    name: string;
+  }): Promise<boolean>;
+};
+
+/**
+ * The neon-http driver backing `db` has no transaction support
+ * (`db.transaction()` throws), so the "only while the table is empty" guard
+ * lives inside a single atomic INSERT ... SELECT ... WHERE NOT EXISTS.
+ * `ON CONFLICT (email)` adds the users.email unique index as the singleton
+ * backstop: a same-email concurrent submit skips the insert instead of
+ * raising a unique violation.
+ */
+function createDbFirstAdminStore(): FirstAdminStore {
+  return {
+    async insertFirstAdmin(values) {
+      const result = await db.execute(sql`
+        INSERT INTO users (email, hashed_password, name, role)
+        SELECT ${values.email}, ${values.hashedPassword}, ${values.name}, 'admin'::user_role
+        WHERE NOT EXISTS (SELECT 1 FROM users)
+        ON CONFLICT (email) DO NOTHING
+        RETURNING id
+      `);
+      return (result.rows?.length ?? 0) > 0;
+    },
+  };
+}
+
 /**
  * First-access bootstrap: creates the first admin account — only while the
- * users table is empty. The advisory lock serializes concurrent submissions so
- * two simultaneous first-access requests cannot both create an admin.
+ * users table is empty. Race safety comes from the conditional INSERT above;
+ * concurrent submissions cannot both create an admin.
  */
 export async function createFirstAdmin(
   _prevState: SetupState,
-  formData: FormData
+  formData: FormData,
+  store: FirstAdminStore = createDbFirstAdminStore()
 ): Promise<SetupState> {
   const parsed = setupSchema.safeParse({
     name: formData.get("name"),
@@ -36,22 +71,10 @@ export async function createFirstAdmin(
   const email = parsed.data.email.toLowerCase();
   const hashedPassword = await bcrypt.hash(parsed.data.password, 12);
 
-  let created = false;
-  await db.transaction(async (tx) => {
-    // Serialize first-access attempts across instances/requests.
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(727001)`);
-    const { rows } = await tx.execute<{ count: number }>(
-      sql`SELECT count(*)::int AS count FROM users`
-    );
-    if ((rows[0]?.count ?? 0) > 0) return;
-
-    await tx.insert(users).values({
-      email,
-      hashedPassword,
-      name: parsed.data.name,
-      role: "admin",
-    });
-    created = true;
+  const created = await store.insertFirstAdmin({
+    email,
+    hashedPassword,
+    name: parsed.data.name,
   });
 
   if (!created) {
