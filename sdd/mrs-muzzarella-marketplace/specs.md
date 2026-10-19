@@ -47,7 +47,7 @@ UI:
 - Hover: scale(1.02), gold glow shadow
 
 Interaction:
-- Click → window.open(`wa.me/5493705115020?text=${mensaje}`)
+- Click → window.open(`wa.me/5493704111111?text=${mensaje}`)
 - GA event: "add_to_cart", { product_id, product_name }
 ```
 

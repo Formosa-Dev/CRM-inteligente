@@ -151,10 +151,10 @@ Admin: "buenas"
 Bot: getPendingOrders() + getCashStatus() + getReconcileCandidates()
 Bot: "Buenas. 3 pendientes, caja esperada 45.200, 2 ventas detectadas."
 
-Admin: "vendí 2 deli deli a yari, me pagó por transferencia"
-Bot: searchClient("yari") → no está → getConversationMessages → chat con
-tel 5493704... → createDeliveredOrder(..., paymentStatus:"paid",
-paymentMethod:"transferencia") → "Cargada: 2 Deli Deli para Yari — pagada."
+Admin: "vendí 2 deli deli a juli, me pagó por transferencia"
+Bot: searchClient("juli") → no está → getConversationMessages → chat con
+tel 5493704111111 → createDeliveredOrder(..., paymentStatus:"paid",
+paymentMethod:"transferencia") → "Cargada: 2 Deli Deli para Juli — pagada."
 
 Admin: "salieron 800 para el delivery"
 Bot: registerCashMovement({direction:"out", amount:800, reason:"delivery"})
@@ -165,7 +165,7 @@ Admin: "152 mil" → closeCash({actualCash:152000}) → reporta la diferencia.
 
 Admin: "avisá a los de ventana abierta que tomamos pedidos de pan"
 Bot: broadcastWhatsApp({filter:"24h", message:"...", dryRun:true})
-Bot: "Preview: 13 destinatarios — Adrián, Electro, Nahir… ¿Lo mando?"
+Bot: "Preview: 13 destinatarios — Marcos, Ana, Pedro… ¿Lo mando?"
 Admin: "dale" → broadcastWhatsApp({...mismo, dryRun:false}) → "Enviado: 13/13."
 
 ESTRUCTURA DE LA BASE DE DATOS

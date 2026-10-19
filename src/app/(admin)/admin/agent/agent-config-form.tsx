@@ -575,7 +575,7 @@ export default function AgentConfigForm({
                   <Input
                     id="businessPhoneDisplay"
                     name="businessPhoneDisplay"
-                    placeholder="Ej: 3705-115020"
+                    placeholder="Ej: 3705-123456"
                     defaultValue={config.businessPhoneDisplay}
                   />
                 </div>

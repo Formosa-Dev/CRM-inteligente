@@ -14,7 +14,7 @@ export async function captureLeadIfNew(phone: string, name: string | null, first
   // Si no existe → inserta con phone raw
 ```
 
-**Problema:** `phone` viene con formato WhatsApp (`+5493704...`) y se guarda así.
+**Problema:** `phone` viene con formato WhatsApp (`+5493704111111`) y se guarda así.
 
 ### API REST de Leads (`src/app/api/leads/route.ts`)
 

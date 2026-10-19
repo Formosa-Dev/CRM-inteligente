@@ -315,7 +315,7 @@ function roleError(tool: string): string {
 
 | Tool actual | Description actual | Problema | Mejora sugerida |
 |------------|-------------------|----------|-----------------|
-| `updateClient` | "Actualiza datos de un cliente..." | No dice QUÉ preguntas del owner disparan esta tool | Agregar ejemplos: "cambiá el teléfono de Neriza a +54937052410", "corregí el nombre de Juan" |
+| `updateClient` | "Actualiza datos de un cliente..." | No dice QUÉ preguntas del owner disparan esta tool | Agregar ejemplos: "cambiá el teléfono de Cliente A a +5493704111111", "corregí el nombre de Juan" |
 | `getBusinessHours` | "Muestra los horarios de atención..." | No aclara que también responde "estamos abiertos?" | Agregar "Útil para preguntas como 'estamos abiertos?', 'a qué hora cierran?'" |
 | `updateOrderStatus` | "Cambia el estado de un pedido..." | No dice que el owner lo usa para mover pedidos en la cocina | Agregar "Cuando el dueño dice 'el pedido 5 está listo' o 'ya se entregó el 3'" |
 | `cancelOrder` | "Cancela un pedido..." | Muy genérico | Agregar "Preguntas del owner: 'cancela el pedido 5 porque no tiene pan'" |
@@ -357,7 +357,7 @@ Ejemplo:
 ```typescript
 description:
   "Actualiza datos de contacto de un cliente existente. " +
-  "PREGUNTAS DEL DUEÑO: 'cambiá el teléfono de Neriza a +54937052410', " +
+  "PREGUNTAS DEL DUEÑO: 'cambiá el teléfono de Cliente A a +5493704111111', " +
   "'corregí el email de García', 'actualizá los datos de Juan'. " +
   "SOLO actualiza datos de contacto. No usar para crear pedidos o cambiar estados."
 ```
