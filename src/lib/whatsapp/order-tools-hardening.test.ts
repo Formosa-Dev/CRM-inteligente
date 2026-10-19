@@ -274,3 +274,14 @@ describe("A-24 sendImage media URL allowlist", () => {
   });
 });
 
+// A-25: phase-2 generateText tool calls (media included) merge into
+// pendingMedia instead of being dropped.
+describe("A-25 phase-2 media results reach pendingMedia", () => {
+  test("agent collects media from the phase-2 result", () => {
+    assert.match(agentSource, /collectMedia\(textResult\.toolResults\)/);
+    assert.match(agentSource, /collectMedia\(result\.toolResults\)/);
+    // dedupe guard so a retried send can't ship the same media twice
+    assert.match(agentSource, /pendingMedia\.some\(\(p\)\s*=>\s*p\.type === item\.type && p\.url === item\.url\)/);
+  });
+});
+

@@ -698,33 +698,38 @@ async function runWhatsAppAgentImpl({
     // 🔍 Extraer media pendiente de los tool results
     const pendingMedia: PendingMedia[] = [];
     const mediaToolNames = ["sendMenuImage", "sendProductImage", "sendImage", "sendSticker", "sendDocument", "sendPromoImage"];
-    
-    for (const tr of result.toolResults || []) {
-      if (mediaToolNames.includes(tr.toolName)) {
-        try {
-          const parsed = typeof tr.output === "string" ? JSON.parse(tr.output) : null;
-          if (parsed?._batch && Array.isArray(parsed._media)) {
-            for (const m of parsed._media) {
-              pendingMedia.push({
-                type: m.type || "image",
-                url: m.url,
-                caption: m.caption || "",
-                dbContent: m.dbContent || "",
-              });
+
+    // A-25: phase-2 generateText can also call media tools — collect from
+    // every toolResults array, deduped by type+url so a retried send never
+    // ships the same media twice.
+    const collectMedia = (toolResults: typeof result.toolResults | undefined) => {
+      const push = (m: { type?: string; url?: string; caption?: string; dbContent?: string }) => {
+        const item: PendingMedia = {
+          type: m.type === "document" || m.type === "sticker" ? m.type : "image",
+          url: m.url || "",
+          caption: m.caption || "",
+          dbContent: m.dbContent || "",
+        };
+        if (!item.url) return;
+        if (pendingMedia.some((p) => p.type === item.type && p.url === item.url)) return;
+        pendingMedia.push(item);
+      };
+      for (const tr of toolResults || []) {
+        if (mediaToolNames.includes(tr.toolName)) {
+          try {
+            const parsed = typeof tr.output === "string" ? JSON.parse(tr.output) : null;
+            if (parsed?._batch && Array.isArray(parsed._media)) {
+              for (const m of parsed._media) push(m);
+            } else if (parsed?._media) {
+              push(parsed);
             }
-          } else if (parsed?._media) {
-            pendingMedia.push({
-              type: parsed.type || "image",
-              url: parsed.url,
-              caption: parsed.caption || "",
-              dbContent: parsed.dbContent || "",
-            });
+          } catch {
+            // Si no es JSON (tool falló o devolvió texto normal), ignorar
           }
-        } catch {
-          // Si no es JSON (tool falló o devolvió texto normal), ignorar
         }
       }
-    }
+    };
+    collectMedia(result.toolResults);
     
     // 🛡️ POST-PROCESSING GUARD: detectar hallucination y retry
     const lastUserMsg = messages.filter(m => m.role === "user").pop()?.content.toLowerCase() || "";
@@ -788,7 +793,11 @@ const isHallucination = isHallucinationA || isHallucinationB || isHallucinationC
             stopWhen: stepCountIs(10),
             toolChoice: "auto",
           });
-          
+
+          // A-25: phase-2 tool calls also produce media — merge into
+          // pendingMedia so a media tool invoked here is actually sent.
+          collectMedia(textResult.toolResults);
+
           responseText = textResult.text?.trim() || "Ahí te lo estamos gestionando, en breve te confirmamos.";
         } catch (error) {
           console.error("[agent] Phase 2 generateText failed:", error);
