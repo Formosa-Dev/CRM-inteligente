@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHmac, timingSafeEqual } from "crypto";
-import { findOrCreateConversation, insertMessage } from "@/lib/channels/router";
+import { createHash, createHmac, timingSafeEqual } from "crypto";
 import {
   ChannelAccountResolutionError,
   providerForChannel,
+  resolveChannelAccount,
   resolveChannelAccountStrict,
+  type NormalizedInboundEvent,
+  type ProviderId,
 } from "@/lib/messaging";
+import {
+  handleNormalizedEvent,
+  type InboundContext,
+} from "@/lib/messaging/inbound-pipeline";
+import { aggregateWebhookStatuses } from "@/lib/messaging/webhook-response";
 
 // Meta signs webhook payloads with X-Hub-Signature-256: sha256=<hmac>
 // computed over the raw body using the app secret.
@@ -17,6 +24,47 @@ async function verifyMetaSignature(rawBody: string, header: string | null): Prom
   const a = Buffer.from(expected);
   const b = Buffer.from(header);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * Meta → NormalizedInboundEvent. The envelope's routing key is
+ * metadata.phone_number_id; the wamid becomes both deliveryId and
+ * platformMessageId (durable dedup). The pipeline reads the provider message
+ * off `raw.whatsappInboundMessage` — Meta's message object already uses the
+ * same field names (type / text.body / location / media objects), so it is
+ * passed through unchanged. Only text-bearing messages reach this point —
+ * the route keeps its existing `!from || !text` skip.
+ */
+export function metaMessageToInboundEvent(
+  msg: { id?: string; from?: string; timestamp?: string },
+  input: {
+    providerAccountId: string;
+    senderName?: string;
+    text: string;
+    provider: ProviderId;
+  }
+): NormalizedInboundEvent {
+  const epochSeconds = Number(msg.timestamp);
+  return {
+    provider: input.provider,
+    deliveryId: msg.id
+      ? `meta:${msg.id}`
+      : `meta:synth:${createHash("sha256")
+          .update(`${msg.from ?? ""}|${msg.timestamp ?? ""}|${input.text}`)
+          .digest("hex")
+          .slice(0, 24)}`,
+    kind: "message.received",
+    direction: "inbound",
+    providerAccountId: input.providerAccountId,
+    platformMessageId: msg.id,
+    sender: { phone: msg.from, name: input.senderName },
+    type: "text",
+    text: input.text,
+    timestamp: Number.isFinite(epochSeconds)
+      ? new Date(epochSeconds * 1000).toISOString()
+      : new Date().toISOString(),
+    raw: { whatsappInboundMessage: msg },
+  };
 }
 
 // GET: Webhook verification
@@ -36,13 +84,16 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 }
 
-// POST: Incoming messages from Meta
+// POST: Incoming messages from Meta — verified envelope → account resolution
+// → shared inbound pipeline (same entry the canonical WhatsApp webhook runs),
+// which persists the message and drives the agent.
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   if (!(await verifyMetaSignature(rawBody, req.headers.get("x-hub-signature-256")))) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
+  const statuses: number[] = [];
   try {
     const body = JSON.parse(rawBody);
 
@@ -99,27 +150,42 @@ export async function POST(req: NextRequest) {
             );
             continue;
           }
-          const channelAccountId =
-            resolution.kind === "resolved" ? resolution.rowId : null;
 
-          const { id: conversationId } = await findOrCreateConversation(
-            "whatsapp",
-            from,
-            value?.contacts?.[0]?.profile?.name,
-            from,
-            channelAccountId
-          );
+          // resolved → bound row; unprovisioned/schema-not-ready → legacy
+          // placeholder (the same fallback the unified ingress applies).
+          let ctx: InboundContext;
+          if (resolution.kind === "resolved") {
+            ctx = {
+              channel: "whatsapp",
+              account: resolution.account,
+              channelAccountId: resolution.rowId,
+            };
+          } else {
+            const account = await resolveChannelAccount(
+              "whatsapp",
+              undefined,
+              metaProvider.id
+            );
+            if (!account) {
+              console.warn(
+                "[meta/webhook] no resolvable channel account — skipping message",
+                from
+              );
+              continue;
+            }
+            ctx = { channel: "whatsapp", account };
+          }
 
-          await insertMessage(
-            conversationId,
-            "user",
+          const event = metaMessageToInboundEvent(msg, {
+            providerAccountId: String(
+              value?.metadata?.phone_number_id ?? candidates[0]
+            ),
+            senderName: value?.contacts?.[0]?.profile?.name,
             text,
-            undefined,
-            msg.id,
-            channelAccountId
-          );
-
-          // TODO: Process with agent and respond
+            provider: metaProvider.id,
+          });
+          const response = await handleNormalizedEvent(event, ctx);
+          statuses.push(response.status);
         }
       }
     }
@@ -132,5 +198,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({ status: "ok" });
+  const aggregate = aggregateWebhookStatuses(statuses);
+  return NextResponse.json(
+    { ok: aggregate.ok, processed: statuses.length },
+    { status: aggregate.status }
+  );
 }
