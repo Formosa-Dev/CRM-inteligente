@@ -2,22 +2,24 @@
 
 **Open-source commerce + AI-agent platform for local businesses.**
 
-Storefront, WhatsApp ordering with an AI sales agent, admin dashboard, Telegram internal bot, Meta Ads attribution, and analytics — all configurable from the UI, all credentials stored in the database. Deploy it, add your business data, start selling.
+Storefront, multichannel ordering with an AI sales agent (WhatsApp, Instagram, Facebook), admin dashboard, Telegram internal bot, Meta Ads attribution, and analytics — all configurable from the UI, all credentials stored in the database. Deploy it, add your business data, start selling.
 
 Originally built for a real food business in Formosa, Argentina. Released by **[formosa.dev.ar](https://formosa.dev.ar)** (Fusa Labs) as a free resource — use it for personal projects or commercially.
 
 ```
-Storefront (Next.js)  ─┐
-WhatsApp (YCloud)     ─┼─►  Agent layer (OpenAI-compatible)  ─►  PostgreSQL
-Telegram internal bot ─┘        ▲ tools: orders, catalog, customers, analytics
-Admin panel (/admin)            └── business config lives in DB, editable from UI
+Storefront (Next.js)        ─┐
+WhatsApp (YCloud, Kapso)    ─┼─► Messaging layer ─►  Agent layer (OpenAI-compatible) ─► PostgreSQL
+Instagram/Facebook (Zernio) ─┘   unified ingress        ▲ tools: orders, catalog, customers
+Telegram internal bot            channel_accounts       └── business config lives in DB, editable from UI
+Admin panel (/admin)
 ```
 
 ## Features
 
 - **Storefront** — animated product pages, cart, checkout that hands off to WhatsApp, attribution-aware CTAs.
-- **WhatsApp AI agent** — answers customers, takes orders, sends catalog images, escalates to humans. OpenAI-compatible providers only (OpenAI, OpenRouter, DeepSeek, Groq, Together, Ollama).
+- **Multichannel AI agent** — answers customers, takes orders, sends catalog images, escalates to humans. WhatsApp via YCloud (Kapso adapter included), Instagram/Facebook via Zernio — all behind a canonical provider contract (`src/lib/messaging/`). OpenAI-compatible LLM providers only (OpenAI, OpenRouter, DeepSeek, Groq, Together, Ollama).
 - **Admin panel** — products CRUD, order/kitchen board, conversations inbox with human override, leads with UTM attribution, analytics, and **full business/agent configuration**.
+- **Channel accounts** — `/admin/channels` lists, creates and toggles `channel_accounts` for any registered provider, with `env:` credential refs and Zernio embedded connect (OAuth + WhatsApp Embedded Signup). Inbox filters by channel/account; phone-less social leads resolve through `lead_identities`; agent config scopes per channel or account.
 - **Telegram internal bot** — manage orders, clients and metrics from Telegram (allowlist-gated).
 - **Meta Ads integration** — pixel + Conversions API + signed attribution links (`ref:` codes).
 - **Infra** — rate limiting, message buffer, Redis queue with DLQ (Upstash), circuit breaker, idempotent webhooks, HMAC signature checks.
@@ -42,7 +44,7 @@ npm run dev                  # http://localhost:3000
 string — the app uses the `neon-http` driver (`src/db/index.ts`), so Render
 Postgres, RDS, Supabase or a plain local Postgres will not connect.
 
-**First admin:** run `ADMIN_EMAIL=you@example.com ADMIN_PASSWORD="strong-password" npm run db:seed`. The seed **never creates default credentials**. Add `SEED_DEMO=1` for the demo catalog. The `/setup` browser flow is the intended UI path but is temporarily blocked by a bootstrap fix in progress — `db:seed` is the path that works today.
+**First admin:** open `/setup` in the browser — it bootstraps the first admin with a single atomic insert. The CLI alternative is `ADMIN_EMAIL=you@example.com ADMIN_PASSWORD="strong-password" npm run db:seed`. The seed **never creates default credentials**. Add `SEED_DEMO=1` for the demo catalog.
 
 Then `/admin/agent` covers everything else: business identity, WhatsApp number, YCloud key, AI provider key/models, integration secrets, hours, delivery zones, prompts.
 
@@ -70,14 +72,18 @@ the database and take precedence over env vars.
 
 ```
 src/
-├── app/(storefront)/   # public pages (animated, SEO metadata from DB)
-├── app/(admin)/admin/  # dashboard, agent config, orders, leads, analytics
-├── app/api/            # webhooks + public endpoints (leads, products, business)
+├── app/(storefront)/          # public pages (animated, SEO metadata from DB)
+├── app/(admin)/admin/         # dashboard, agent config, orders, leads, channels, analytics
+├── app/api/webhooks/ingress/  # unified provider ingress (POST /api/webhooks/ingress/[provider])
+├── app/api/                   # other webhooks + public endpoints (leads, products, business)
+├── lib/messaging/             # provider abstraction: contract, registry, messenger, inbound pipeline
+│   └── providers/             # ycloud, zernio (+ embedded connect), kapso adapters
+├── lib/channels/              # conversation routing + channel-account binding
 ├── lib/whatsapp|telegram|agent/   # AI agents + tools
-├── lib/business.ts     # business identity: DB row 1 → env → fallback
-├── lib/ai/config.ts    # AI provider: DB → env (key, base URL, models)
-├── lib/auth/require-admin.ts      # role-based guard for mutations
-└── db/schema.ts        # agent_config holds all business/credential fields
+├── lib/business.ts            # business identity: DB row 1 → env → fallback
+├── lib/ai/config.ts           # AI provider: DB → env (key, base URL, models)
+├── lib/auth/require-admin.ts  # role-based guard for mutations
+└── db/schema.ts               # agent_config, channel_accounts, lead_identities, …
 ```
 
 ## Security notes
