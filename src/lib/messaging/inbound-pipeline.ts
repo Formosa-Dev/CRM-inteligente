@@ -103,8 +103,14 @@ export function shouldSendAutoReply(input: {
   return input.isNew || !input.conversationHasMessages;
 }
 
-export function autoReplyMarkerKey(messageId: string): string {
-  return `auto-reply:${messageId}`;
+/**
+ * A-13 — conversation-scoped claim key for the first-contact auto-reply.
+ * The send gate is evaluated before the inbound row exists, so two
+ * concurrent first messages can both pass it; this unique platformMessageId
+ * makes only one of them reach the send (the second fails the insert).
+ */
+export function autoReplyClaimKey(conversationId: number): string {
+  return `auto-reply:conv:${conversationId}`;
 }
 
 /**
@@ -840,7 +846,7 @@ export async function handleNormalizedEvent(
     }
 
     // 8. Auto-reply for new conversations (solo si la AI está habilitada).
-    //    The marker + idempotency key make retries safe: a first-contact send
+    //    The claim + idempotency key make retries safe: a first-contact send
     //    that failed retryably is retried, while a sent reply is never
     //    duplicated (provider dedups on the same external id).
     if (
@@ -850,8 +856,12 @@ export async function handleNormalizedEvent(
       autoReplyMessage &&
       !webOrderRedirectEnabled
     ) {
-      const marker = autoReplyMarkerKey(messageId);
-      const alreadyReplied = await isMessageDuplicate(marker);
+      // A-13 — the gate runs before the inbound row is persisted, so two
+      // concurrent first messages can both pass `shouldSendAutoReply`. The
+      // conversation-scoped claim below is the real arbiter: its unique
+      // platformMessageId admits exactly one sender.
+      const claimKey = autoReplyClaimKey(conversationId);
+      const alreadyReplied = await isMessageDuplicate(claimKey);
       let conversationHasMessages = false;
       if (!alreadyReplied) {
         try {
@@ -873,40 +883,66 @@ export async function handleNormalizedEvent(
       } else if (convAccountBroken) {
         console.warn("[webhook:wa] Auto-reply suppressed — channel account unresolvable");
       } else {
-        const autoReplyResult = await messenger.send(
-          {
-            to: customerPhone,
-            type: "text",
-            text: autoReplyMessage,
-            idempotencyKey: marker,
-          },
-          convAccount
-            ? { channel: convChannel, account: convAccount }
-            : {
-                credentials: {
-                  apiKey: config.ycloudApiKey || "",
-                  senderAddress: config.phoneNumber || "",
-                },
-              },
-        );
-        if (!autoReplyResult.ok) {
-          console.error(
-            "[webhook:wa] Auto-reply send failed — inbound not acked",
-            { retryable: autoReplyResult.retryable, error: autoReplyResult.error }
-          );
-          return NextResponse.json(
-            { error: "auto-reply-send-failed" },
-            { status: autoReplyResult.retryable ? 503 : 502 }
-          );
-        }
-        await insertMessage(
+        // Claim BEFORE sending: insertMessage maps the platformMessageId
+        // unique-violation to wasDuplicate, so a concurrent first message
+        // fails the claim instead of sending a second welcome. On success
+        // the claim row IS the persisted reply (its content is the real
+        // reply text); on failure it is removed so the provider's
+        // redelivery can claim and retry.
+        const claim = await insertMessage(
           conversationId,
           "assistant",
           autoReplyMessage,
           undefined,
-          marker,
+          claimKey,
           channelAccountId
         );
+        if (claim.wasDuplicate) {
+          console.log(
+            `[webhook:wa] Auto-reply already claimed for conv ${conversationId} — skipping send`
+          );
+        } else {
+          const autoReplyResult = await messenger.send(
+            {
+              to: customerPhone,
+              type: "text",
+              text: autoReplyMessage,
+              idempotencyKey: claimKey,
+            },
+            convAccount
+              ? { channel: convChannel, account: convAccount }
+              : {
+                  credentials: {
+                    apiKey: config.ycloudApiKey || "",
+                    senderAddress: config.phoneNumber || "",
+                  },
+                },
+          );
+          if (!autoReplyResult.ok) {
+            // Release the claim so a redelivery can retry. If even the
+            // release fails the row stays and suppresses the retry — loud
+            // log, still error out.
+            try {
+              const { chatMessages } = await import("@/db/schema");
+              await db
+                .delete(chatMessages)
+                .where(eq(chatMessages.id, claim.id));
+            } catch (releaseError) {
+              console.error(
+                "[webhook:wa] Auto-reply claim release failed — claim row stays",
+                releaseError
+              );
+            }
+            console.error(
+              "[webhook:wa] Auto-reply send failed — inbound not acked",
+              { retryable: autoReplyResult.retryable, error: autoReplyResult.error }
+            );
+            return NextResponse.json(
+              { error: "auto-reply-send-failed" },
+              { status: autoReplyResult.retryable ? 503 : 502 }
+            );
+          }
+        }
       }
     }
 
