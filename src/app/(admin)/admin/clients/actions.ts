@@ -181,32 +181,61 @@ export async function updateClient(
   }
 }
 
+export type DeleteLeadDeps = {
+  isAdmin(): Promise<boolean>;
+  /** Returns the lead id for a normalized phone, or null. */
+  findLeadIdByPhone(phone: string): Promise<number | null>;
+  /**
+   * Deletes the lead's orders and the lead itself in ONE statement: a
+   * data-modifying CTE runs as a single implicit transaction, which preserves
+   * all-or-nothing deletion on the neon-http driver (`db.transaction()`
+   * throws there — it has no transaction support).
+   */
+  deleteLeadWithOrders(phone: string, leadId: number): Promise<void>;
+};
+
+function createDbDeleteLeadDeps(): DeleteLeadDeps {
+  return {
+    isAdmin: () => requireAdmin(),
+    async findLeadIdByPhone(phone) {
+      const [lead] = await db
+        .select({ id: leads.id })
+        .from(leads)
+        .where(eq(leads.phone, phone))
+        .limit(1);
+      return lead?.id ?? null;
+    },
+    async deleteLeadWithOrders(phone, leadId) {
+      await db.execute(sql`
+        WITH deleted_orders AS (
+          DELETE FROM orders WHERE phone_number = ${phone}
+        )
+        DELETE FROM leads WHERE id = ${leadId}
+      `);
+    },
+  };
+}
+
 /**
  * Elimina un lead y todas sus órdenes asociadas
  */
 export async function deleteLead(
-  phone: string
+  phone: string,
+  deps: DeleteLeadDeps = createDbDeleteLeadDeps()
 ): Promise<{ success: boolean; error?: string }> {
-  if (!(await requireAdmin())) return { success: false, error: "No autorizado"  };
+  if (!(await deps.isAdmin())) return { success: false, error: "No autorizado"  };
 
   try {
     // Normalizar teléfono
     const normalizedPhone = normalizePhone(phone);
     // Buscar lead ID primero
-    const [lead] = await db
-      .select({ id: leads.id })
-      .from(leads)
-      .where(eq(leads.phone, normalizedPhone))
-      .limit(1);
+    const leadId = await deps.findLeadIdByPhone(normalizedPhone);
 
-    if (!lead) return { success: false, error: "Lead no encontrado" };
+    if (leadId == null) return { success: false, error: "Lead no encontrado" };
 
-    // Eliminar lead + órdenes asociadas en una sola transacción, buscando por
-    // teléfono normalizado (órdenes) — el lead ya se resolvió por ID arriba.
-    await db.transaction(async (tx) => {
-      await tx.delete(orders).where(eq(orders.phoneNumber, normalizedPhone));
-      await tx.delete(leads).where(eq(leads.id, lead.id));
-    });
+    // Eliminar lead + órdenes asociadas en un solo statement atómico,
+    // buscando por teléfono normalizado (órdenes) — el lead por ID.
+    await deps.deleteLeadWithOrders(normalizedPhone, leadId);
 
     return { success: true };
   } catch {
