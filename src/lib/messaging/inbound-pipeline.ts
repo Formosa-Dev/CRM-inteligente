@@ -51,7 +51,7 @@ import { runWhatsAppAgent, resolveAgentRouting } from "@/lib/whatsapp/agent";
 import { toSessionContext } from "@/lib/whatsapp/session-policy";
 import { db } from "@/db";
 import { agentConfig, conversations, leads, addresses } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { normalizePhone, phoneInList } from "@/lib/phone-utils";
 import { mergeBufferedTurn } from "@/lib/whatsapp/buffered-history";
 import { buildTemporalAgentMessages } from "@/lib/whatsapp/temporal-context";
@@ -926,11 +926,15 @@ export async function handleNormalizedEvent(
       if (addrToSave) {
         // Actualizar leads.address como dirección principal — y, cuando el
         // evento llegó por una cuenta vinculada, atribuir el lead a esa cuenta
-        // para que los lookups de pedidos scoped la encuentren.
+        // SOLO si aún no tiene una (primera atribución — un inbound cualquiera
+        // no debe re-stampar el lead a otra cuenta, ver lead-capture.ts).
         db.update(leads)
           .set(
             channelAccountId != null
-              ? { address: addrToSave, channelAccountId }
+              ? {
+                  address: addrToSave,
+                  channelAccountId: sql`coalesce(${leads.channelAccountId}, ${channelAccountId})`,
+                }
               : { address: addrToSave }
           )
           .where(eq(leads.phone, phone))

@@ -93,8 +93,7 @@ async function notifyDeliveryOrder(
       | { credentials: { apiKey: string; senderAddress: string } };
     if (channelAccountId != null) {
       const resolution = await resolveChannelAccountByIdStrict(
-        channelAccountId,
-        "ycloud"
+        channelAccountId
       );
       if (resolution.kind !== "resolved") {
         console.warn(
