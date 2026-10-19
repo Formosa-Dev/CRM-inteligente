@@ -5,6 +5,7 @@ import {
   type TelegramUpdate,
   sendTelegramMessage,
   isChatAuthorized,
+  telegramPlatformMessageId,
 } from "@/lib/telegram/bot";
 import { sendTelegramBubbles } from "@/lib/buffer/response-sender";
 import {
@@ -177,7 +178,10 @@ export async function POST(
       return NextResponse.json({ ok: true });
     }
 
-    const messageId = String(message.message_id);
+    // Chat-scoped platform id: message_id is a per-chat counter shared by
+    // every chat; a bare value collides in the global platform_message_id
+    // dedup space and silently drops other chats' early messages.
+    const messageId = telegramPlatformMessageId(chatId, message.message_id);
     const senderName =
       message.from?.first_name ||
       message.from?.username ||

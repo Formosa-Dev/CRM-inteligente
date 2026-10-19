@@ -273,3 +273,18 @@ export function isChatAuthorized(
   // strangers — it exposes admin tools (orders, client history, metrics).
   return allowedChatIds.length > 0 && allowedChatIds.includes(chatId);
 }
+
+/**
+ * Platform message id scoped by chat. Telegram's `message_id` is a per-chat
+ * monotonic counter (1, 2, 3, …) identical across every chat — storing it raw
+ * in `chat_messages.platform_message_id` (a globally-unique dedup key) makes
+ * a second authorized chat's early messages collide with the first chat's and
+ * get swallowed as false duplicates. Namespacing by chat id keeps the dedup
+ * key unique per (chat, message).
+ */
+export function telegramPlatformMessageId(
+  chatId: number | string,
+  messageId: number | string
+): string {
+  return `tg_${chatId}_${messageId}`;
+}
