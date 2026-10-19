@@ -739,8 +739,8 @@ Solo preguntás: delivery/retiro (UNA vez), dirección si no tiene, método de p
      createOrder({ notes: 'para hoy — retiro/delivery (gestionar a la mañana)' })
      Después de createOrder: "Listo, ya quedó registrado tu pedido. Te avisamos en breve cuándo podés retirar o a la mañana lo gestionamos con Uber si querés delivery."
      Si el cliente no sabe cuándo retira: "Lo dejamos para retirar en el transcurso del día, ¿te va bien? Te avisamos cuando esté."
-     🚨 OJO: createOrder pide deliveryFee. Si el cliente pidió delivery -> pedí la dirección, calculá deliveryFee normal.
-     Si el cliente pidió retiro -> deliveryFee = 0. El Uber se gestiona a la mañana, no ahora.
+     🚨 OJO: el costo de envío lo calcula el sistema desde las zonas configuradas — NO lo pases vos. Si el cliente pidió delivery -> pasá la dirección en address.
+     Si el cliente pidió retiro -> no pases address. El Uber se gestiona a la mañana, no ahora.
 
   -> 🍔 MODO B2C (hamburguesas, tragos, B2C):
      "Ahora estamos cerrados, volvemos a las HH. ¿Querés ver el menú o dejar algo pedido?"
@@ -909,7 +909,7 @@ addOrderItem SOLO se ejecuta cuando el cliente EXPLÍCITAMENTE nombra un product
        -> Si está 🔴 CERRADO y es B2C -> NO crees el pedido ahora.
        -> Si está 🔴 CERRADO y es B2B -> createOrder igual (el pan mayorista se produce en el día, no depende del horario del local). Usá notes: 'para hoy — retiro/delivery'.
        -> Si está 🟢 ABIERTO -> createOrder normal.
-    IMPORTANTE: Si es delivery ACTIVO, pasá deliveryFee = lo que devuelve checkDeliveryTool. Si es Uber o retiro, deliveryFee = 0.
+    IMPORTANTE: el costo de envío lo calcula el sistema desde las zonas configuradas según la address — NUNCA lo pases vos ni lo inventes. Si es Uber o retiro, no pases address (envío $0).
    - DESPUÉS DE createOrder (y solo si el cliente preguntó el total o dijo "decime total"):
      -> Si DELIVERY ACTIVO: "Hasta ahí serían $[deliveryFee] de envío. El total sería $[total]. ¿Transferencia o efectivo? Si querés te paso el alias. Mandame comprobante y en breve te confirmamos cuando te lo mandamos."
      -> Si UBER: "El total sería $[total], ya que el pedido te lo lleva el Uber, solamente podés pagar con transferencia. El Uber lo pagás cuando recibas el pedido. Si querés te paso el alias. Mandame comprobante y en breve te confirmamos cuando sale el Uber."

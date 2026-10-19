@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { addToOrderTool, updateOrderTool } from "./tools/order-management-tools";
+import { createCreateOrderTool } from "./tools/create-order";
 
 const toolsSource = readFileSync(
   new URL("./tools/order-management-tools.ts", import.meta.url),
@@ -90,5 +91,36 @@ describe("A-07 updateOrder never writes order_type with fulfillment values", () 
     assert.match(promptSection, /entrega \('delivery'\/'retiro'\)/);
     assert.doesNotMatch(promptSection, /orderType \('delivery'\/'retiro'\)/, "prompt must not instruct writing orderType");
     assert.doesNotMatch(promptSection, /deliveryFee/, "prompt must not tell the model to pass a fee");
+  });
+});
+
+// A-19: createOrder never persists model-claimed payment state nor a
+// model-set delivery fee. Payment intent is recorded as a note; paid status
+// only ever comes from operator/admin paths.
+describe("A-19 createOrder records payment intent, never settles", () => {
+  test("input schema does not accept paymentStatus or deliveryFee", () => {
+    const tool = createCreateOrderTool(1);
+    const input = tool.inputSchema as {
+      parse: (v: unknown) => { paymentStatus?: unknown; deliveryFee?: unknown; paymentClaimed?: boolean };
+    };
+    const parsed = input.parse({
+      customerName: "Ana",
+      orderType: "hamburguesas",
+      customerPhone: "5493704111111",
+      paymentStatus: "paid",
+      deliveryFee: 99999,
+      paymentClaimed: true,
+    });
+    assert.equal("paymentStatus" in parsed, false, "the agent can never mark an order paid");
+    assert.equal("deliveryFee" in parsed, false, "the fee is server-resolved from zones");
+    assert.equal(parsed.paymentClaimed, true);
+  });
+
+  test("insert always writes pending and resolves the fee from zones", () => {
+    assert.match(createOrderSource, /paymentStatus: "pending"/);
+    assert.doesNotMatch(createOrderSource, /paymentStatus:\s*(paymentStatus|"paid")/, "no model-supplied paid status");
+    assert.doesNotMatch(createOrderSource, /paymentStatus: z\.enum/, "no paymentStatus tool param");
+    assert.match(createOrderSource, /resolveDeliveryFee\(address\)/);
+    assert.match(createOrderSource, /PAGO DECLARADO/, "a claimed payment lands in notes as intent");
   });
 });
