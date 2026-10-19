@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 import { getStorefrontProduct } from "@/lib/storefront-product";
 
 const CATEGORY = "pan_mayorista";
@@ -27,10 +28,18 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   };
 }
 
-export default function PanMayoristaDetailLayout({
+// Category gate: this URL must not render a product from another
+// category — that would duplicate /hamburguesas/[id] content under a
+// second canonical URL.
+export default async function PanMayoristaDetailLayout({
   children,
+  params,
 }: {
   children: React.ReactNode;
+  params: Promise<{ id: string }>;
 }) {
+  const { id } = await params;
+  const product = await getStorefrontProduct(id);
+  if (!product || product.category !== CATEGORY) notFound();
   return children;
 }
