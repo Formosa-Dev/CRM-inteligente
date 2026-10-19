@@ -132,7 +132,7 @@ export function DeliveryCTA() {
         {/* Hours */}
         <motion.p
           variants={fadeUp}
-          className="text-sm text-foreground/40"
+          className="text-sm text-foreground/50"
         >
           Lunes a Sábado · 10:00 a 22:00
         </motion.p>

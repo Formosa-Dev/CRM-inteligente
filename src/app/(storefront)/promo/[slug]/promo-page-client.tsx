@@ -91,7 +91,7 @@ export function PromoPageClient({ slug, campaign, meta }: PromoPageClientProps) 
             message={campaign.whatsappMessage}
             label="Aprovechá la promo"
           />
-          <p className="text-foreground/35 text-xs">
+          <p className="text-foreground/50 text-xs">
             Respuesta inmediata por WhatsApp
           </p>
         </motion.div>

@@ -77,10 +77,10 @@ export function Footer() {
         </div>
 
         <div className="mt-12 pt-6 flex flex-col sm:flex-row items-center justify-between gap-2 border-t border-primary/15">
-          <p className="text-xs text-foreground/40">
+          <p className="text-xs text-foreground/50">
             © {new Date().getFullYear()} {brandName}. Todos los derechos reservados.
           </p>
-          <p className="text-xs text-foreground/40">
+          <p className="text-xs text-foreground/50">
             Hecho con amor en Argentina
           </p>
         </div>
