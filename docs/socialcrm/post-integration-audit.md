@@ -10,41 +10,67 @@ Severity: `bug` = wrong behavior today · `edge` = real but narrow ·
 
 ## Findings
 
-### F1 — Cross-account delivery dedup drop — `bug`, fix already exists
+### F1 — Cross-account delivery dedup drop — `bug` — **FIXED** (`705a21c`)
 - `src/lib/messaging/channel-events.ts` — `isChannelDeliveryRecorded(provider, deliveryId)`
-  reads without `channel_account_id` scope, but migration 0019's unique index is
-  `(provider, coalesce(channel_account_id,-1), delivery_id)`. If a provider
-  redelivers the same `deliveryId` fanned out to two channel accounts, account
-  B's copy is skipped as duplicate after account A persisted → silent event
-  loss on multi-account installs.
-- **Status**: already fixed in unintegrated branch `socialcrm-postpush-remediation`
-  (`bf24f44`) — it adds the `channelAccountId` parameter and the coalesced
-  comparison mirroring the index. Integrating that branch closes this; no new
-  worktree needed.
+  read without `channel_account_id` scope while migration 0019's unique index is
+  `(provider, coalesce(channel_account_id,-1), delivery_id)` → account A's
+  marker suppressed account B's identical delivery id.
+- **Closed**: `socialcrm-postpush-remediation` integrated (`705a21c` +
+  `7e44dbe`) — the read now takes `channelAccountId` and mirrors the coalesced
+  partition; plus a bonus: real phone numbers in test fixtures replaced with
+  NANP `+1 555 01xx` and a digest-only whole-repo privacy guard added.
 
-### F2 — New account row not visible after create — `bug` (UI)
-- `src/app/(admin)/admin/channels/channels-view.tsx` — `const [accounts, setAccounts]
-  = useState(initialAccounts)` never re-syncs. `submit()` calls `router.refresh()`
-  which delivers a new `initialAccounts` prop, but `useState` keeps the stale
-  list; `toggleStatus` mutates the same stale array. The toast says "Cuenta
-  conectada" but the table doesn't show the row until a hard navigation.
-- **Fix shape**: sync on prop change (`useEffect(() => setAccounts(initialAccounts),
-  [initialAccounts])`) or render `initialAccounts` directly and keep only
-  optimistic status overrides keyed by id.
+### F2 — New account row not visible after create — `bug` (UI) — **FIXED** (`234be4e`)
+- `channels-view.tsx` held `useState(initialAccounts)` — `router.refresh()`
+  delivered fresh props but the stale local copy won; the new row needed a
+  hard navigation.
+- **Closed**: rows now derive from props; only per-id status overrides live
+  in local state (`socialcrm-admin-channels-fixes`). Note: the naive
+  `useEffect` re-sync is rejected by React 19 lint (`set-state-in-effect`) —
+  the props-derived shape is the correct pattern.
 
-### F3 — Single connect-state cookie across platforms — `edge`
-- `src/app/(admin)/admin/channels/actions.ts` + callback route — one cookie
-  `zernio_connect_state` for all platforms. Starting WhatsApp connect and then
-  Instagram connect in another tab overwrites the nonce; the first roundtrip's
-  callback fails `oauth-state` validation.
-- Low risk: a single admin provisions accounts sequentially, and failure is a
-  clean error flash, not corruption. Fix would key the cookie per platform.
+### F3 — Single connect-state cookie across platforms — `edge` — **FIXED** (`68a85a4`)
+- One `zernio_connect_state` cookie for all platforms — a second connect
+  clobbered the first nonce.
+- **Closed**: `connectStateCookieName(platform)` helper keys the cookie per
+  platform; callback validates `platform` first to name the cookie. Covered
+  by `zernio-connect.test.ts`.
 
-### F4 — Dead `eventKey` field — `cosmetic`
-- `src/lib/messaging/channel-events.ts` — `toChannelEventInsert` computes
-  `eventKey` but `channel_events` has no `event_key` column; the insert drops
-  it. Harmless dead field (dedup runs on the real unique indexes). Either add
-  the column or drop the field.
+### F4 — ~~Dead `eventKey` field~~ — **NOT A BUG** (audit correction)
+- `eventKey` looked unused because `channel_events` has no `event_key`
+  column — but it is the dedup key of the injected `ChannelEventRepository`
+  used by `channel-events.test.ts`. It stays.
+
+### F9 — Zernio-bound WhatsApp accounts never reach the agent — `gap` — **MITIGATED** (`6f310df`)
+- `src/app/api/webhooks/ingress/[provider]/route.ts` gates the app pipeline on
+  `provider.id === "ycloud" && channel === "whatsapp"`. A WhatsApp number
+  connected via Zernio embedded connect persists inbound messages but the
+  agent never replies — silently. Same for Kapso WhatsApp accounts.
+- Pre-existing design deferral (agent dispatch is YCloud-only until the agent
+  layer is provider-generalized), but S16 makes the trap one click away.
+- **Mitigation shipped**: the channels view warns next to the WhatsApp connect
+  button that agent auto-reply requires the YCloud-bound account
+  (`socialcrm-admin-channels-fixes`, `6f310df`).
+- **Open**: provider-generalized agent dispatch (route the app pipeline by
+  resolved `channel === "whatsapp"` + account capability rather than
+  `provider.id`). That is a design change, not a bug fix — track separately.
+
+### F10 — Telegram `platform_message_id` is a per-chat counter — `bug` — **FIXED** (`46e4608`)
+- `src/app/api/telegram/webhook/[token]/route.ts` stored
+  `String(message.message_id)` raw. Telegram `message_id` is a per-chat
+  monotonic counter (1, 2, 3, …) shared by every chat, while
+  `chat_messages.platform_message_id` dedup is global → a second authorized
+  chat's early messages collide with the first chat's rows and get dropped as
+  false duplicates (or false-positive against any provider's numeric ids).
+- Latent in practice (single authorized chat today) but real data loss on any
+  multi-chat install.
+- **Closed**: `telegramPlatformMessageId(chatId, messageId)` in
+  `src/lib/telegram/bot.ts` namespaces the key `tg_<chat>_<id>`
+  (`socialcrm-tg-dedup-scope`). Covered by
+  `src/lib/telegram/platform-message-id.test.ts` (helper + source guard).
+- Note: rows stored before the fix keep bare ids — only replays of pre-fix
+  messages could double-insert under the new key; acceptable (Telegram does
+  not replay acked updates).
 
 ### F5 — Telegram identities normalized into `leads.phone` — `note`
 - `src/lib/messaging/conversation-identity.ts` — `telegram` is a phone channel;
@@ -69,13 +95,16 @@ Severity: `bug` = wrong behavior today · `edge` = real but narrow ·
   collision would false-positive dedup. Would need a schema change to scope;
   documented, not urgent.
 
-### F8 — Orphaned lead rows on identity race — `edge`
+### F8 — Orphaned lead rows on identity race — `edge` — **FIXED** (`ab6840b`)
 - `src/lib/messaging/lead-identity.ts` — concurrent first-contact inbounds can
   both create phone-less leads; the `lead_identities` unique resolves to one
   winner, and `linkConversationToLead` only fills `conversationId` when null —
-  the loser lead keeps its own `conversationId` stamp, so two leads reference
-  the same conversation. Benign but untidy; a corrective pass could merge or
-  clear the loser.
+  the loser lead kept its own `conversationId` stamp, so two leads referenced
+  the same conversation.
+- **Closed**: the losing path now tracks `createdLeadId` and deletes only the
+  just-created loser shell (pre-existing phone-matched leads are never
+  deleted); FakeDb gained a `delete` op and race coverage
+  (`socialcrm-lead-race-cleanup`).
 
 ## Fixed before integration
 
