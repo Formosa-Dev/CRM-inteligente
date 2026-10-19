@@ -39,6 +39,7 @@ import {
   resolveChannelAccount,
   resolveChannelAccountStrict,
 } from "./accounts";
+import { persistChannelEvent } from "./channel-events";
 import { classifyError } from "./errors";
 import { channelForProvider, isChannelKind } from "./registry";
 import type {
@@ -261,10 +262,17 @@ export async function handlePassiveChannelEvent(
 ): Promise<NextResponse> {
   try {
     if (!PASSIVE_PERSISTED_KINDS.has(event.kind)) {
-      logAckedWithoutPersistence(
-        event,
-        `kind '${event.kind}' has no persistence table yet`
-      );
+      const persisted = await persistChannelEvent(event, {
+        channel: ctx.channel,
+        account: ctx.account,
+        channelAccountId: ctx.channelAccountId,
+      });
+      if (persisted.kind === "schema-not-ready") {
+        console.warn(
+          `[ingress] channel_events schema not ready — ${event.provider}/${event.kind} ` +
+            `${event.deliveryId} acknowledged without persistence (migration pending)`
+        );
+      }
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 

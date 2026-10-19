@@ -27,6 +27,7 @@ import {
   resolveIngressContext,
 } from "./ingress";
 import { getProvider } from "./registry";
+import { persistChannelEvent } from "./channel-events";
 import type {
   ChannelAccount,
   ChannelKind,
@@ -555,6 +556,41 @@ export async function handleNormalizedEvent(
     effectiveCtx.channelAccountId ??
     channelAccountRowId(effectiveCtx.account);
   const payload = event.raw as Record<string, unknown>;
+
+  // 2. Status/lifecycle/other events have no conversation row: persist them
+  //    in `channel_events` idempotently. This replaces the old generic
+  //    log-and-ack path. Only a positively identified missing schema may ack
+  //    without persistence (documented compatibility), never an arbitrary DB
+  //    error.
+  if (event.kind !== "message.received" && event.kind !== "message.echo") {
+    try {
+      const persisted = await persistChannelEvent(event, {
+        channel: effectiveCtx.channel ?? "whatsapp",
+        account: effectiveCtx.account,
+        channelAccountId,
+      });
+      if (persisted.kind === "schema-not-ready") {
+        console.warn(
+          `[webhook] channel_events schema not ready — ${event.provider}/${event.kind} ` +
+            `${event.deliveryId} acknowledged without persistence (migration pending)`
+        );
+      } else if (persisted.kind === "duplicate") {
+        console.log(
+          `[webhook] Duplicate ${event.kind} ${event.deliveryId} — already persisted`
+        );
+      }
+      return NextResponse.json({ ok: true }, { status: 200 });
+    } catch (error) {
+      console.error(
+        `[webhook] ${event.kind} persistence failed — retryable, not acked`,
+        error
+      );
+      return NextResponse.json(
+        { error: "event-persistence-failed" },
+        { status: 503 }
+      );
+    }
+  }
 
   // 2a. Protocol-eligibility gate: empty Business echoes are acknowledged
   //     with 200 and cause no conversation lookup, mutation, routing, or

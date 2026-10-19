@@ -235,6 +235,47 @@ export const channelAccounts = pgTable("channel_accounts", {
   providerAccountUq: uniqueIndex("channel_accounts_provider_account_uq").on(table.provider, table.providerAccountId),
 }));
 
+// Durable, idempotent provider events that have no conversation/message row
+// (status transitions, account lifecycle, other normalized envelopes). Kept
+// minimal: the raw envelope stays in `payload` for audit/replay.
+export const channelEvents = pgTable("channel_events", {
+  id: serial("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().default("default"),
+  provider: text("provider").notNull(),
+  channel: channelEnum("channel"),
+  channelAccountId: integer("channel_account_id").references(
+    () => channelAccounts.id,
+    { onDelete: "set null" }
+  ),
+  providerAccountId: text("provider_account_id"),
+  deliveryId: text("delivery_id").notNull(),
+  platformMessageId: text("platform_message_id"),
+  kind: text("kind").notNull(),
+  direction: text("direction").notNull(),
+  status: text("status"),
+  eventTimestamp: timestamp("event_timestamp", { withTimezone: true }),
+  payload: jsonb("payload"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  providerDeliveryUq: uniqueIndex("channel_events_provider_delivery_uq").on(
+    table.provider,
+    table.deliveryId
+  ),
+  providerPlatformUq: uniqueIndex("channel_events_provider_platform_uq")
+    .on(table.provider, table.platformMessageId, table.kind, table.status)
+    .where(
+      sql`platform_message_id is not null and status is not null`
+    ),
+  accountLookupIdx: index("channel_events_account_created_idx").on(
+    table.channelAccountId,
+    table.createdAt
+  ),
+  platformLookupIdx: index("channel_events_provider_platform_idx").on(
+    table.provider,
+    table.platformMessageId
+  ),
+}));
+
 export const conversations = pgTable("conversations", {
   id: serial("id").primaryKey(),
   // Nullable since multi-channel (S11): social identities have no whatsappId.

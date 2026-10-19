@@ -120,6 +120,13 @@
       "when": 1792396450126,
       "tag": "0016_account_config_cascade",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792396700316,
+      "tag": "0017_channel_events",
+      "breakpoints": true
     }
   ]
 }
