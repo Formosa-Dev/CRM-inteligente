@@ -2,12 +2,12 @@ import { tool } from "ai";
 import { z } from "zod";
 import { db } from "@/db";
 import { orders } from "@/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { getStatusSemantic, isActiveStatus, getStatusNotificationMessage } from "@/lib/whatsapp/status-utils";
 import { currentAgentConfigScope } from "@/lib/agent-config-scope";
 import { isOrderVisibleToScope } from "@/lib/whatsapp/order-lifecycle";
 import { normalizePhone } from "@/lib/phone-utils";
-import { resolveItems, validateResolvedOrderItems } from "@/lib/order-utils";
+import { resolveItems, validateResolvedOrderItems, restoreOrderStockBestEffort } from "@/lib/order-utils";
 import { resolveDeliveryFee } from "./extended-tools";
 
 // The ambient scope carries the conversation's channelAccountId AND its
@@ -299,7 +299,9 @@ export const cancelOrderTool = tool({
       return `No se puede cancelar — el pedido #${orderId} ya está ${order.status === "delivered" ? "entregado" : "cancelado"}.`;
     }
 
-    await db
+    // A-26: transition is conditional — only the call that actually flips an
+    // ACTIVE order to cancelled proceeds (concurrent cancels lose the race).
+    const updated = await db
       .update(orders)
       .set({
         status: "cancelled",
@@ -308,7 +310,15 @@ export const cancelOrderTool = tool({
           : order.notes,
         updatedAt: new Date(),
       })
-      .where(eq(orders.id, orderId));
+      .where(and(eq(orders.id, orderId), inArray(orders.status, ["pending", "preparing", "ready"])));
+    const cancelledRows = (updated as unknown as { rowCount?: number }).rowCount ?? 0;
+    if (cancelledRows === 0) {
+      return `No se puede cancelar — el pedido #${orderId} ya no está activo.`;
+    }
+
+    // Creation decremented stock — the cancel gives it back. The restore is
+    // claimed by a notes marker so retries can never restore twice.
+    await restoreOrderStockBestEffort(orderId);
 
     return `❌ Pedido #${orderId} cancelado.${reason ? ` Motivo: ${reason}` : ""}\nDisculpá las molestias. ¿Querés hacer un pedido nuevo?`;
   },

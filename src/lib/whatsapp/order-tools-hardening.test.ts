@@ -38,6 +38,10 @@ const sendMediaSource = readFileSync(
   new URL("./tools/send-media-tools.ts", import.meta.url),
   "utf8",
 );
+const orderUtilsSource = readFileSync(
+  new URL("../order-utils.ts", import.meta.url),
+  "utf8",
+);
 
 function section(source: string, startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
@@ -152,7 +156,7 @@ describe("A-19 createOrder records payment intent, never settles", () => {
 // paid row inflates cash session totals.
 describe("A-20 auto-close never fabricates a paid delivery", () => {
   test("the drizzle repository closes stale orders as cancelled only", () => {
-    const closeSection = section(lifecycleSource, "async closeStaleOrder", "return rowCount");
+    const closeSection = section(lifecycleSource, "async closeStaleOrder", "return false;");
     assert.match(closeSection, /status: "cancelled"/);
     assert.doesNotMatch(closeSection, /paymentStatus|deliveredAt|delivered/, "auto-close must not mark paid/delivered");
   });
@@ -282,6 +286,30 @@ describe("A-25 phase-2 media results reach pendingMedia", () => {
     assert.match(agentSource, /collectMedia\(result\.toolResults\)/);
     // dedupe guard so a retried send can't ship the same media twice
     assert.match(agentSource, /pendingMedia\.some\(\(p\)\s*=>\s*p\.type === item\.type && p\.url === item\.url\)/);
+  });
+});
+
+// A-26: cancelling an order restores the stock that creation decremented.
+// The restore is claimed by a [STOCK_DEVUELTO] notes marker via a conditional
+// UPDATE, so concurrent/retried cancels can never double-restore.
+describe("A-26 cancel restores stock idempotently", () => {
+  test("restore is marker-claimed on cancelled orders only", () => {
+    const body = orderUtilsSource.slice(orderUtilsSource.indexOf("restoreOrderStockBestEffort"));
+    assert.match(body, /STOCK_RESTORED_MARKER/);
+    assert.match(body, /eq\(orders\.status, "cancelled"\)/);
+    assert.match(body, /NOT LIKE '%STOCK_DEVUELTO%'/);
+    assert.match(body, /stock = stock \+ \$\{qty\}/, "restore adds quantity back");
+    assert.match(body, /claimedRows === 0\) return/, "only the claim winner restores");
+  });
+
+  test("cancelOrder transitions conditionally and calls the restore", () => {
+    const cancelSection = section(toolsSource, "cancelOrderTool = tool(", "pedido nuevo?");
+    assert.match(cancelSection, /inArray\(orders\.status, \["pending", "preparing", "ready"\]\)/);
+    assert.match(cancelSection, /restoreOrderStockBestEffort\(orderId\)/);
+  });
+
+  test("stale-order auto-close also restores stock", () => {
+    assert.match(lifecycleSource, /restoreOrderStockBestEffort\(orderId\)/);
   });
 });
 

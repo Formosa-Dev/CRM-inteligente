@@ -15,6 +15,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, leads, orders } from "@/db/schema";
 import { logger } from "@/lib/logger";
+import { restoreOrderStockBestEffort } from "@/lib/order-utils";
 import {
   ACTIVE_ORDER_STATUSES,
   ageInHours,
@@ -88,7 +89,13 @@ export class DrizzleOrderLifecycleRepository implements OrderLifecycleRepository
       })
       .where(and(eq(orders.id, orderId), inArray(orders.status, ACTIVE_STATUS_LIST)));
     const rowCount = (updated as unknown as { rowCount?: number }).rowCount ?? 0;
-    return rowCount > 0;
+    if (rowCount > 0) {
+      // A-26: creation decremented stock — the auto-cancel gives it back.
+      // Marker-claimed in restoreOrderStockBestEffort so it cannot run twice.
+      await restoreOrderStockBestEffort(orderId);
+      return true;
+    }
+    return false;
   }
 }
 
