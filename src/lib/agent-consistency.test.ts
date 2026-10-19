@@ -790,33 +790,16 @@ test("session policy sends non-commercial follow-ups to the agent and suppresses
     },
   };
 
-  const claims: HandoffClaimInput[] = [];
-  const claimant = {
-    async claimHandoffEffects(input: HandoffClaimInput) {
-      claims.push(input);
-      return {
-        overrideClaimed: true,
-        ownerNotificationClaimed: true,
-        customerReplyClaimed: true,
-        customerReplyDeliverable: input.aiEnabled,
-        ownerNotificationDeliverable: true,
-      };
-    },
-  };
-
-  const service = new SessionPolicyService(repository, claimant);
+  const service = new SessionPolicyService(repository);
   const first = await service.decide(706, { signal: "personal", messageId: "ack-706" });
   assert.equal(first.kind, "fixed_ack");
-  assert.equal(claims.length, 0);
 
   const followUp = await service.decide(706, { signal: "personal", messageId: "followup-706" });
   assert.equal(followUp.kind, "allow_agent");
-  assert.equal(claims.length, 0);
   assert.equal(saved.filter((id) => id === "followup-706").length, 1);
 
   const retry = await service.decide(706, { signal: "personal", messageId: "followup-706" });
   assert.equal(retry.kind, "duplicate");
-  assert.equal(claims.length, 0);
   assert.equal(saved.filter((id) => id === "followup-706").length, 1);
 
   const blocked = await service.decide(706, {
@@ -825,7 +808,6 @@ test("session policy sends non-commercial follow-ups to the agent and suppresses
     hasHumanOverride: true,
   });
   assert.equal(blocked.kind, "blocked");
-  assert.equal(claims.length, 0);
 });
 
 test("non-commercial follow-ups route to the agent regardless of delivery", () => {
@@ -851,14 +833,16 @@ test("transfer tool delegates effects to the shared handoff service", () => {
   assert.ok(claim < notify, "handoff claim must precede owner notification");
 });
 
-test("handoff and blocked paths never invoke GPT or tools", () => {
+test("blocked session path never invokes GPT or tools", () => {
   // S12: the guarded flow lives in the shared inbound pipeline.
+  // A-54: the policy machine has no handoff decision — handoffs only
+  // happen via the transferToHuman tool, so "blocked" is the only
+  // suppressing session kind left to guard.
   const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
   const post = pipeline.slice(pipeline.indexOf("export async function handleNormalizedEvent"));
   assert.ok(post.length > 0, "inbound pipeline must define handleNormalizedEvent");
   const guard = post.indexOf('sessionDecision.kind === "blocked"');
-  assert.ok(guard !== -1, "webhook must guard blocked/handoff decisions");
-  assert.match(post, /sessionDecision\.kind === "handoff"/);
+  assert.ok(guard !== -1, "webhook must guard blocked decisions");
   const agent = Math.min(
     post.indexOf("runWhatsAppAgent(") === -1 ? Number.POSITIVE_INFINITY : post.indexOf("runWhatsAppAgent("),
     post.indexOf("generateText(") === -1 ? Number.POSITIVE_INFINITY : post.indexOf("generateText(")
@@ -1175,26 +1159,21 @@ test("W2 webhook handoff delivers owner transport without customer sends while A
   assert.equal(duplicate.sendOwnerNotification, false);
   assert.equal(duplicate.sendCustomerReply, false);
 
-  // Webhook handoff branch must perform the minimal transport (override
-  // write + owner notification) and never send WhatsApp to the customer.
-  // S12: the flow + helper live in the shared inbound pipeline module.
+  // A-54 — the deterministic policy layer no longer has a webhook handoff
+  // path at all: the pipeline carries no handoff decision branch, and the
+  // only live handoff is the transferToHuman tool, which performs the same
+  // minimal transport (override write + owner notification) with no
+  // customer send of its own.
   const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
-  const post = pipeline.slice(pipeline.indexOf("export async function handleNormalizedEvent"));
-  const handoffGuard = post.indexOf('sessionDecision.kind === "handoff"');
-  assert.ok(handoffGuard !== -1, "webhook must branch on handoff decisions");
-  const handoffBranch = post.slice(handoffGuard, handoffGuard + 1200);
-  assert.match(handoffBranch, /deliverWebhookHandoff/);
-  assert.match(handoffBranch, /decision: sessionDecision/);
-  assert.doesNotMatch(handoffBranch, /sendWhatsAppBubbles|sendWhatsAppMessage/);
-  // The transport helper itself writes the 24h override and notifies the
-  // owner, with no customer WhatsApp send on any path.
-  const helperStart = pipeline.indexOf("async function deliverWebhookHandoff");
-  assert.ok(helperStart !== -1, "inbound pipeline must define deliverWebhookHandoff");
-  const helperEnd = pipeline.indexOf("export async function handleNormalizedEvent", helperStart);
-  const helper = pipeline.slice(helperStart, helperEnd === -1 ? helperStart + 4000 : helperEnd);
-  assert.match(helper, /humanOverrideUntil/);
-  assert.match(helper, /sendEscalationEmail/);
-  assert.doesNotMatch(helper, /sendWhatsAppBubbles|sendWhatsAppMessage/);
+  assert.equal(
+    pipeline.includes('sessionDecision.kind === "handoff"'),
+    false,
+    "the session machine must not gate on a handoff decision it cannot produce"
+  );
+  const tool = readFileSync("src/lib/whatsapp/tools/transfer-to-human.ts", "utf8");
+  assert.match(tool, /humanOverrideUntil/);
+  assert.match(tool, /sendEscalationEmail/);
+  assert.doesNotMatch(tool, /sendWhatsAppBubbles|sendWhatsAppMessage|messenger\.send/);
 });
 
 test("S15 handoff transport derives from the conversation channel", () => {
@@ -1278,9 +1257,6 @@ test("S15 operator sends resolve the conversation's channel account", () => {
     route,
     /findOrCreateConversation\(\s*"whatsapp",[\s\S]*?echoAccountId\s*\)/,
   );
-
-  // The handoff transport decision now receives the conversation channel.
-  assert.match(route, /deliverWebhookHandoff\(\{[\s\S]*channel: convChannel[\s\S]*decision: sessionDecision/);
 
   // The Telegram operator tool resolves channel + account per conversation.
   const tools = readFileSync("src/lib/telegram/toolsManagement.ts", "utf8");

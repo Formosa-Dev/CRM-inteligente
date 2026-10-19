@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
-  autoReplyMarkerKey,
+  autoReplyClaimKey,
   shouldSendAutoReply,
 } from "./inbound-pipeline";
 
@@ -49,8 +50,30 @@ describe("first-contact auto-reply retry safety", () => {
     );
   });
 
-  it("derives a deterministic marker from the inbound message id", () => {
-    assert.equal(autoReplyMarkerKey("wamid.1"), "auto-reply:wamid.1");
-    assert.equal(autoReplyMarkerKey("wamid.1"), autoReplyMarkerKey("wamid.1"));
+  it("derives a deterministic claim key from the conversation id (A-13)", () => {
+    // Conversation-scoped: two different inbound messages of the SAME
+    // conversation share one claim, so only the first concurrent path
+    // that lands the unique insert may send the welcome.
+    assert.equal(autoReplyClaimKey(101), "auto-reply:conv:101");
+    assert.equal(autoReplyClaimKey(101), autoReplyClaimKey(101));
+    assert.notEqual(autoReplyClaimKey(101), autoReplyClaimKey(202));
+  });
+
+  it("claims before sending and releases the claim on failure", () => {
+    const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
+    const block = pipeline.slice(
+      pipeline.indexOf("const claimKey = autoReplyClaimKey(conversationId)"),
+      pipeline.indexOf("// 9. Persist inbound message")
+    );
+    // Ordering inside the block: claim insert → send → release on failure.
+    const claimAt = block.indexOf("const claim = await insertMessage(");
+    const sendAt = block.indexOf("messenger.send(");
+    const releaseAt = block.indexOf(".delete(chatMessages)");
+    const idemAt = block.indexOf("idempotencyKey: claimKey");
+    assert.ok(claimAt !== -1 && sendAt !== -1 && releaseAt !== -1 && idemAt !== -1);
+    assert.ok(claimAt < sendAt, "the claim must be taken before the send");
+    assert.ok(sendAt < releaseAt, "the claim is released only after a failed send");
+    // The losing path never sends.
+    assert.match(block, /claim\.wasDuplicate/);
   });
 });

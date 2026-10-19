@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { redis } from "./redis";
 import { BUFFER_CONFIG, type Channel } from "./config";
 
@@ -18,6 +19,19 @@ export interface BufferedMessage {
   messageId: string;
   timestamp: number;
   contentAttributes?: unknown[];
+  /**
+   * A-11 — callback retry counter, incremented each time the batch is
+   * re-enqueued after a processing failure. Serialized with the message so
+   * it survives the Redis round trip.
+   */
+  attempt?: number;
+}
+
+/** A-11 — a batch that exhausted its callback retries. Never dropped silently. */
+export interface DeadLetterEntry {
+  failedAt: number;
+  attempts: number;
+  messages: BufferedMessage[];
 }
 
 // ─── In-Memory Fallback (cuando Redis no está disponible) ───────────────────
@@ -44,6 +58,19 @@ setInterval(() => {
 
 function memKey(channel: Channel, userId: string): string {
   return `${channel}:${userId}`;
+}
+
+function deadLetterKey(channel: Channel, userId: string): string {
+  return `deadletter:${channel}:${userId}`;
+}
+
+// Dead letters are rare — in-memory fallback is bounded implicitly by the
+// small failure volume; entries expire with the process like the buffer.
+const inMemoryDeadLetters = new Map<string, DeadLetterEntry[]>();
+
+/** Full normalized content fingerprint for the level-2 dedup (A-50). */
+function contentHash(content: string): string {
+  return createHash("sha256").update(content.toLowerCase().trim()).digest("hex");
 }
 
 function getOrCreateEntry(channel: Channel, userId: string): InMemoryEntry {
@@ -191,23 +218,74 @@ export const BufferManager = {
     return entry ? entry.messages.length > 0 : false;
   },
 
+  // A-11 — durable failure signal: a batch that exhausted its callback
+  // retries is pushed to a dead-letter list (7d TTL on Redis) instead of
+  // being dropped. Inspectable via getDeadLetters for ops/replay.
+  async enqueueDeadLetter(
+    channel: Channel,
+    userId: string,
+    entry: DeadLetterEntry
+  ): Promise<void> {
+    if (redis && !redisDown) {
+      try {
+        const dKey = deadLetterKey(channel, userId);
+        await redis.rpush(dKey, JSON.stringify(entry));
+        await redis.expire(dKey, 7 * 24 * 60 * 60);
+        return;
+      } catch (err) {
+        warnRedisDown(err);
+      }
+    }
+    const key = memKey(channel, userId);
+    const list = inMemoryDeadLetters.get(key) ?? [];
+    list.push(entry);
+    inMemoryDeadLetters.set(key, list);
+  },
+
+  async getDeadLetters(channel: Channel, userId: string): Promise<DeadLetterEntry[]> {
+    if (redis && !redisDown) {
+      try {
+        const raw = await redis.lrange(deadLetterKey(channel, userId), 0, -1);
+        return raw.map((item) =>
+          (typeof item === "string" ? JSON.parse(item) : item) as DeadLetterEntry
+        );
+      } catch (err) {
+        warnRedisDown(err);
+      }
+    }
+    return inMemoryDeadLetters.get(memKey(channel, userId)) ?? [];
+  },
+
   // Level-2 content dedup: returns true if the same content was seen in the last 5 seconds
   async isContentDuplicate(channel: Channel, userId: string, content: string): Promise<boolean> {
+    // A-50: hash the FULL normalized content — comparing only the first 50
+    // chars collapsed distinct messages that share a long common prefix.
+    const hash = contentHash(content);
     if (redis && !redisDown) {
       try {
         const hashKey = `dedup:${channel}:${userId}`;
-        const hash = content.toLowerCase().trim().slice(0, 50);
-        const existing = await redis.get(hashKey);
-        if (existing === hash) return true;
-        await redis.set(hashKey, hash, { ex: 5 });
-        return false;
+        // Atomic compare-and-set: the old get-then-set raced — two writers
+        // with different content could both read the same prior hash and
+        // both conclude "not a duplicate". Inside Lua the check and the
+        // write are one Redis operation.
+        const result = await redis.eval(
+          `if redis.call("GET", KEYS[1]) == ARGV[1] then
+             return 1
+           else
+             redis.call("SET", KEYS[1], ARGV[1], "EX", ARGV[2])
+             return 0
+           end`,
+          [hashKey],
+          [hash, "5"]
+        );
+        return result === 1;
       } catch (err) {
         warnRedisDown(err);
       }
     }
 
-    // In-memory dedup: Map separado con TTL de 5s
-    const hash = content.toLowerCase().trim().slice(0, 50);
+    // In-memory dedup: Map separado con TTL de 5s (single-threaded → the
+    // check-and-set is already atomic)
     const dedupKey = `dedup:${channel}:${userId}`;
     const now = Date.now();
 

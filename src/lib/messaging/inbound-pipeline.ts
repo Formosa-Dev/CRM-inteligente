@@ -34,7 +34,10 @@ import type {
   ChannelKind,
   NormalizedInboundEvent,
 } from "./types";
-import { sendWhatsAppBubbles } from "@/lib/buffer/response-sender";
+import {
+  matchesAssistantBubble,
+  sendWhatsAppBubbles,
+} from "@/lib/buffer/response-sender";
 import {
   findOrCreateConversation,
   insertMessage,
@@ -45,9 +48,7 @@ import {
 } from "@/lib/channels/router";
 import { captureLeadIfNew } from "@/lib/whatsapp/lead-capture";
 import { runWhatsAppAgent, resolveAgentRouting } from "@/lib/whatsapp/agent";
-import { toSessionContext, type RoutingDecision } from "@/lib/whatsapp/session-policy";
-import { resolveHandoffTransport } from "@/lib/whatsapp/human-handoff";
-import { sendEscalationEmail } from "@/lib/whatsapp/tools/escalation-email";
+import { toSessionContext } from "@/lib/whatsapp/session-policy";
 import { db } from "@/db";
 import { agentConfig, conversations, leads, addresses } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -100,8 +101,14 @@ export function shouldSendAutoReply(input: {
   return input.isNew || !input.conversationHasMessages;
 }
 
-export function autoReplyMarkerKey(messageId: string): string {
-  return `auto-reply:${messageId}`;
+/**
+ * A-13 — conversation-scoped claim key for the first-contact auto-reply.
+ * The send gate is evaluated before the inbound row exists, so two
+ * concurrent first messages can both pass it; this unique platformMessageId
+ * makes only one of them reach the send (the second fails the insert).
+ */
+export function autoReplyClaimKey(conversationId: number): string {
+  return `auto-reply:conv:${conversationId}`;
 }
 
 /**
@@ -216,24 +223,25 @@ async function handleEcho(
     const conversationId = echoConv.id;
 
     if (echoMsgId) {
-      // Dedup adicional: si el contenido coincide con el ÚLTIMO mensaje
-      // del assistant en los últimos 30s, es el eco de nuestra propia respuesta
-      const recentMessages = await getConversationMessages(conversationId, 1);
-      if (recentMessages.length > 0) {
-        const last = recentMessages[0];
-        const thirtySecAgo = Date.now() - 30_000;
-        const msgTime = last.createdAt instanceof Date
-          ? last.createdAt.getTime()
-          : new Date(last.createdAt).getTime();
-
-        if (
-          last.role === "assistant" &&
+      // Dedup adicional: si el contenido coincide con un mensaje del
+      // assistant reciente (últimos 30s), es el eco de nuestra propia
+      // respuesta. A-04: la comparación es por BURBUJA — una respuesta
+      // larga sale en N envíos y cada eco trae solo un fragmento.
+      const recentMessages = await getConversationMessages(conversationId, 6);
+      const thirtySecAgo = Date.now() - 30_000;
+      const isOwnBubbleEcho = recentMessages.some((recent) => {
+        if (recent.role !== "assistant") return false;
+        const msgTime = recent.createdAt instanceof Date
+          ? recent.createdAt.getTime()
+          : new Date(recent.createdAt).getTime();
+        return (
           msgTime > thirtySecAgo &&
-          last.content.trim() === displayText.trim()
-        ) {
-          console.log(`[webhook:echo] Skip — echo matches recent AI response (${echoMsgId})`);
-          return NextResponse.json({ ok: true }, { status: 200 });
-        }
+          matchesAssistantBubble(recent.content, displayText)
+        );
+      });
+      if (isOwnBubbleEcho) {
+        console.log(`[webhook:echo] Skip — echo matches recent AI response bubble (${echoMsgId})`);
+        return NextResponse.json({ ok: true }, { status: 200 });
       }
     }
 
@@ -487,67 +495,6 @@ async function checkHumanOverride(conversationId: number): Promise<boolean> {
  * Los vendedores SIEMPRE hablan con la IA — no hay human override, no hay AI disabled.
  */
 
-
-/**
- * Minimal webhook handoff transport (SDD memoria-persistente-sesion-whatsapp,
- * W2). Claims are at-most-once per episode/message and the transport follows
- * the same claims, so retries stay silent. The owner side (24h override write
- * + escalation email/Telegram) is deliverable even with AI disabled; the
- * customer reply is NEVER sent from this path while the IA stays off.
- */
-async function deliverWebhookHandoff(input: {
-  conversationId: number;
-  customerName: string | null;
-  customerPhone: string;
-  messageId: string;
-  channel?: ChannelKind;
-  decision: Extract<RoutingDecision, { kind: "handoff" }>;
-}): Promise<void> {
-  const { decision } = input;
-  console.log(`[webhook:wa] Session handoff notifyClaim=${decision.notifyClaim} replyClaim=${decision.replyClaim} delivery=${decision.delivery} — persisting without GPT/tools or automatic replies`);
-  const transport = resolveHandoffTransport({
-    notifyClaim: decision.notifyClaim,
-    replyClaim: decision.replyClaim,
-    delivery: decision.delivery,
-    channel: input.channel,
-  });
-  if (transport.sendCustomerReply && transport.transport !== "messenger") {
-    // Non-messenger surfaces can't send the customer reply from this
-    // whatsapp-scoped route — surfaced for the operator, never dropped
-    // silently. (whatsapp resolves to "messenger" → this never fires there.)
-    console.warn(
-      `[webhook:wa] Handoff customer reply deliverable on '${transport.transport}' transport — no sender wired for channel '${transport.channel}' in this route`
-    );
-  }
-  if (transport.writeOverride) {
-    try {
-      await db
-        .update(conversations)
-        .set({ humanOverrideUntil: new Date(Date.now() + 2 * 60 * 60 * 1000) })
-        .where(eq(conversations.id, input.conversationId));
-    } catch (overrideError) {
-      console.error("[webhook:wa] Handoff override write failed — claim already durable", overrideError);
-    }
-  }
-  if (transport.sendOwnerNotification) {
-    try {
-      await sendEscalationEmail({
-        customerName: input.customerName ?? "Desconocido",
-        customerPhone: input.customerPhone,
-        reason: "Derivación automática por política de sesión (handoff determinístico)",
-        category: "otro",
-        conversationSummary:
-          `Sesión handed_off — conversación ${input.conversationId}, ` +
-          `episodio ${input.decision.state.episode}, mensaje ${input.messageId} ` +
-          `(notifyClaim=${input.decision.notifyClaim} replyClaim=${input.decision.replyClaim} ` +
-          `delivery=${input.decision.delivery})`,
-        lastMessages: [],
-      });
-    } catch (notifyError) {
-      console.error("[webhook:wa] Handoff owner notification failed — claim already durable", notifyError);
-    }
-  }
-}
 
 /**
  * Per-event pipeline. The adapter already translated the envelope into
@@ -836,7 +783,7 @@ export async function handleNormalizedEvent(
     }
 
     // 8. Auto-reply for new conversations (solo si la AI está habilitada).
-    //    The marker + idempotency key make retries safe: a first-contact send
+    //    The claim + idempotency key make retries safe: a first-contact send
     //    that failed retryably is retried, while a sent reply is never
     //    duplicated (provider dedups on the same external id).
     if (
@@ -846,8 +793,12 @@ export async function handleNormalizedEvent(
       autoReplyMessage &&
       !webOrderRedirectEnabled
     ) {
-      const marker = autoReplyMarkerKey(messageId);
-      const alreadyReplied = await isMessageDuplicate(marker);
+      // A-13 — the gate runs before the inbound row is persisted, so two
+      // concurrent first messages can both pass `shouldSendAutoReply`. The
+      // conversation-scoped claim below is the real arbiter: its unique
+      // platformMessageId admits exactly one sender.
+      const claimKey = autoReplyClaimKey(conversationId);
+      const alreadyReplied = await isMessageDuplicate(claimKey);
       let conversationHasMessages = false;
       if (!alreadyReplied) {
         try {
@@ -869,40 +820,66 @@ export async function handleNormalizedEvent(
       } else if (convAccountBroken) {
         console.warn("[webhook:wa] Auto-reply suppressed — channel account unresolvable");
       } else {
-        const autoReplyResult = await messenger.send(
-          {
-            to: customerPhone,
-            type: "text",
-            text: autoReplyMessage,
-            idempotencyKey: marker,
-          },
-          convAccount
-            ? { channel: convChannel, account: convAccount }
-            : {
-                credentials: {
-                  apiKey: config.ycloudApiKey || "",
-                  senderAddress: config.phoneNumber || "",
-                },
-              },
-        );
-        if (!autoReplyResult.ok) {
-          console.error(
-            "[webhook:wa] Auto-reply send failed — inbound not acked",
-            { retryable: autoReplyResult.retryable, error: autoReplyResult.error }
-          );
-          return NextResponse.json(
-            { error: "auto-reply-send-failed" },
-            { status: autoReplyResult.retryable ? 503 : 502 }
-          );
-        }
-        await insertMessage(
+        // Claim BEFORE sending: insertMessage maps the platformMessageId
+        // unique-violation to wasDuplicate, so a concurrent first message
+        // fails the claim instead of sending a second welcome. On success
+        // the claim row IS the persisted reply (its content is the real
+        // reply text); on failure it is removed so the provider's
+        // redelivery can claim and retry.
+        const claim = await insertMessage(
           conversationId,
           "assistant",
           autoReplyMessage,
           undefined,
-          marker,
+          claimKey,
           channelAccountId
         );
+        if (claim.wasDuplicate) {
+          console.log(
+            `[webhook:wa] Auto-reply already claimed for conv ${conversationId} — skipping send`
+          );
+        } else {
+          const autoReplyResult = await messenger.send(
+            {
+              to: customerPhone,
+              type: "text",
+              text: autoReplyMessage,
+              idempotencyKey: claimKey,
+            },
+            convAccount
+              ? { channel: convChannel, account: convAccount }
+              : {
+                  credentials: {
+                    apiKey: config.ycloudApiKey || "",
+                    senderAddress: config.phoneNumber || "",
+                  },
+                },
+          );
+          if (!autoReplyResult.ok) {
+            // Release the claim so a redelivery can retry. If even the
+            // release fails the row stays and suppresses the retry — loud
+            // log, still error out.
+            try {
+              const { chatMessages } = await import("@/db/schema");
+              await db
+                .delete(chatMessages)
+                .where(eq(chatMessages.id, claim.id));
+            } catch (releaseError) {
+              console.error(
+                "[webhook:wa] Auto-reply claim release failed — claim row stays",
+                releaseError
+              );
+            }
+            console.error(
+              "[webhook:wa] Auto-reply send failed — inbound not acked",
+              { retryable: autoReplyResult.retryable, error: autoReplyResult.error }
+            );
+            return NextResponse.json(
+              { error: "auto-reply-send-failed" },
+              { status: autoReplyResult.retryable ? 503 : 502 }
+            );
+          }
+        }
       }
     }
 
@@ -1267,9 +1244,8 @@ export async function handleNormalizedEvent(
         }
         return NextResponse.json({ ok: true }, { status: 200 });
       }
-      if (sessionDecision.kind === "blocked" || sessionDecision.kind === "handoff") {
-        if (sessionDecision.kind === "handoff") await deliverWebhookHandoff({ conversationId, customerName, customerPhone, messageId, channel: convChannel, decision: sessionDecision });
-        console.log(`[webhook:wa] Session ${sessionDecision.kind} — persisting without GPT/tools or automatic replies`);
+      if (sessionDecision.kind === "blocked") {
+        console.log(`[webhook:wa] Session blocked — persisting without GPT/tools or automatic replies`);
         return NextResponse.json({ ok: true }, { status: 200 });
       }
     }
@@ -1342,11 +1318,46 @@ export async function handleNormalizedEvent(
         .select({
           channel: conversations.channel,
           channelAccountId: conversations.channelAccountId,
+          externalThreadId: conversations.externalThreadId,
         })
         .from(conversations)
         .where(eq(conversations.id, conversationId))
         .limit(1);
       const replyChannel = convBinding?.channel ?? "whatsapp";
+      // A-14 — provider-native thread id. Conversation-scoped providers
+      // (zernio) cannot send to `to` directly: every outbound send below
+      // must carry this as providerConversationId.
+      const replyThreadId = convBinding?.externalThreadId ?? undefined;
+
+      // A-11 — per-bubble persistence: each bubble is inserted the moment
+      // its send succeeds, carrying its own providerMessageId. A failed
+      // send leaves no phantom assistant reply in history; a mid-send
+      // failure keeps only the fragments actually delivered; and every
+      // stored wamid lets the echo pipeline recognize that bubble as ours
+      // (the A-04 fragment match covers providers that return no id).
+      // A persist hiccup must NOT abort the remaining sends — the bubble
+      // was already delivered — so it is logged, not thrown.
+      const persistSentBubble = async (bubble: {
+        text: string;
+        providerMessageId: string;
+      }) => {
+        try {
+          await insertMessage(
+            conversationId,
+            "assistant",
+            bubble.text,
+            undefined,
+            bubble.providerMessageId || undefined,
+            channelAccountId
+          );
+        } catch (persistErr) {
+          console.warn(
+            "[webhook:wa] Bubble persist failed (send already delivered):",
+            persistErr
+          );
+        }
+      };
+
       let replyAccount: ChannelAccount | undefined;
       if (convBinding?.channelAccountId != null) {
         const { resolveChannelAccountById } = await import("./accounts");
@@ -1386,24 +1397,18 @@ export async function handleNormalizedEvent(
           stopWhen: stepCountIs(10),
         });
         const reply = result.text || "Disculpá, no pude procesar eso.";
-        await insertMessage(conversationId, "assistant", reply, undefined, undefined, channelAccountId);
-        const r = await sendWhatsAppBubbles({ to: customerPhone, text: reply, apiKey, from: botNumber, channel: replyChannel, account: replyAccount });
-        if (r?.id) {
-          try {
-            const { chatMessages } = await import("@/db/schema");
-            // Buscar el último mensaje del assistant para esta conversación y actualizar su wamid
-            const { desc: descOrder } = await import("drizzle-orm");
-            const [lastMsg] = await db
-              .select({ id: chatMessages.id })
-              .from(chatMessages)
-              .where(eq(chatMessages.conversationId, conversationId))
-              .orderBy(descOrder(chatMessages.createdAt))
-              .limit(1);
-            if (lastMsg) {
-              await db.update(chatMessages).set({ platformMessageId: r.id }).where(eq(chatMessages.id, lastMsg.id));
-            }
-          } catch {}
-        }
+        // A-11 — send first; each delivered bubble is persisted by
+        // onBubbleSent, so a failed send never leaves phantom history.
+        await sendWhatsAppBubbles({
+          to: customerPhone,
+          text: reply,
+          apiKey,
+          from: botNumber,
+          channel: replyChannel,
+          account: replyAccount,
+          providerConversationId: replyThreadId,
+          onBubbleSent: persistSentBubble,
+        });
         console.log(`[seller-agent] Replied to seller ${customerPhone}: ${reply.slice(0, 80)}`);
         return;
       }
@@ -1481,32 +1486,21 @@ export async function handleNormalizedEvent(
       // ORDEN CORRECTO: primero texto, DESPUÉS media
       // ═══════════════════════════════════════════════════════════════════
 
-      // 1a. Guardar texto en DB
-      const { id: msgId } = await insertMessage(conversationId, "assistant", responseText, undefined, undefined, channelAccountId);
-
-      // 1b. Enviar texto (split into bubbles for natural UX)
-      const ycloudResult = await sendWhatsAppBubbles({
+      // A-11 — send first, persist only what was delivered: each bubble is
+      // inserted by onBubbleSent the moment its send resolves (same
+      // send-first ordering as the web-order redirect path). A failed send
+      // throws before any row exists, so history never contains a reply the
+      // customer did not receive.
+      await sendWhatsAppBubbles({
         to: customerPhone,
         text: responseText,
         apiKey,
         from: botNumber,
         channel: replyChannel,
         account: replyAccount,
+        providerConversationId: replyThreadId,
+        onBubbleSent: persistSentBubble,
       });
-
-      // 1c. Guardar wamid en el texto de la DB
-      if (ycloudResult?.id) {
-        try {
-          const { chatMessages } = await import("@/db/schema");
-          await db
-            .update(chatMessages)
-            .set({ platformMessageId: ycloudResult.id })
-            .where(eq(chatMessages.id, msgId));
-          console.log(`[webhook:wa] Updated chatMessage ${msgId} with wamid ${ycloudResult.id}`);
-        } catch (updateErr) {
-          console.warn("[webhook:wa] Failed to update wamid on chatMessage:", updateErr);
-        }
-      }
 
       // 2. DESPUÉS del texto, enviar media pendiente en orden
       if (pendingMedia.length > 0) {
@@ -1522,6 +1516,9 @@ export async function handleNormalizedEvent(
                 type: "image",
                 mediaUrl: media.url,
                 text: media.caption,
+                ...(replyThreadId
+                  ? { providerConversationId: replyThreadId }
+                  : {}),
               },
               replyAccount
                 ? { channel: replyChannel, account: replyAccount }

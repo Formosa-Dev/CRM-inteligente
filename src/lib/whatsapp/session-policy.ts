@@ -42,7 +42,6 @@ export type SessionContext = Omit<ConversationSessionState, "conversationId" | "
 export type RoutingDecision =
   | { kind: "allow_agent"; state: ConversationSessionState; eventType: SessionEventType }
   | { kind: "fixed_ack" | "fixed_clarification"; delivery: "allowed" | "suppressed"; state: ConversationSessionState; eventType: SessionEventType }
-  | { kind: "handoff"; delivery: "allowed" | "suppressed"; notifyClaim: boolean; replyClaim: boolean; state: ConversationSessionState; eventType: SessionEventType }
   | { kind: "blocked"; reason: "override" | "handed_off"; state: ConversationSessionState; eventType: SessionEventType }
   | { kind: "duplicate"; state: ConversationSessionState; eventType: SessionEventType };
 
@@ -162,16 +161,9 @@ export type SessionPolicyRepository = {
   saveTransition(input: { state: ConversationSessionState; expectedVersion: number; inboundMessageId: string; eventType: SessionEventType; signal: BoundarySignal }): Promise<"saved" | "duplicate" | "conflict">;
 };
 
-import type { HandoffEffectClaimant } from "./human-handoff";
-export type { HandoffEffectClaimant };
-export type { HandoffClaimInput, HandoffClaimResult } from "./human-handoff";
-
 /** Database adapters must atomically lock, compare-and-swap, and insert the unique inbound event. */
 export class SessionPolicyService {
-  constructor(
-    private readonly repository: SessionPolicyRepository,
-    private readonly handoff: HandoffEffectClaimant | null = null
-  ) {}
+  constructor(private readonly repository: SessionPolicyRepository) {}
 
   async decide(conversationId: number, input: SessionPolicyInput): Promise<RoutingDecision> {
     return this.repository.withConversationLock(conversationId, async () => {
@@ -189,20 +181,6 @@ export class SessionPolicyService {
         return { kind: "duplicate", state: current, eventType: raced?.eventType ?? decision.eventType };
       }
       if (result === "conflict") throw new Error("Conversation session compare-and-swap conflict");
-      if (decision.kind === "handoff" && this.handoff) {
-        const aiEnabled = (input.delivery ?? "allowed") === "allowed";
-        const claims = await this.handoff.claimHandoffEffects({
-          conversationId,
-          episode: decision.state.episode,
-          inboundMessageId: input.messageId,
-          aiEnabled,
-        });
-        return {
-          ...decision,
-          notifyClaim: claims.ownerNotificationClaimed,
-          replyClaim: claims.customerReplyClaimed,
-        };
-      }
       return decision;
     });
   }

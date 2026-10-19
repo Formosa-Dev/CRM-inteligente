@@ -416,10 +416,13 @@ async function postJson(
 
   const providerMessageId = payload.data?.messageId;
   if (!providerMessageId) {
+    // A-51: the request already reached the provider and got a 2xx — the
+    // send may have been accepted. A retry here would risk a duplicate
+    // delivery, so the failure is surfaced as non-retryable.
     return {
       ok: false,
       error: "Zernio send returned no message id",
-      retryable: true,
+      retryable: false,
     };
   }
   return { ok: true, providerMessageId, status: "sent" };

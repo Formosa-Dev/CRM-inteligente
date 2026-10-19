@@ -509,6 +509,26 @@ describe("zernio sendMessage / sendTemplate", () => {
       restore.mock.restore();
     }
   });
+
+  it("2xx without a message id is NOT retryable (upstream may have accepted)", async () => {
+    // 200 with success:true but no data.messageId — retrying could
+    // duplicate the send, so the failure surfaces as non-retryable.
+    const restore = mock.method(globalThis, "fetch", async () => {
+      return new Response(JSON.stringify({ success: true, data: {} }), { status: 200 });
+    });
+    try {
+      const res = await zernioProvider.sendMessage(account(), {
+        to: "x",
+        type: "text",
+        text: "hi",
+        providerConversationId: "c1",
+      });
+      assert.equal(res.ok, false);
+      assert.equal(res.retryable, false);
+    } finally {
+      restore.mock.restore();
+    }
+  });
 });
 
 describe("zernio resolveMedia", () => {

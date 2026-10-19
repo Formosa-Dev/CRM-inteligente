@@ -74,6 +74,31 @@ export function splitIntoBubbles(text: string): string[] {
   return result.length > 0 ? result : [cleaned.slice(0, MAX_BUBBLE_CHARS)];
 }
 
+/**
+ * A-04 — own-echo recognition for multi-bubble replies.
+ *
+ * A reply longer than MAX_BUBBLE_CHARS is sent as N bubbles, each with its
+ * own providerMessageId, but only one id is persisted. An echo of any
+ * non-final bubble therefore misses the platformMessageId lookups — it is
+ * still ours, and must be recognized by CONTENT: true when `displayText`
+ * equals the whole stored message or any single bubble it was split into.
+ *
+ * The comparison runs the stored content through the same splitter that
+ * produced the sends, so markdown stripping and bullet normalization can't
+ * cause a false mismatch.
+ */
+export function matchesAssistantBubble(
+  lastContent: string,
+  displayText: string
+): boolean {
+  const fragment = displayText.trim();
+  if (!fragment) return false;
+  if (lastContent.trim() === fragment) return true;
+  return splitIntoBubbles(lastContent).some(
+    (bubble) => bubble.trim() === fragment
+  );
+}
+
 // Send response as bubbles via WhatsApp (YCloud)
 // Returns the LAST YCloud response (which has the wamid) for echo dedup
 //
@@ -88,6 +113,28 @@ export async function sendWhatsAppBubbles(params: {
   from: string;
   channel?: ChannelKind;
   account?: ChannelAccount;
+  /**
+   * Provider-native thread (zernio conversationId, from
+   * conversations.external_thread_id). Conversation-scoped providers
+   * cannot send to `to` directly — they reply into this thread; absent,
+   * they fall back to opening a new conversation (and may fail with
+   * PLATFORM_NOT_SUPPORTED / TEMPLATE_REQUIRED).
+   */
+  providerConversationId?: string;
+  /**
+   * A-11 — invoked right after each bubble's send resolves ok, with the
+   * fragment that was actually delivered and its providerMessageId. Lets
+   * the caller persist per-bubble (only delivered fragments reach history,
+   * each with its own wamid for echo dedup). A throwing callback aborts
+   * the remaining bubbles like a send failure — wrap persistence errors
+   * inside the callback if they must not poison the send.
+   */
+  onBubbleSent?: (bubble: {
+    index: number;
+    text: string;
+    providerMessageId: string;
+    status: string;
+  }) => void | Promise<void>;
 }): Promise<YCloudResponse | null> {
   const bubbles = splitIntoBubbles(params.text);
   let lastResult: YCloudResponse | null = null;
@@ -105,7 +152,14 @@ export async function sendWhatsAppBubbles(params: {
     }
 
     const res = await messenger.send(
-      { to: params.to, type: "text", text: bubbles[i] },
+      {
+        to: params.to,
+        type: "text",
+        text: bubbles[i],
+        ...(params.providerConversationId
+          ? { providerConversationId: params.providerConversationId }
+          : {}),
+      },
       params.account
         ? { channel: params.channel ?? params.account.channel, account: params.account }
         : { credentials: { apiKey: params.apiKey, senderAddress: params.from } },
@@ -116,6 +170,12 @@ export async function sendWhatsAppBubbles(params: {
       throw error;
     }
     lastResult = { id: res.providerMessageId, status: res.status };
+    await params.onBubbleSent?.({
+      index: i,
+      text: bubbles[i],
+      providerMessageId: res.providerMessageId,
+      status: res.status,
+    });
   }
 
   return lastResult;
