@@ -263,3 +263,30 @@ account-scoped delivery lookup, delivery-notification credential selection
 fails closed, unbound-unprovisioned uses legacy creds), per-account
 `channel_events` delivery dedup, and account-scoped order/lifecycle/tool
 reads with a phone-global legacy fallback.
+
+## 13. Corrective review round 5
+
+Round 4 closed cross-ACCOUNT leakage. Round 5 closes cross-CUSTOMER
+leakage inside one account (and inside the shared legacy plane), plus a
+credential fail-open where a real account with empty scoped credentials
+could delegate to the install-global sender.
+
+| Finding | Fix |
+| --- | --- |
+| **HIGH** Model-supplied `orderId`/`phone` trusted raw — a customer could read/mutate another customer's same-account or legacy order, fetch another lead's PII/history, or write another phone's address | `AgentConfigScope` now carries `customerPhone` — the server-side normalized conversation phone, bound by `resolveScopeForConversation` (and by the webhook pipeline's `configScope`). Every customer-facing tool resolves identity through the scope, never the model args: `getOrderStatus`/`addToOrder`/`updateOrder`/`cancelOrder` require `order.phoneNumber === scope.customerPhone` after the account check (a foreign order answers not-found, unchanged); `suggestProducts`, `getClientHistory`, and `saveAddress` ignore the model's phone arg entirely when a customer is bound. Scopes WITHOUT `customerPhone` — internal/admin/tool-preview callers — keep the arg-driven semantics unchanged. |
+| **MEDIUM** `env:`/`unknown` credentialsRef materialized an account with empty credentials, which then delegated to the install-global sender (`agent_config` → env) | Two-layer fail-close. (a) `accounts.ts`: an `env:PREFIX` ref that yields no send credential (no API_KEY and no ACCESS_TOKEN), and any unknown ref (`vault:`, typos), throws `MissingScopedCredentialError` → strict resolvers return `mismatch` — the account is never materialized. (b) `providers/ycloud.ts` `sendMessage`: a real `channel_accounts` row (numeric `id`) with an empty scoped `apiKey` returns a non-retryable failure BEFORE any send decision — it can never reach the delegated `sendText`/`sendImage`/`sendDocument` in `src/lib/ycloud.ts` (`getYCloudCreds` → `getBusinessInfo`), which remain reachable ONLY via the explicit placeholder/caller-resolved paths (unprovisioned/legacy sends). |
+
+New regression coverage: `src/lib/messaging/security-round5.test.ts`
+(16 tests) — normalized customerPhone binding on the scope; two-customer
+orderId/phone/history/address/cancel/update/add cases under both a bound
+account scope and a legacy NULL scope (cross-customer = not-found or
+scoped-override, own-customer = pass, scope-less = legacy semantics); env-ref
+empty-vars and `vault:` refs resolving to strict `mismatch`; a real account
+with an empty key failing text/image/document sends with zero global-sender
+invocations; the placeholder path still delegating; and a scoped key sending
+directly with its own `X-API-Key`.
+
+Residual boundary (unchanged, intentional): the legacy NULL-account plane is
+shared — a customer-bound scope there still only sees its own customer's
+objects (the phone gate does not require an account), but it may reach
+legacy rows of the SAME phone regardless of lead ownership.
