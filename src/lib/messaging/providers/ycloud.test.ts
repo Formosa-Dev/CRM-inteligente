@@ -297,23 +297,21 @@ describe("ycloud parseWebhook — NormalizedInboundEvent fixtures", () => {
     }
   });
 
-  test("envelope without id gets a deterministic ycloud:synth deliveryId", () => {
+  test("envelope without any id gets a deterministic ycloud:synth deliveryId", () => {
     const idLess = JSON.stringify({
       type: "whatsapp.inbound_message.received",
       whatsappInboundMessage: {
-        wamid: "wamid.NOID001",
         from: "+15550001234",
         to: "+15550009999",
         sendTime: "2026-10-18T12:00:09.000Z",
         type: "text",
-        text: { body: "sin event id" },
+        text: { body: "sin event id ni wamid" },
       },
     });
     const [a] = provider.parseWebhook({ headers: {}, rawBody: idLess });
     const [b] = provider.parseWebhook({ headers: {}, rawBody: idLess });
     assert.match(a.deliveryId, /^ycloud:synth:[0-9a-f]{16}$/);
     assert.equal(a.deliveryId, b.deliveryId, "same payload must dedup to one key");
-    assert.equal(a.platformMessageId, "wamid.NOID001");
   });
 });
 
