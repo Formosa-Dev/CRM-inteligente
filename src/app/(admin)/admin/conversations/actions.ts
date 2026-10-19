@@ -96,6 +96,10 @@ export async function getMessages(
   offset = 0
 ) {
   await requireSession();
+  // Client-controlled limit gets clamped — an unbounded value would dump
+  // the whole chat_messages table into the response.
+  const safeLimit = Math.min(Math.max(1, Math.floor(limit)), 200);
+  const safeOffset = Math.max(0, Math.floor(offset));
   // Fetch the LATEST `limit` messages (DESC) — offset paginates backwards
   // into older history — then restore chronological order for display.
   // Ordering ASC + LIMIT would return the first N messages forever, which
@@ -105,8 +109,8 @@ export async function getMessages(
     .from(chatMessages)
     .where(eq(chatMessages.conversationId, conversationId))
     .orderBy(desc(chatMessages.createdAt))
-    .limit(limit)
-    .offset(offset);
+    .limit(safeLimit)
+    .offset(safeOffset);
   return rows.reverse();
 }
 
