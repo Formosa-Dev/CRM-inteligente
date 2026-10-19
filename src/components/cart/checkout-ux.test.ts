@@ -123,6 +123,8 @@ test("response mapping clears only on confirmed success", () => {
   assert.equal(shouldClearAfter("success"), true);
   for (const [status, code, expected] of [
     [400, null, "rejected"],
+    // The origin check runs before anything is created — a 403 is a definite rejection.
+    [403, null, "rejected"],
     [413, null, "rejected"],
     [415, null, "rejected"],
     [422, null, "rejected"],
@@ -132,6 +134,8 @@ test("response mapping clears only on confirmed success", () => {
     [409, null, "ambiguous"],
     [500, null, "ambiguous"],
     [503, null, "ambiguous"],
+    // A missing WhatsApp destination rejects before any order is created.
+    [503, "no_destination", "rejected"],
   ] as const) {
     const outcome = interpretCheckoutOutcome(false, status, code);
     assert.equal(outcome, expected, `status ${status}`);
@@ -150,6 +154,15 @@ test("catalog conflicts are rejected with an update-the-cart message, never ambi
   );
   assert.match(checkoutFailureMessage(outcome, null, "catalog_changed"), /Actualizá tu carrito/);
   assert.doesNotMatch(checkoutFailureMessage(outcome, null, "catalog_changed"), /Verificá el estado/);
+});
+
+test("a missing WhatsApp destination tells the customer to consult, not to verify", () => {
+  const outcome = interpretCheckoutOutcome(false, 503, "no_destination");
+  assert.equal(outcome, "rejected");
+  assert.equal(shouldClearAfter(outcome), false);
+  const message = checkoutFailureMessage(outcome, null, "no_destination");
+  assert.match(message, /Consultanos por WhatsApp/);
+  assert.doesNotMatch(message, /Verificá el estado/);
 });
 
 test("a catalog conflict still carries the code at status 409", () => {
@@ -209,6 +222,14 @@ test("checkout form keeps one stable attempt id per signature", () => {
   assert.match(formSource, /normalizeAttemptSignature\(/);
   assert.match(formSource, /resolveAttempt\(/);
   assert.doesNotMatch(formSource, /crypto\.randomUUID|newRequestId\(/);
+});
+
+test("checkout form detects offline and forwards the server error code", () => {
+  // navigator.onLine gates both the pre-flight guard and the catch path so an
+  // offline customer never sees the ambiguous "maybe registered" message.
+  assert.match(formSource, /navigator\.onLine === false/);
+  assert.match(formSource, /interpretCheckoutOutcome\(response\.ok, response\.status, data\.code\)/);
+  assert.match(formSource, /checkoutFailureMessage\(outcome, data\.error, data\.code\)/);
 });
 
 test("cart clear persists synchronously so a redirect cannot resurrect it", () => {

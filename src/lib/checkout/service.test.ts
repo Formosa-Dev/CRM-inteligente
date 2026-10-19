@@ -141,6 +141,25 @@ test("catalog conflicts reject with 422 + catalog_changed, never the ambiguous 4
   );
 });
 
+test("a missing WhatsApp destination rejects as no_destination before anything else", async (t) => {
+  const { deps } = fakeDeps();
+  deps.getDestinationPhone = async () => null;
+  const envPhone = process.env.WHATSAPP_PHONE_NUMBER;
+  process.env.WHATSAPP_PHONE_NUMBER = "";
+  t.after(() => {
+    if (envPhone === undefined) delete process.env.WHATSAPP_PHONE_NUMBER;
+    else process.env.WHATSAPP_PHONE_NUMBER = envPhone;
+  });
+  await assert.rejects(
+    submitCheckout(parse(), deps),
+    (error: unknown) =>
+      error instanceof CheckoutError &&
+      error.status === 503 &&
+      error.code === "no_destination" &&
+      /WhatsApp/.test(error.message),
+  );
+});
+
 test("a deactivated promo rejects as a catalog conflict", async () => {
   const { deps } = fakeDeps();
   deps.listPromos = async () => [{ ...PROMOS[0], active: false }];

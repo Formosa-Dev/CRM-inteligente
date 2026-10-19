@@ -25,8 +25,10 @@ import {
 import {
   checkoutFailureMessage,
   interpretCheckoutOutcome,
+  OFFLINE_MESSAGE,
   shouldClearAfter,
 } from "./checkout-outcome";
+import { useBusiness } from "@/lib/hooks/use-business";
 
 function attemptStorage(): AttemptStorage | null {
   return typeof window === "undefined" ? null : window.sessionStorage;
@@ -34,12 +36,14 @@ function attemptStorage(): AttemptStorage | null {
 
 export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
   const { clearCart } = useCart();
+  const business = useBusiness();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [fulfillmentMode, setFulfillmentMode] = useState<FulfillmentMode>("delivery");
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<CheckoutReceipt | null>(null);
   // Hard guards: one request at a time, one terminal success per attempt.
   const inFlight = useRef(false);
@@ -59,6 +63,13 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
     event.preventDefault();
     if (inFlight.current || completed.current || !items.length) return;
     setError("");
+    setErrorCode(null);
+    // Offline pre-flight: nothing reaches the server, so this can never be an
+    // ambiguous "maybe registered" failure — tell the customer to reconnect.
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setError(OFFLINE_MESSAGE);
+      return;
+    }
     const fulfillmentError = validateFulfillment(fulfillmentMode, deliveryAddress);
     if (fulfillmentError) {
       setError(fulfillmentError);
@@ -104,6 +115,7 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
       const outcome = interpretCheckoutOutcome(response.ok, response.status, data.code);
       if (!shouldClearAfter(outcome)) {
         // Keep the stable attempt id and the cart. No automatic retry.
+        setErrorCode(typeof data.code === "string" ? data.code : null);
         setError(checkoutFailureMessage(outcome, data.error, data.code));
         return;
       }
@@ -118,9 +130,14 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
         window.location.assign(data.whatsappUrl);
       }
     } catch {
-      // Network error: the request may have reached the server. Preserve the
-      // cart, keep the id, and ask the customer to verify before retrying.
-      setError(checkoutFailureMessage("ambiguous"));
+      // Offline mid-request can never have created an order. Any other network
+      // failure may have reached the server: preserve the cart, keep the id,
+      // and ask the customer to verify before retrying.
+      setError(
+        typeof navigator !== "undefined" && navigator.onLine === false
+          ? OFFLINE_MESSAGE
+          : checkoutFailureMessage("ambiguous"),
+      );
     } finally {
       inFlight.current = false;
       setBusy(false);
@@ -224,7 +241,17 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
 
       {error && (
         <p className="checkout-error" role="alert">
-          {error}
+          {error}{" "}
+          {errorCode === "no_destination" && business?.whatsappPhone ? (
+            <a
+              href={`https://wa.me/${business.whatsappPhone}`}
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2"
+            >
+              Escribinos por WhatsApp
+            </a>
+          ) : null}
         </p>
       )}
       <button className="menu-whatsapp-button" type="submit" disabled={busy || !items.length}>

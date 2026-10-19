@@ -39,7 +39,7 @@ export async function submitCheckout(input: CheckoutInput, deps: CheckoutDeps = 
   const key = webOrderKey(input.requestId);
   const fingerprint = `web-payload:${createHash("sha256").update(JSON.stringify({ ...input, items: [...input.items].sort((a, b) => `${a.type}:${a.id}`.localeCompare(`${b.type}:${b.id}`)) })).digest("hex")}`;
   const destination = ((await deps.getDestinationPhone()) || process.env.WHATSAPP_PHONE_NUMBER || "").replace(/\D/g, "");
-  if (!/^\d{10,15}$/.test(destination)) throw new CheckoutError("No podemos abrir WhatsApp en este momento. Intentá nuevamente más tarde.", 503);
+  if (!/^\d{10,15}$/.test(destination)) throw new CheckoutError("No pudimos generar el enlace de WhatsApp. Consultanos por WhatsApp con tu pedido.", 503, "no_destination");
   const noBurgers = await deps.getBurgersUnavailable();
   const address = input.fulfillmentMode === "delivery" ? (input.deliveryAddress?.trim() || null) : null;
   const reference = webReference(input.requestId);

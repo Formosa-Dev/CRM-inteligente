@@ -21,9 +21,10 @@ export function interpretCheckoutOutcome(
   if (ok) return "success";
   // Server-tagged pre-creation rejections: nothing was persisted, so the cart
   // stays editable and the message can tell the customer how to fix it.
-  if (code === "catalog_changed") return "rejected";
+  if (code === "catalog_changed" || code === "no_destination") return "rejected";
   if (
     status === 400 ||
+    status === 403 ||
     status === 413 ||
     status === 415 ||
     status === 422 ||
@@ -48,6 +49,12 @@ export const VERIFY_STATUS_HINT =
 export const CATALOG_CHANGED_FALLBACK =
   "Actualizá tu carrito: cambió la disponibilidad o el precio de algún producto.";
 
+export const OFFLINE_MESSAGE =
+  "Sin conexión. Revisá tu internet y reintentá desde este mismo pedido.";
+
+export const NO_DESTINATION_MESSAGE =
+  "No pudimos iniciar el pedido desde el sitio. Consultanos por WhatsApp y lo armamos juntos.";
+
 const REUSED_CONFIRMATION = /ya fue usada/i;
 
 export function checkoutFailureMessage(
@@ -56,6 +63,9 @@ export function checkoutFailureMessage(
   code?: string | null,
 ): string {
   const error = (serverError ?? "").trim();
+  // A missing WhatsApp destination can never have created an order — point the
+  // customer at the business chat instead of the verify-status warning.
+  if (code === "no_destination") return error || NO_DESTINATION_MESSAGE;
   if (outcome === "rejected") {
     if (error) return error;
     return code === "catalog_changed"
