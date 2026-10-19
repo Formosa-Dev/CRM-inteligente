@@ -512,7 +512,10 @@ export async function resolveConversationAccountForPhone(
 
   const accountId = accountIds[0];
   const { resolveChannelAccountByIdStrict } = await import("@/lib/messaging");
-  const resolution = await resolveChannelAccountByIdStrict(accountId, "ycloud");
+  // No expected provider: the row's own provider wins (kapso/zernio/ycloud) —
+  // messenger.send already binds `account.provider`. A ycloud-only assumption
+  // here mismatched every non-ycloud bound conversation into a silent drop.
+  const resolution = await resolveChannelAccountByIdStrict(accountId);
   if (resolution.kind === "resolved") {
     const conversationId = selectBoundConversationId(rows, accountId);
     if (conversationId === undefined) {
@@ -541,7 +544,9 @@ export async function resolveConversationAccountForPhone(
  */
 export async function resolveDefaultWhatsAppAccount(): Promise<DefaultAccountResolution> {
   const { resolveChannelAccountStrict } = await import("@/lib/messaging");
-  const resolution = await resolveChannelAccountStrict("whatsapp", [], "ycloud");
+  // Provider-agnostic: exactly one active whatsapp account wins regardless of
+  // provider — hard-coding ycloud dropped kapso/zernio-bound sends silently.
+  const resolution = await resolveChannelAccountStrict("whatsapp", []);
   switch (resolution.kind) {
     case "resolved":
       return { kind: "resolved", account: resolution.account };

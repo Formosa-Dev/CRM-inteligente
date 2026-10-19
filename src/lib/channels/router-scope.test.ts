@@ -63,6 +63,57 @@ function seedConversation(over: Record<string, unknown>): void {
   });
 }
 
+describe("A-05 — send-account resolution is provider-agnostic", () => {
+  function seedKapsoAccount(id: number): void {
+    seedAccountRow({
+      id,
+      provider: "kapso",
+      credentialsRef: "env:R05_KAPSO_",
+    });
+    process.env.R05_KAPSO_API_KEY = "kapso-key";
+  }
+
+  it("a whatsapp conversation bound to a kapso account resolves the sender", async () => {
+    seedKapsoAccount(310);
+    seedConversation({ id: 310, channelAccountId: 310 });
+    try {
+      const resolution = await resolveConversationAccountForPhone("+15550001234");
+      assert.equal(resolution.kind, "resolved");
+      if (resolution.kind === "resolved") {
+        assert.equal(resolution.account.provider, "kapso");
+        assert.equal(resolution.conversationId, 310);
+      }
+    } finally {
+      delete process.env.R05_KAPSO_API_KEY;
+    }
+  });
+
+  it("the single active whatsapp account wins even when it is not ycloud", async () => {
+    process.env.R05_KAPSO_API_KEY = "kapso-key";
+    try {
+      const resolution = await resolveDefaultWhatsAppAccount();
+      assert.equal(resolution.kind, "resolved");
+      if (resolution.kind === "resolved") {
+        assert.equal(resolution.account.provider, "kapso");
+      }
+    } finally {
+      delete process.env.R05_KAPSO_API_KEY;
+    }
+  });
+
+  it("a bound but missing account still fails closed", async () => {
+    seedConversation({
+      id: 311,
+      channelAccountId: 999,
+      externalUserId: "+15550007777",
+      externalUserIdNormalized: "15550007777",
+      customerPhone: "+15550007777",
+    });
+    const resolution = await resolveConversationAccountForPhone("+15550007777");
+    assert.equal(resolution.kind, "unresolvable");
+  });
+});
+
 describe("A-53 — non-ycloud agent_config credentialsRef fails closed", () => {
   it("a kapso row with credentialsRef 'agent_config' resolves to mismatch", async () => {
     seedAccountRow({ id: 301, provider: "kapso" });
