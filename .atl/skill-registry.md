@@ -142,7 +142,7 @@ Subagents still read their assigned executor/phase skill. During normal runtime,
 - Rules:
   - NEVER delete the conversation row — only messages, attachments, and nullify `leads.conversationId`
   - NEVER expose the DATABASE_URL in output
-  - The phone number format is Argentine: `5493704868421` (without `+` prefix)
+  - The phone number format is Argentine: `5493704123456` (without `+` prefix)
   - The user's phone is stored in memory. If you don't have it, ask: "¿cuál es tu número de WhatsApp?"
   - Always use the project's DB via `@/db` and Drizzle ORM — never raw SQL
   - Clean up any temp scripts after execution
