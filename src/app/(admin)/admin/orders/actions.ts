@@ -186,12 +186,31 @@ export async function updateOrderStatus(
     const message = await buildWhatsAppMessage(newStatus, order as OrderRow);
     if (message && order.phoneNumber) {
       try {
+        // S15: honor the conversation's channel_account binding when one
+        // exists; unbound → placeholder (identical legacy behavior).
         const { messenger } = await import("@/lib/messaging");
-        const result = await messenger.send({
-          to: order.phoneNumber,
-          type: "text",
-          text: message,
-        });
+        const { resolveConversationAccountForPhone } = await import(
+          "@/lib/channels/router"
+        );
+        const phoneNorm = order.phoneNumber.startsWith("+")
+          ? order.phoneNumber
+          : `+${order.phoneNumber}`;
+        const binding = await resolveConversationAccountForPhone(phoneNorm);
+        if (binding.kind === "unresolvable") {
+          throw new Error(
+            `cuenta de canal #${binding.accountId} no es resoluble`
+          );
+        }
+        const result = await messenger.send(
+          {
+            to: order.phoneNumber,
+            type: "text",
+            text: message,
+          },
+          binding.kind === "resolved"
+            ? { channel: "whatsapp", account: binding.account }
+            : {}
+        );
         console.log(`[orders] WhatsApp sent to ${order.phoneNumber} for order #${orderId}: ${newStatus}`);
 
         // Save the outgoing message in chat_messages so AI has context
@@ -240,12 +259,31 @@ export async function notifyCustomer(
     const msg = await buildWhatsAppMessage(order.status, order as OrderRow);
     if (!msg) return { success: false, message: "No hay mensaje para este estado" };
 
+    // S15: honor the conversation's channel_account binding when one exists.
     const { messenger } = await import("@/lib/messaging");
-    const result = await messenger.send({
-      to: order.phoneNumber,
-      type: "text",
-      text: msg,
-    });
+    const { resolveConversationAccountForPhone } = await import(
+      "@/lib/channels/router"
+    );
+    const phoneNorm = order.phoneNumber.startsWith("+")
+      ? order.phoneNumber
+      : `+${order.phoneNumber}`;
+    const binding = await resolveConversationAccountForPhone(phoneNorm);
+    if (binding.kind === "unresolvable") {
+      return {
+        success: false,
+        message: `Error al enviar: la cuenta de canal #${binding.accountId} no es resoluble`,
+      };
+    }
+    const result = await messenger.send(
+      {
+        to: order.phoneNumber,
+        type: "text",
+        text: msg,
+      },
+      binding.kind === "resolved"
+        ? { channel: "whatsapp", account: binding.account }
+        : {}
+    );
     if (!result.ok) return { success: false, message: `Error al enviar: ${result.error}` };
 
     // Save notification in conversation history so AI has context (role "system")

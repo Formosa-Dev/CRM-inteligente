@@ -1194,6 +1194,92 @@ test("W2 webhook handoff delivers owner transport without customer sends while A
   assert.doesNotMatch(helper, /sendWhatsAppBubbles|sendWhatsAppMessage/);
 });
 
+test("S15 handoff transport derives from the conversation channel", () => {
+  // No channel → legacy whatsapp defaults, messenger transport.
+  const legacy = resolveHandoffTransport({
+    notifyClaim: true,
+    replyClaim: true,
+    delivery: "allowed",
+  });
+  assert.equal(legacy.channel, "whatsapp");
+  assert.equal(legacy.transport, "messenger");
+  assert.equal(legacy.sendCustomerReply, true);
+
+  // Explicit whatsapp → identical semantics.
+  const wa = resolveHandoffTransport({
+    notifyClaim: true,
+    replyClaim: true,
+    delivery: "allowed",
+    channel: "whatsapp",
+  });
+  assert.equal(wa.transport, "messenger");
+  assert.equal(wa.sendCustomerReply, true);
+
+  // Telegram is delivered by the internal bot, not a provider — the reply
+  // stays deliverable, just on a different surface.
+  const tg = resolveHandoffTransport({
+    notifyClaim: true,
+    replyClaim: true,
+    delivery: "allowed",
+    channel: "telegram",
+  });
+  assert.equal(tg.transport, "internal-bot");
+  assert.equal(tg.sendCustomerReply, true);
+
+  // Channels without a registered provider fail closed: the customer reply
+  // is suppressed and the transport field surfaces why; override/notify are
+  // channel-independent and unaffected.
+  for (const channel of ["instagram", "facebook", "sms", "reddit"] as const) {
+    const d = resolveHandoffTransport({
+      notifyClaim: true,
+      replyClaim: true,
+      delivery: "allowed",
+      channel,
+    });
+    assert.equal(d.transport, "unavailable");
+    assert.equal(d.sendCustomerReply, false);
+    assert.equal(d.writeOverride, true);
+    assert.equal(d.sendOwnerNotification, true);
+  }
+});
+
+test("S15 operator sends resolve the conversation's channel account", () => {
+  // sendOutboundMessage is the admin-reply transport: whatsapp convs without
+  // a binding keep the legacy credentials path; bound convs and non-whatsapp
+  // channels resolve through channel_accounts and fail closed.
+  const router = readFileSync("src/lib/channels/router.ts", "utf8");
+  assert.match(router, /conv\.channelAccountId != null[\s\S]*resolveChannelAccountById\(conv\.channelAccountId\)/);
+  assert.match(router, /resolveChannelAccount\(channel\)/);
+  assert.match(router, /messenger\.send\(msg, \{ channel, account \}\)/);
+  assert.match(router, /channel === "whatsapp" && conv\.channelAccountId == null/);
+  // Fail closed — a thrown error, never a silent drop.
+  assert.match(router, /not resolvable for conversation/);
+
+  // The echo→override flow attributes the business-side sender to a
+  // channel_accounts row before creating the conversation.
+  const route = readFileSync("src/app/api/whatsapp/webhook/route.ts", "utf8");
+  assert.match(route, /matchSenderToChannelAccount\("whatsapp"/);
+  assert.match(route, /senderAddress: botPhone/);
+  assert.match(route, /providerAccountId: event\.providerAccountId/);
+  // Unmatched senders are ignored BEFORE findOrCreateConversation.
+  const echoStart = route.indexOf("async function handleEcho");
+  const echoEnd = route.indexOf("async function handleDeliveryNotification", echoStart);
+  const echoBody = route.slice(echoStart, echoEnd);
+  const unmatched = echoBody.indexOf('"unmatched"');
+  const findConv = echoBody.indexOf("findOrCreateConversation(");
+  assert.ok(unmatched !== -1 && findConv !== -1 && unmatched < findConv);
+  // Matched echoes stamp the conversation binding.
+  assert.match(route, /channelAccountId: echoAccountId/);
+
+  // The handoff transport decision now receives the conversation channel.
+  assert.match(route, /deliverWebhookHandoff\(\{[\s\S]*channel: convChannel[\s\S]*decision: sessionDecision/);
+
+  // The Telegram operator tool resolves channel + account per conversation.
+  const tools = readFileSync("src/lib/telegram/toolsManagement.ts", "utf8");
+  assert.match(tools, /channelAccountId: conversations\.channelAccountId/);
+  assert.match(tools, /resolveChannelAccountById\(conv\.channelAccountId\)/);
+});
+
 test("W3 conversation lock documents neon-http limits with CAS plus uniqueness safety", async () => {
   const { DrizzleSessionPolicyRepository } = await import("./whatsapp/session-store");
   const repository = new DrizzleSessionPolicyRepository();

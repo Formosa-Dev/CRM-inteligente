@@ -149,7 +149,11 @@ export async function sendReply(
     return { success: true };
   } catch (error) {
     console.error("[sendReply] Error:", error);
-    return { success: false, error: "Error al enviar mensaje" };
+    // Surface the real failure (e.g. unresolvable channel account, no
+    // registered provider) so the operator sees why the send failed — the
+    // message itself carries no secrets.
+    const detail = error instanceof Error ? error.message : "desconocido";
+    return { success: false, error: `Error al enviar mensaje: ${detail}` };
   }
 }
 

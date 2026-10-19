@@ -249,15 +249,37 @@ export async function broadcastText(
     const result: BroadcastResult = { phone: r.phone, name: r.name, success: false };
 
     try {
-      // 1. Enviar WhatsApp
+      // 1. Enviar WhatsApp — si la conversación del destinatario está
+      //    vinculada a una channel_account, el envío sale por esa cuenta
+      //    (S15); unbound → placeholder, igual que siempre.
+      const { resolveConversationAccountForPhone } = await import(
+        "@/lib/channels/router"
+      );
+      const binding = await resolveConversationAccountForPhone(phone);
+      if (binding.kind === "unresolvable") {
+        result.error = `cuenta de canal #${binding.accountId} no es resoluble`;
+        results.push(result);
+        failed++;
+        onProgress?.(i + 1, recipients.length, result);
+        await sleep(DELAY_BETWEEN_MS);
+        continue;
+      }
+      const sendOpts =
+        binding.kind === "resolved"
+          ? { channel: "whatsapp" as const, account: binding.account }
+          : {};
+
       let wamid: string | undefined;
       if (imageUrl) {
-        const imgResult = await messenger.send({
-          to: phone,
-          type: "image",
-          mediaUrl: imageUrl,
-          text,
-        });
+        const imgResult = await messenger.send(
+          {
+            to: phone,
+            type: "image",
+            mediaUrl: imageUrl,
+            text,
+          },
+          sendOpts
+        );
         if (!imgResult.ok) {
           result.error = imgResult.error;
           results.push(result);
@@ -267,7 +289,10 @@ export async function broadcastText(
           continue;
         }
       } else {
-        const txResult = await messenger.send({ to: phone, type: "text", text });
+        const txResult = await messenger.send(
+          { to: phone, type: "text", text },
+          sendOpts
+        );
         if (!txResult.ok) {
           result.error = txResult.error;
           results.push(result);

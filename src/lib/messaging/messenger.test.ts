@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test, { describe, mock } from "node:test";
 import { messenger } from "./messenger";
+import type { ChannelAccount } from "./types";
 
 // Synthetic values only — no real phones/keys.
 
@@ -85,6 +86,90 @@ describe("messenger.send — caller-resolved credentials (folded ycloud-client)"
     } finally {
       mock.restoreAll();
     }
+  });
+});
+
+describe("messenger.send — account-bound sends (S15)", () => {
+  const ACCOUNT: ChannelAccount = {
+    id: "7",
+    tenantId: "default",
+    provider: "ycloud",
+    channel: "whatsapp",
+    providerAccountId: "15550009999",
+    senderAddress: "+15550009999",
+    credentials: { apiKey: "account-key", webhookSecret: "" },
+    status: "active",
+  };
+
+  test("sends through the account's own provider with the account's credentials", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ id: "wamid.ACCT1", status: "sent" }));
+    });
+    try {
+      const res = await messenger.send(
+        { to: "+15550001234", type: "text", text: "respuesta" },
+        { channel: "whatsapp", account: ACCOUNT },
+      );
+      assert.deepEqual(res, {
+        ok: true,
+        providerMessageId: "wamid.ACCT1",
+        status: "sent",
+      });
+    } finally {
+      mock.restoreAll();
+    }
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].init?.headers, {
+      "Content-Type": "application/json",
+      "X-API-Key": "account-key",
+    });
+    assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
+      from: "+15550009999",
+      to: "+15550001234",
+      type: "text",
+      text: { body: "respuesta" },
+    });
+  });
+
+  test("an account whose provider is not registered fails closed — no channel fallback", async () => {
+    let fetched = false;
+    mock.method(globalThis, "fetch", async () => {
+      fetched = true;
+      return new Response("{}");
+    });
+    try {
+      const res = await messenger.send(
+        { to: "+15550001234", type: "text", text: "hola" },
+        {
+          channel: "whatsapp",
+          account: { ...ACCOUNT, provider: "kapso" },
+        },
+      );
+      assert.deepEqual(res, {
+        ok: false,
+        error: "no messaging provider registered for provider 'kapso'",
+        retryable: false,
+      });
+      assert.equal(fetched, false);
+    } finally {
+      mock.restoreAll();
+    }
+  });
+
+  test("account channel is used when no explicit channel is passed", async () => {
+    // An instagram-bound account without a registered provider surfaces the
+    // provider error — proving the channel fallback picked the account's.
+    const res = await messenger.send(
+      { to: "@handle", type: "text", text: "hola" },
+      { account: { ...ACCOUNT, channel: "instagram", provider: "zernio" } },
+    );
+    assert.deepEqual(res, {
+      ok: false,
+      error: "no messaging provider registered for provider 'zernio'",
+      retryable: false,
+    });
   });
 });
 

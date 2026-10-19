@@ -15,7 +15,7 @@
  *
  * The table lookup is wrapped in try/catch: deployments whose migration has
  * not run yet (or older installs) degrade to the placeholder path, which is
- * exactly today's behavior. Pure read helper — nothing is wired to it yet.
+ * exactly today's behavior.
  */
 
 import { and, asc, eq, inArray } from "drizzle-orm";
@@ -23,6 +23,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { channelAccounts } from "@/db/schema";
 import { getIntegrationSecrets, getYCloudApiKey } from "@/lib/integrations";
+import { normalizePhone } from "@/lib/phone-utils";
 
 import {
   PROVIDER_IDS,
@@ -129,6 +130,22 @@ function fallbackAccount(channel: ChannelKind): ChannelAccount | undefined {
   };
 }
 
+async function rowToAccount(
+  row: ChannelAccountRow
+): Promise<ChannelAccount | undefined> {
+  if (!isProviderId(row.provider)) return undefined;
+  return {
+    id: String(row.id),
+    tenantId: row.tenantId,
+    provider: row.provider,
+    channel: row.channel,
+    providerAccountId: row.providerAccountId,
+    senderAddress: row.senderAddress,
+    credentials: await resolveCredentials(row),
+    status: toAccountStatus(row.status),
+  };
+}
+
 export async function resolveChannelAccount(
   channel: ChannelKind,
   providerAccountId?: string
@@ -146,19 +163,7 @@ export async function resolveChannelAccount(
     );
   }
 
-  if (row) {
-    if (!isProviderId(row.provider)) return undefined;
-    return {
-      id: String(row.id),
-      tenantId: row.tenantId,
-      provider: row.provider,
-      channel: row.channel,
-      providerAccountId: row.providerAccountId,
-      senderAddress: row.senderAddress,
-      credentials: await resolveCredentials(row),
-      status: toAccountStatus(row.status),
-    };
-  }
+  if (row) return rowToAccount(row);
 
   if (providerAccountId && tableAvailable) {
     try {
@@ -170,4 +175,100 @@ export async function resolveChannelAccount(
     }
   }
   return fallbackAccount(channel);
+}
+
+/**
+ * Resolve a bound account by its `channel_accounts` primary key — the
+ * resolution path for `conversations.channelAccountId` (S15). Fail-closed:
+ * missing/inactive rows, unknown providers, and an unavailable table all
+ * return `undefined`; callers must surface the error, never fall back to a
+ * different sender.
+ */
+export async function resolveChannelAccountById(
+  accountId: number
+): Promise<ChannelAccount | undefined> {
+  let row: ChannelAccountRow | undefined;
+  try {
+    const rows = await db
+      .select()
+      .from(channelAccounts)
+      .where(eq(channelAccounts.id, accountId))
+      .limit(1);
+    row = rows[0];
+  } catch (err) {
+    console.warn(
+      `[messaging] channel_accounts lookup failed for id ${accountId}:`,
+      err
+    );
+    return undefined;
+  }
+  if (!row || row.status !== "active") return undefined;
+  return rowToAccount(row);
+}
+
+export type SenderAccountMatch =
+  | { kind: "matched"; account: ChannelAccount }
+  /** No active rows for the channel (or table unavailable) → legacy path. */
+  | { kind: "unprovisioned" }
+  /** Rows exist but none matches the sender — foreign account, fail closed. */
+  | { kind: "unmatched" };
+
+/**
+ * Pure matcher — the business-side sender of an echo/self-send must equal an
+ * active row's `senderAddress` or `providerAccountId` (digit-normalized for
+ * E.164), or carry the row's `providerAccountId` verbatim (wabaId et al.).
+ */
+export function matchSenderInRows(
+  rows: readonly ChannelAccountRow[],
+  sender: { senderAddress?: string; providerAccountId?: string }
+): ChannelAccountRow | undefined {
+  const senderDigits = sender.senderAddress
+    ? normalizePhone(sender.senderAddress)
+    : "";
+  return rows.find(
+    (row) =>
+      (sender.providerAccountId !== undefined &&
+        sender.providerAccountId !== "" &&
+        row.providerAccountId === sender.providerAccountId) ||
+      (senderDigits !== "" &&
+        (normalizePhone(row.senderAddress) === senderDigits ||
+          normalizePhone(row.providerAccountId) === senderDigits))
+  );
+}
+
+/**
+ * Attribute an outbound/echo event's business-side sender to a provisioned
+ * `channel_accounts` row (S15 echo human-override path). Tri-state so callers
+ * can keep the legacy phone-only flow on unmigrated installs while refusing
+ * foreign senders once any account is provisioned.
+ */
+export async function matchSenderToChannelAccount(
+  channel: ChannelKind,
+  sender: { senderAddress?: string; providerAccountId?: string }
+): Promise<SenderAccountMatch> {
+  let rows: ChannelAccountRow[];
+  try {
+    rows = await db
+      .select()
+      .from(channelAccounts)
+      .where(
+        and(
+          eq(channelAccounts.channel, channel),
+          eq(channelAccounts.status, "active"),
+          inArray(channelAccounts.provider, PROVIDER_IDS)
+        )
+      );
+  } catch (err) {
+    console.warn(
+      "[messaging] channel_accounts sender lookup failed — treating as unprovisioned:",
+      err
+    );
+    return { kind: "unprovisioned" };
+  }
+  if (rows.length === 0) return { kind: "unprovisioned" };
+
+  const row = matchSenderInRows(rows, sender);
+  if (!row) return { kind: "unmatched" };
+  const account = await rowToAccount(row);
+  return account ? { kind: "matched", account } : { kind: "unmatched" };
 }

@@ -30,9 +30,24 @@ export const sendWhatsAppMessage = tool({
     if (!message.trim()) return "No envié el WhatsApp: el mensaje está vacío.";
     const phone = `+${normalized}`;
 
-    // Enviar WhatsApp
+    // S15 — si la conversación existente está vinculada a una
+    // channel_account el mensaje sale por esa cuenta; si no hay binding
+    // (o no hay conversación todavía) queda el placeholder de siempre.
     const { messenger } = await import("@/lib/messaging");
-    const result = await messenger.send({ to: phone, type: "text", text: message });
+    const { resolveConversationAccountForPhone } = await import(
+      "@/lib/channels/router"
+    );
+    const binding = await resolveConversationAccountForPhone(phone);
+    if (binding.kind === "unresolvable") {
+      return `Error al enviar WhatsApp a ${to}: la cuenta de canal #${binding.accountId} no es resoluble.`;
+    }
+    const account = binding.kind === "resolved" ? binding.account : undefined;
+
+    // Enviar WhatsApp
+    const result = await messenger.send(
+      { to: phone, type: "text", text: message },
+      account ? { channel: "whatsapp", account } : {}
+    );
 
     if (!result.ok) {
       return `Error al enviar WhatsApp a ${to}: ${result.error}`;

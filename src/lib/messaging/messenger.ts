@@ -6,16 +6,20 @@
  * `type: "template"` prefers `provider.sendTemplate()` when the adapter
  * implements it. Telegram's internal bot is NOT routed through here.
  *
- * Two credential modes exist while `channel_accounts` doesn't (B3):
- * - default: a placeholder account with no secrets — the provider's
- *   delegated senders keep resolving credentials agent_config → env.
+ * Credential modes:
+ * - `account`: a fully-resolved `channel_accounts` row (via
+ *   `resolveChannelAccount`/`resolveChannelAccountById`). The send is bound
+ *   to the account's own provider — a mismatched or unregistered provider
+ *   fails closed rather than re-routing to the channel default.
  * - `credentials`: caller-resolved apiKey + sender — the legacy
  *   `ycloud-client` call sites that pull them up-front (agent_config for
  *   the key, env-first for the sender number). The provider sends with
  *   exactly those credentials.
+ * - default: a placeholder account with no secrets — the provider's
+ *   delegated senders keep resolving credentials agent_config → env.
  */
 
-import { providerForChannel } from "./registry";
+import { getProvider, hasProvider, providerForChannel } from "./registry";
 import type {
   ChannelAccount,
   ChannelKind,
@@ -31,9 +35,12 @@ export interface ExplicitCredentials {
 }
 
 export interface SendOptions {
-  /** Delivery surface. v1 wires only "whatsapp". */
+  /** Delivery surface. Defaults to the account's channel, else "whatsapp". */
   channel?: ChannelKind;
-  /** Full account override — wins over `credentials`. */
+  /**
+   * Full account override — wins over `credentials`. The send is routed by
+   * the account's `provider`, not by the channel's default route.
+   */
   account?: ChannelAccount;
   /** Caller-resolved credentials (see file header). */
   credentials?: ExplicitCredentials;
@@ -89,12 +96,22 @@ async function send(
   msg: OutboundMessage,
   opts: SendOptions = {}
 ): Promise<SendResult> {
-  const channel = opts.channel ?? "whatsapp";
-  const provider = providerForChannel(channel);
+  const channel = opts.channel ?? opts.account?.channel ?? "whatsapp";
+  // An explicit account binds its own provider — a `kapso` whatsapp account
+  // must never be sent through the channel-default adapter, and an
+  // unregistered account provider fails closed instead of silently
+  // re-routing to `providerForChannel`.
+  const provider = opts.account
+    ? hasProvider(opts.account.provider)
+      ? getProvider(opts.account.provider)
+      : undefined
+    : providerForChannel(channel);
   if (!provider) {
     return {
       ok: false,
-      error: `no messaging provider registered for channel '${channel}'`,
+      error: opts.account
+        ? `no messaging provider registered for provider '${opts.account.provider}'`
+        : `no messaging provider registered for channel '${channel}'`,
       retryable: false,
     };
   }

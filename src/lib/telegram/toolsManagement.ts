@@ -992,17 +992,20 @@ export const setHumanOverrideTool = tool({
 // ─── sendMessageAsOperatorTool - Enviar mensaje como operador humano ──────────
 export const sendMessageAsOperatorTool = tool({
   description:
-    "Envía un mensaje como operador humano a una conversación de WhatsApp. El mensaje se envía al cliente y queda registrado en el historial. USAR DESPUÉS de activar setHumanOverride para mantener el control, aunque también funciona sin override. PREGUNTAS: 'mandale un mensaje a Hector', 'decile que ya le llega', 'respondé al chat 5'",
+    "Envía un mensaje como operador humano a una conversación (WhatsApp, Telegram u otro canal conectado). El mensaje se envía al cliente por el canal de la conversación y queda registrado en el historial. USAR DESPUÉS de activar setHumanOverride para mantener el control, aunque también funciona sin override. PREGUNTAS: 'mandale un mensaje a Hector', 'decile que ya le llega', 'respondé al chat 5'",
   inputSchema: z.object({
     conversationId: z.number().describe("ID de la conversación"),
     text: z.string().describe("Texto del mensaje a enviar al cliente"),
   }),
   execute: async ({ conversationId, text }) => {
-    // 1. Obtener datos de la conversación
+    // 1. Obtener datos de la conversación (S15: canal + cuenta de canal)
     const [conv] = await db
       .select({
         customerPhone: conversations.customerPhone,
         customerName: conversations.customerName,
+        channel: conversations.channel,
+        channelAccountId: conversations.channelAccountId,
+        externalUserId: conversations.externalUserId,
       })
       .from(conversations)
       .where(eq(conversations.id, conversationId))
@@ -1010,19 +1013,64 @@ export const sendMessageAsOperatorTool = tool({
 
     if (!conv)
       return `No encontré la conversación #${conversationId}.`;
+
+    const channel = conv.channel || "whatsapp";
+    const { insertMessage } = await import("@/lib/channels/router");
+
+    // 2a. Telegram usa el bot interno — fuera del modelo de proveedores.
+    if (channel === "telegram") {
+      const { sendTelegramMessage, getTelegramConfigFromDB } = await import(
+        "@/lib/telegram/bot"
+      );
+      const tgConfig = await getTelegramConfigFromDB();
+      if (!tgConfig?.botToken || !conv.externalUserId)
+        return `La conversación #${conversationId} no tiene un chat de Telegram resoluble.`;
+      await sendTelegramMessage(
+        tgConfig.botToken,
+        Number(conv.externalUserId),
+        text
+      );
+      await insertMessage(conversationId, "assistant", text);
+      return `✅ Mensaje enviado a ${conv.customerName || conv.externalUserId}: "${text.slice(0, 100)}"`;
+    }
+
     if (!conv.customerPhone)
       return `La conversación #${conversationId} no tiene teléfono de cliente.`;
 
-    // 2. Enviar el mensaje por WhatsApp
-    const { messenger } = await import("@/lib/messaging");
-    const result = await messenger.send({ to: conv.customerPhone, type: "text", text });
+    // 2b. Resolver la cuenta de canal y enviar (S15 — fail closed):
+    //     - channelAccountId set → send as that channel account
+    //     - whatsapp unbound → placeholder path identical to before
+    //     - other channels unbound → channel-level resolution; no provider
+    //       → surfaced error, never a silent drop or wrong-sender send
+    const { messenger, resolveChannelAccount, resolveChannelAccountById } =
+      await import("@/lib/messaging");
+
+    let result;
+    if (conv.channelAccountId != null) {
+      const account = await resolveChannelAccountById(conv.channelAccountId);
+      if (!account)
+        return `Error al enviar mensaje: la cuenta de canal #${conv.channelAccountId} no es resoluble (faltante, inactiva o proveedor no registrado).`;
+      result = await messenger.send(
+        { to: conv.customerPhone, type: "text", text },
+        { channel, account }
+      );
+    } else if (channel === "whatsapp") {
+      result = await messenger.send({ to: conv.customerPhone, type: "text", text });
+    } else {
+      const account = await resolveChannelAccount(channel);
+      if (!account)
+        return `Error al enviar mensaje: no hay proveedor registrado para el canal '${channel}'.`;
+      result = await messenger.send(
+        { to: conv.customerPhone, type: "text", text },
+        { channel, account }
+      );
+    }
 
     if (!result.ok) {
       return `Error al enviar mensaje: ${result.error}`;
     }
 
     // 3. Registrar en el historial de la conversación
-    const { insertMessage } = await import("@/lib/channels/router");
     await insertMessage(conversationId, "assistant", text);
 
     return `✅ Mensaje enviado a ${conv.customerName || conv.customerPhone}: "${text.slice(0, 100)}"`;

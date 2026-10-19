@@ -76,12 +76,33 @@ export async function GET(request: Request) {
       const followupText = `Holaa, ¿todo bien con el pedido? No te olvides de etiquetarnos en ig porfa 🙌`;
 
       try {
+        // S15 — honor the conversation's channel_account binding when one
+        // exists; unbound → placeholder (identical legacy behavior). An
+        // unresolvable binding stays claimed for manual review.
         const { messenger } = await import("@/lib/messaging");
-        const result = await messenger.send({
-          to: order.phoneNumber,
-          type: "text",
-          text: followupText,
-        });
+        const { resolveConversationAccountForPhone } = await import(
+          "@/lib/channels/router"
+        );
+        const phoneNorm = order.phoneNumber.startsWith("+")
+          ? order.phoneNumber
+          : `+${order.phoneNumber}`;
+        const binding = await resolveConversationAccountForPhone(phoneNorm);
+        if (binding.kind === "unresolvable") {
+          console.warn(
+            `[followup] Order #${order.id} bound to unresolvable channel_account #${binding.accountId}; claimed for manual review`
+          );
+          continue;
+        }
+        const result = await messenger.send(
+          {
+            to: order.phoneNumber,
+            type: "text",
+            text: followupText,
+          },
+          binding.kind === "resolved"
+            ? { channel: "whatsapp", account: binding.account }
+            : {}
+        );
 
         if (result.ok) {
           processed++;

@@ -1,10 +1,11 @@
 "use server";
 
 import { db } from "@/db";
-import { agentConfig, chatMessages } from "@/db/schema";
+import { agentConfig, chatMessages, conversations } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
+import type { ChannelAccount } from "@/lib/messaging/types";
 
 /**
  * Activa el agente IA para una conversación sin respuesta.
@@ -41,7 +42,41 @@ export async function triggerAgentForConversation(
       };
     });
 
-    // 3. Obtener credenciales WhatsApp
+    // 3. Resolver la identidad de envío (S15):
+    //    - conversación con channelAccountId → esa channel_account
+    //    - canal no-whatsapp sin binding → resolución por canal (fail closed)
+    //    - whatsapp sin binding → credenciales agent_config/env (legacy)
+    const [conv] = await db
+      .select({
+        channel: conversations.channel,
+        channelAccountId: conversations.channelAccountId,
+      })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+
+    const channel = conv?.channel || "whatsapp";
+    let account: ChannelAccount | undefined;
+    if (conv?.channelAccountId != null) {
+      const { resolveChannelAccountById } = await import("@/lib/messaging");
+      account = await resolveChannelAccountById(conv.channelAccountId);
+      if (!account) {
+        return {
+          success: false,
+          message: `La cuenta de canal #${conv.channelAccountId} no es resoluble`,
+        };
+      }
+    } else if (channel !== "whatsapp") {
+      const { resolveChannelAccount } = await import("@/lib/messaging");
+      account = await resolveChannelAccount(channel);
+      if (!account) {
+        return {
+          success: false,
+          message: `El canal '${channel}' no tiene proveedor registrado`,
+        };
+      }
+    }
+
     const [cfg] = await db
       .select({ ycloudApiKey: agentConfig.ycloudApiKey, phoneNumber: agentConfig.phoneNumber })
       .from(agentConfig)
@@ -51,7 +86,7 @@ export async function triggerAgentForConversation(
     const { decryptIfEncrypted } = await import("@/lib/encryption");
     const apiKey = decryptIfEncrypted(cfg?.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
     const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
-    if (!apiKey || !from) {
+    if (!account && (!apiKey || !from)) {
       return { success: false, message: "WhatsApp no configurado (falta API key)" };
     }
 
@@ -67,14 +102,15 @@ export async function triggerAgentForConversation(
     const { insertMessage } = await import("@/lib/channels/router");
     const { id: msgId } = await insertMessage(conversationId, "assistant", responseText);
 
-    // 6. Enviar por WhatsApp
+    // 6. Enviar por el canal de la conversación — como la cuenta vinculada
+    //    cuando existe, o con las credenciales legacy si es whatsapp sin
+    //    binding (comportamiento idéntico al anterior).
     const { sendWhatsAppBubbles } = await import("@/lib/buffer/response-sender");
-    const ycloudResult = await sendWhatsAppBubbles({
-      to: customerPhone,
-      text: responseText,
-      apiKey,
-      from,
-    });
+    const ycloudResult = await sendWhatsAppBubbles(
+      account
+        ? { to: customerPhone, text: responseText, apiKey: "", from: "", channel, account }
+        : { to: customerPhone, text: responseText, apiKey, from }
+    );
 
     // 7. Guardar wamid
     if (ycloudResult?.id) {
@@ -89,12 +125,15 @@ export async function triggerAgentForConversation(
       const { messenger } = await import("@/lib/messaging");
       for (const media of pendingMedia) {
         if (media.type === "image" || media.type === "sticker") {
-          await messenger.send({
-            to: customerPhone,
-            type: "image",
-            mediaUrl: media.url,
-            text: media.caption,
-          });
+          await messenger.send(
+            {
+              to: customerPhone,
+              type: "image",
+              mediaUrl: media.url,
+              text: media.caption,
+            },
+            account ? { channel, account } : {}
+          );
           await insertMessage(conversationId, "assistant", media.dbContent);
         }
       }

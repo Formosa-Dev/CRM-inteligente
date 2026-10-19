@@ -15,6 +15,8 @@
  */
 import { db } from "@/db";
 import { conversationSessionEffectClaims } from "@/db/schema";
+import { providerForChannel } from "@/lib/messaging/registry";
+import type { ChannelKind } from "@/lib/messaging/types";
 
 export type HandoffEffectKind = "human_override" | "owner_notification" | "customer_reply";
 
@@ -80,7 +82,20 @@ export type HandoffTransportInput = {
   notifyClaim: boolean;
   replyClaim: boolean;
   delivery: "allowed" | "suppressed";
+  /**
+   * Conversation channel the decision is computed for. Defaults to
+   * "whatsapp" so legacy callers keep identical semantics.
+   */
+  channel?: ChannelKind;
 };
+
+export type HandoffTransportKind =
+  /** Channel is delivered through a registered messaging provider. */
+  | "messenger"
+  /** Channel is delivered by an internal bot (telegram) — not a provider. */
+  | "internal-bot"
+  /** Channel has no registered provider — customer delivery fails closed. */
+  | "unavailable";
 
 export type HandoffTransportDecision = {
   /** Persist humanOverrideUntil (24h) — only on a fresh override claim. */
@@ -89,22 +104,43 @@ export type HandoffTransportDecision = {
   sendOwnerNotification: boolean;
   /** Reply to the customer — only on a fresh claim while AI is enabled. */
   sendCustomerReply: boolean;
+  /** Channel the decision was computed for (input or "whatsapp" default). */
+  channel: ChannelKind;
+  /** Which delivery surface the customer-side effects use. */
+  transport: HandoffTransportKind;
 };
 
 /**
  * Pure webhook handoff-transport gate (SDD memoria-persistente-sesion-whatsapp,
- * W2). Claims are at-most-once per episode/message; the transport follows the
- * same rule: a duplicate claim transports nothing. The owner side stays
- * deliverable even with AI disabled; the customer reply is suppressed until
- * the AI routing flag is enabled, so closing this gap never sends WhatsApp
- * to the customer while the IA stays off.
+ * W2; generalized channel-agnostic in S15). Claims are at-most-once per
+ * episode/message; the transport follows the same rule: a duplicate claim
+ * transports nothing. The owner side stays deliverable even with AI disabled;
+ * the customer reply is suppressed until the AI routing flag is enabled, so
+ * closing this gap never sends to the customer while the IA stays off.
+ *
+ * The channel only affects the customer-reply surface: the override write and
+ * the owner notification are channel-independent. WhatsApp resolves to
+ * "messenger" (bubbles/format unchanged); telegram to "internal-bot"; a
+ * channel with no registered provider resolves to "unavailable" and the
+ * customer reply stays suppressed — fail closed, never a silent misroute.
  */
 export function resolveHandoffTransport(input: HandoffTransportInput): HandoffTransportDecision {
+  const channel = input.channel ?? "whatsapp";
+  const transport: HandoffTransportKind =
+    channel === "telegram"
+      ? "internal-bot"
+      : providerForChannel(channel)
+        ? "messenger"
+        : "unavailable";
   return {
     writeOverride: input.notifyClaim,
     sendOwnerNotification: input.notifyClaim,
     sendCustomerReply:
-      input.replyClaim && input.delivery === "allowed",
+      input.replyClaim &&
+      input.delivery === "allowed" &&
+      transport !== "unavailable",
+    channel,
+    transport,
   };
 }
 

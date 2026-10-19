@@ -46,7 +46,26 @@ async function processWhatsApp(payload: QueuePayload): Promise<boolean> {
     return false;
   }
 
-  const result = await messenger.send({ to, type: "text", text });
+  // S15 — send as the conversation's bound channel_account when one exists;
+  // an unresolvable binding retries then DLQs instead of wrong-sender sends.
+  const { resolveConversationAccountForPhone } = await import(
+    "@/lib/channels/router"
+  );
+  const binding = await resolveConversationAccountForPhone(to);
+  if (binding.kind === "unresolvable") {
+    console.log("[queue] sendText failed — unresolvable channel binding", {
+      chatId: payload.chatId,
+      accountId: binding.accountId,
+    });
+    return false;
+  }
+
+  const result = await messenger.send(
+    { to, type: "text", text },
+    binding.kind === "resolved"
+      ? { channel: "whatsapp", account: binding.account }
+      : {}
+  );
   if (!result.ok) {
     console.log("[queue] sendText failed", {
       chatId: payload.chatId,

@@ -1,8 +1,8 @@
 import { db } from "@/db";
 import { conversations, chatMessages, leads, attachments } from "@/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, or } from "drizzle-orm";
 import { normalizePhone } from "@/lib/phone-utils";
-import type { ChannelKind } from "@/lib/messaging/types";
+import type { ChannelAccount, ChannelKind, OutboundMessage } from "@/lib/messaging/types";
 
 // Full channel universe (parity with schema channelEnum / ChannelKind).
 // Widened in S12 — social channels persist conversations without a phone.
@@ -28,7 +28,7 @@ export interface IncomingMessage {
   contentAttributes?: MediaAttachment[];
 }
 
-// Find or create conversation, returns { id, isNew }
+// Find or create conversation, returns { id, isNew, channel, channelAccountId }
 // channelAccountId (optional, S12): stamps the channel_accounts row that owns
 // this conversation — set on create, backfilled on match when the row lacks it.
 export async function findOrCreateConversation(
@@ -37,10 +37,19 @@ export async function findOrCreateConversation(
   customerName?: string,
   customerPhone?: string,
   channelAccountId?: number | null
-): Promise<{ id: number; isNew: boolean }> {
+): Promise<{
+  id: number;
+  isNew: boolean;
+  channel: ChannelKind;
+  channelAccountId: number | null;
+}> {
   // Try to find existing by channel + externalUserId
   const existing = await db
-    .select({ id: conversations.id, channelAccountId: conversations.channelAccountId })
+    .select({
+      id: conversations.id,
+      channel: conversations.channel,
+      channelAccountId: conversations.channelAccountId,
+    })
     .from(conversations)
     .where(
       and(
@@ -57,13 +66,21 @@ export async function findOrCreateConversation(
         .set({ channelAccountId })
         .where(eq(conversations.id, existing[0].id));
     }
-    return { id: existing[0].id, isNew: false };
+    return {
+      id: existing[0].id,
+      isNew: false,
+      channel: existing[0].channel,
+      channelAccountId: channelAccountId ?? existing[0].channelAccountId,
+    };
   }
 
   // For WhatsApp, also check by whatsappId (backward compat)
   if (channel === "whatsapp") {
     const byWaId = await db
-      .select({ id: conversations.id, channelAccountId: conversations.channelAccountId })
+      .select({
+        id: conversations.id,
+        channelAccountId: conversations.channelAccountId,
+      })
       .from(conversations)
       .where(eq(conversations.whatsappId, externalUserId))
       .limit(1);
@@ -80,7 +97,12 @@ export async function findOrCreateConversation(
             : {}),
         })
         .where(eq(conversations.id, byWaId[0].id));
-      return { id: byWaId[0].id, isNew: false };
+      return {
+        id: byWaId[0].id,
+        isNew: false,
+        channel: "whatsapp",
+        channelAccountId: byWaId[0].channelAccountId,
+      };
     }
   }
 
@@ -117,7 +139,7 @@ export async function findOrCreateConversation(
     await autoLinkLeadToConversation(finalPhone, conv.id);
   }
 
-  return { id: conv.id, isNew: true };
+  return { id: conv.id, isNew: true, channel, channelAccountId: null };
 }
 
 /**
@@ -324,6 +346,46 @@ export async function checkRecentHumanActivity(
   return msgTime > cutoff.getTime();
 }
 
+export type BoundAccountResolution =
+  /** No conversation, or conversation without a channel_account binding. */
+  | { kind: "unbound" }
+  /** Conversation is bound and the account resolved cleanly. */
+  | { kind: "resolved"; account: ChannelAccount }
+  /** Bound but missing/inactive/unregistered — callers must fail closed. */
+  | { kind: "unresolvable"; accountId: number };
+
+/**
+ * Resolve the channel_account bound to an existing WhatsApp conversation
+ * addressed by phone (externalUserId or legacy whatsappId). Read-only — no
+ * conversation is created. Phone-addressed send paths (manual sends, order
+ * notifications, broadcasts) use this to honor the conversation binding
+ * before falling back to the legacy placeholder.
+ */
+export async function resolveConversationAccountForPhone(
+  phone: string
+): Promise<BoundAccountResolution> {
+  const [conv] = await db
+    .select({ channelAccountId: conversations.channelAccountId })
+    .from(conversations)
+    .where(
+      or(
+        and(
+          eq(conversations.channel, "whatsapp"),
+          eq(conversations.externalUserId, phone)
+        ),
+        eq(conversations.whatsappId, phone)
+      )
+    )
+    .limit(1);
+
+  if (!conv || conv.channelAccountId == null) return { kind: "unbound" };
+  const { resolveChannelAccountById } = await import("@/lib/messaging");
+  const account = await resolveChannelAccountById(conv.channelAccountId);
+  return account
+    ? { kind: "resolved", account }
+    : { kind: "unresolvable", accountId: conv.channelAccountId };
+}
+
 // Send outbound message via the correct channel
 export async function sendOutboundMessage(
   conversationId: number,
@@ -341,9 +403,29 @@ export async function sendOutboundMessage(
 
   if (!conv) throw new Error(`Conversation ${conversationId} not found`);
 
-  const channel = conv.channel || "whatsapp";
+  const channel: ChannelKind = conv.channel || "whatsapp";
 
-  if (channel === "whatsapp") {
+  // S15 — three delivery surfaces, resolved in this order:
+  //   1. telegram conversations → internal bot (outside the provider model)
+  //   2. unbound whatsapp conversations → legacy credentials path, verbatim
+  //      (channel_accounts empty/unmigrated ⇒ identical behavior to before)
+  //   3. account-bound or non-whatsapp messenger conversations →
+  //      channel_accounts resolution + messenger.send({account}) — fail
+  //      closed: an unresolvable account or unregistered channel throws and
+  //      the caller surfaces it, never a silent drop or wrong-sender send.
+  if (channel === "telegram") {
+    const { sendTelegramMessage, getTelegramConfigFromDB } = await import(
+      "@/lib/telegram/bot"
+    );
+    const tgConfig = await getTelegramConfigFromDB();
+    if (tgConfig?.botToken && conv.externalUserId) {
+      await sendTelegramMessage(
+        tgConfig.botToken,
+        Number(conv.externalUserId),
+        content || (mediaUrl || "")
+      );
+    }
+  } else if (channel === "whatsapp" && conv.channelAccountId == null) {
     const { messenger } = await import("@/lib/messaging");
     const { agentConfig } = await import("@/db/schema");
     const config = await db.select().from(agentConfig).limit(1);
@@ -366,18 +448,35 @@ export async function sendOutboundMessage(
         if (!res.ok) throw new Error(res.error);
       }
     }
-  } else if (channel === "telegram") {
-    const { sendTelegramMessage, getTelegramConfigFromDB } = await import(
-      "@/lib/telegram/bot"
-    );
-    const tgConfig = await getTelegramConfigFromDB();
-    if (tgConfig?.botToken && conv.externalUserId) {
-      await sendTelegramMessage(
-        tgConfig.botToken,
-        Number(conv.externalUserId),
-        content || (mediaUrl || "")
+  } else {
+    const { messenger } = await import("@/lib/messaging");
+    const {
+      resolveChannelAccount,
+      resolveChannelAccountById,
+    } = await import("@/lib/messaging");
+
+    const account = conv.channelAccountId != null
+      ? await resolveChannelAccountById(conv.channelAccountId)
+      : await resolveChannelAccount(channel);
+    if (!account) {
+      throw new Error(
+        conv.channelAccountId != null
+          ? `Channel account #${conv.channelAccountId} is not resolvable for conversation ${conversationId} (missing, inactive, or provider unregistered)`
+          : `No messaging provider registered for channel '${channel}'`
       );
     }
+    const to = conv.customerPhone ?? conv.externalUserId ?? "";
+    if (!to) {
+      throw new Error(
+        `Conversation ${conversationId} has no recipient address for channel '${channel}'`
+      );
+    }
+    const msg: OutboundMessage =
+      mediaUrl && mediaType
+        ? { to, type: mediaType, mediaUrl, text: content || undefined }
+        : { to, type: "text", text: content || " " };
+    const res = await messenger.send(msg, { channel, account });
+    if (!res.ok) throw new Error(res.error);
   }
 
   // Save the outbound message with contentAttributes if media attached

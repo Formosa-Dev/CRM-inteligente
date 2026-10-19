@@ -1,5 +1,6 @@
 import { messenger } from "@/lib/messaging";
 import { sendTelegramMessage } from "@/lib/telegram/bot";
+import type { ChannelAccount, ChannelKind } from "@/lib/messaging/types";
 
 /** Provider send receipt (was `YCloudResponse` in the folded ycloud-client). */
 export interface YCloudResponse {
@@ -75,11 +76,18 @@ export function splitIntoBubbles(text: string): string[] {
 
 // Send response as bubbles via WhatsApp (YCloud)
 // Returns the LAST YCloud response (which has the wamid) for echo dedup
+//
+// S15: `account` + `channel` make the send account-aware — when a
+// conversation is bound to a `channel_accounts` row the bubbles go out as
+// that account's provider instead of the caller's agent_config credentials.
+// Bubble splitting, delays and error propagation are identical either way.
 export async function sendWhatsAppBubbles(params: {
   to: string;
   text: string;
   apiKey: string;
   from: string;
+  channel?: ChannelKind;
+  account?: ChannelAccount;
 }): Promise<YCloudResponse | null> {
   const bubbles = splitIntoBubbles(params.text);
   let lastResult: YCloudResponse | null = null;
@@ -87,13 +95,20 @@ export async function sendWhatsAppBubbles(params: {
   for (let i = 0; i < bubbles.length; i++) {
     if (i > 0) {
       // Typing indicator + delay between bubbles
-      await sendTypingIndicator("whatsapp", params.to, params.apiKey, params.from);
+      await sendTypingIndicator(
+        params.account ? (params.channel ?? "whatsapp") : "whatsapp",
+        params.to,
+        params.apiKey,
+        params.from
+      );
       await sleep(DELAY_BETWEEN_BUBBLES_MS);
     }
 
     const res = await messenger.send(
       { to: params.to, type: "text", text: bubbles[i] },
-      { credentials: { apiKey: params.apiKey, senderAddress: params.from } },
+      params.account
+        ? { channel: params.channel ?? params.account.channel, account: params.account }
+        : { credentials: { apiKey: params.apiKey, senderAddress: params.from } },
     );
     if (!res.ok) throw new Error(res.error);
     lastResult = { id: res.providerMessageId, status: res.status };
@@ -122,7 +137,7 @@ export async function sendTelegramBubbles(params: {
 
 // Send typing indicator per channel
 async function sendTypingIndicator(
-  channel: "whatsapp" | "telegram",
+  channel: ChannelKind,
   userId: string,
   tokenOrApiKey: string,
   from?: string

@@ -19,6 +19,7 @@
 
 import { NextResponse } from "next/server";
 import { messenger } from "./messenger";
+import { matchSenderToChannelAccount } from "./accounts";
 import { extractYCloudEchoMessage } from "./providers/ycloud";
 import {
   channelAccountRowId,
@@ -108,6 +109,27 @@ async function handleEcho(
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
+    // S15 — echo→account attribution: once channel_accounts is provisioned,
+    // the echo's business-side sender must match an active row
+    // (providerAccountId, or the E.164 senderAddress for ycloud). An
+    // unmatched sender is a foreign echo → ack + ignore, no conversation
+    // created. When no rows exist (unmigrated installs) the match is
+    // "unprovisioned" and the legacy phone-only flow below runs unchanged.
+    const senderMatch = await matchSenderToChannelAccount("whatsapp", {
+      senderAddress: botPhone,
+      providerAccountId: event.providerAccountId || undefined,
+    });
+    if (senderMatch.kind === "unmatched") {
+      console.warn(
+        `[webhook:echo] Echo sender ${botPhone} (providerAccountId ${event.providerAccountId || "n/a"}) matches no active channel_accounts row — ignoring`
+      );
+      return NextResponse.json({ ok: true }, { status: 200 });
+    }
+    const echoAccountId =
+      senderMatch.kind === "matched"
+        ? Number(senderMatch.account.id)
+        : channelAccountId;
+
     // Extraer el contenido del mensaje
     const msgType = event.type ?? "text";
     let displayText = "[Mensaje desde WhatsApp Business]";
@@ -126,13 +148,32 @@ async function handleEcho(
 
     // 4. Buscar o crear conversación por el teléfono del customer
     //    findOrCreateConversation normaliza customerPhone internamente
-    const { id: conversationId } = await findOrCreateConversation(
+    const echoConv = await findOrCreateConversation(
       "whatsapp",
       customerPhone,
       undefined,
       customerPhone,
-      channelAccountId
+      echoAccountId
     );
+    const conversationId = echoConv.id;
+
+    // S15 — bind the conversation to the matched account so operator/handoff
+    // sends resolve it via channelAccountId. Guarded: only stamps when the
+    // binding is missing or changed (a fresh create/backfill already reports
+    // the stamped value, so this fires only on a real rebinding).
+    if (
+      echoAccountId != null &&
+      Number.isFinite(echoAccountId) &&
+      echoConv.channelAccountId !== echoAccountId
+    ) {
+      await db
+        .update(conversations)
+        .set({ channelAccountId: echoAccountId, updatedAt: new Date() })
+        .where(eq(conversations.id, conversationId));
+      console.log(
+        `[webhook:echo] Bound conversation ${conversationId} to channel_account #${echoAccountId}`
+      );
+    }
 
     // 5. Dedup: si este echo ya tiene el mismo platformMessageId, skip
     if (echoMsgId) {
@@ -242,7 +283,7 @@ async function handleEcho(
 
               const echoInsert = await insertMessage(
                 conversationId, "human", displayText,
-                contentAttachments, echoMsgId, channelAccountId
+                contentAttachments, echoMsgId, echoAccountId ?? channelAccountId
               );
 
               if (!echoInsert.wasDuplicate) {
@@ -308,7 +349,7 @@ async function handleEcho(
         displayText,
         undefined,
         echoMsgId,
-        channelAccountId
+        echoAccountId ?? channelAccountId
       );
       if (echoInsert.wasDuplicate) {
         console.log(`[webhook:echo] Duplicate echo ${echoMsgId} — already saved`);
@@ -405,6 +446,7 @@ async function deliverWebhookHandoff(input: {
   customerName: string | null;
   customerPhone: string;
   messageId: string;
+  channel?: ChannelKind;
   decision: Extract<RoutingDecision, { kind: "handoff" }>;
 }): Promise<void> {
   const { decision } = input;
@@ -413,7 +455,16 @@ async function deliverWebhookHandoff(input: {
     notifyClaim: decision.notifyClaim,
     replyClaim: decision.replyClaim,
     delivery: decision.delivery,
+    channel: input.channel,
   });
+  if (transport.sendCustomerReply && transport.transport !== "messenger") {
+    // Non-messenger surfaces can't send the customer reply from this
+    // whatsapp-scoped route — surfaced for the operator, never dropped
+    // silently. (whatsapp resolves to "messenger" → this never fires there.)
+    console.warn(
+      `[webhook:wa] Handoff customer reply deliverable on '${transport.transport}' transport — no sender wired for channel '${transport.channel}' in this route`
+    );
+  }
   if (transport.writeOverride) {
     try {
       await db
@@ -570,13 +621,35 @@ export async function handleNormalizedEvent(
     }
 
     // 4c. Find or create conversation (necesario para todo, incluso vendedores)
-    const { id: conversationId, isNew } = await findOrCreateConversation(
+    const {
+      id: conversationId,
+      isNew,
+      channel: convChannel,
+      channelAccountId: convAccountId,
+    } = await findOrCreateConversation(
       "whatsapp",
       customerPhone,
       customerName ?? undefined,
       customerPhone,
       channelAccountId
     );
+
+    // S15 — resolve the conversation's channel_account binding once: every
+    // deterministic outbound below (auto-reply, redirect, fixed reply) goes
+    // out as that account. A bound-but-unresolvable account suppresses the
+    // send (fail closed) — never reply as a different sender.
+    let convAccount: ChannelAccount | undefined;
+    let convAccountBroken = false;
+    if (convAccountId != null) {
+      const { resolveChannelAccountById } = await import("./accounts");
+      convAccount = await resolveChannelAccountById(convAccountId);
+      if (!convAccount) {
+        convAccountBroken = true;
+        console.error(
+          `[webhook:wa] channel_account #${convAccountId} (conv ${conversationId}) is not resolvable — outbound sends suppressed, inbound still persisted`
+        );
+      }
+    }
 
     // 4d. SELLER DETECTION: los vendedores usan el buffer como los clientes,
     //     pero con un callback que ejecuta el sistema de Telegram en lugar de Karen.
@@ -620,16 +693,22 @@ export async function handleNormalizedEvent(
       isNew &&
       !webOrderRedirectEnabled
     ) {
-      const autoReplyResult = await messenger.send(
-        { to: customerPhone, type: "text", text: autoReplyMessage },
-        {
-          credentials: {
-            apiKey: config.ycloudApiKey || "",
-            senderAddress: config.phoneNumber || "",
-          },
-        },
-      );
-      if (!autoReplyResult.ok) throw new Error(autoReplyResult.error);
+      if (convAccountBroken) {
+        console.warn("[webhook:wa] Auto-reply suppressed — channel account unresolvable");
+      } else {
+        const autoReplyResult = await messenger.send(
+          { to: customerPhone, type: "text", text: autoReplyMessage },
+          convAccount
+            ? { channel: convChannel, account: convAccount }
+            : {
+                credentials: {
+                  apiKey: config.ycloudApiKey || "",
+                  senderAddress: config.phoneNumber || "",
+                },
+              },
+        );
+        if (!autoReplyResult.ok) throw new Error(autoReplyResult.error);
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -862,13 +941,19 @@ export async function handleNormalizedEvent(
     if (actor === "customer" && isNew && webOrderRedirectEnabled) {
       const redirectMessage = buildWebOrderRedirectMessage(config);
       try {
-        await insertMessage(conversationId, "assistant", redirectMessage, undefined, undefined, channelAccountId);
-        await sendWhatsAppBubbles({
-          to: customerPhone,
-          text: redirectMessage,
-          apiKey: config.ycloudApiKey || "",
-          from: config.phoneNumber || "",
-        });
+        if (convAccountBroken) {
+          console.warn("[webhook:wa] Web-order redirect suppressed — channel account unresolvable");
+        } else {
+          await insertMessage(conversationId, "assistant", redirectMessage, undefined, undefined, channelAccountId);
+          await sendWhatsAppBubbles({
+            to: customerPhone,
+            text: redirectMessage,
+            apiKey: config.ycloudApiKey || "",
+            from: config.phoneNumber || "",
+            channel: convChannel,
+            account: convAccount,
+          });
+        }
       } catch (redirectError) {
         console.error("[webhook:wa] Web-order redirect failed", redirectError);
       }
@@ -923,20 +1008,26 @@ export async function handleNormalizedEvent(
         }
         const fixedReply = resolveAgentRouting(sessionDecision.kind).fixedReply ?? "";
         try {
-          await insertMessage(conversationId, "assistant", fixedReply, undefined, undefined, channelAccountId);
-          await sendWhatsAppBubbles({
-            to: customerPhone,
-            text: fixedReply,
-            apiKey: config.ycloudApiKey || "",
-            from: config.phoneNumber || "",
-          });
+          if (convAccountBroken) {
+            console.warn("[webhook:wa] Fixed reply suppressed — channel account unresolvable");
+          } else {
+            await insertMessage(conversationId, "assistant", fixedReply, undefined, undefined, channelAccountId);
+            await sendWhatsAppBubbles({
+              to: customerPhone,
+              text: fixedReply,
+              apiKey: config.ycloudApiKey || "",
+              from: config.phoneNumber || "",
+              channel: convChannel,
+              account: convAccount,
+            });
+          }
         } catch (fixedError) {
           console.error("[webhook:wa] Fixed reply failed — transition already durable, no retry", fixedError);
         }
         return NextResponse.json({ ok: true }, { status: 200 });
       }
       if (sessionDecision.kind === "blocked" || sessionDecision.kind === "handoff") {
-        if (sessionDecision.kind === "handoff") await deliverWebhookHandoff({ conversationId, customerName, customerPhone, messageId, decision: sessionDecision });
+        if (sessionDecision.kind === "handoff") await deliverWebhookHandoff({ conversationId, customerName, customerPhone, messageId, channel: convChannel, decision: sessionDecision });
         console.log(`[webhook:wa] Session ${sessionDecision.kind} — persisting without GPT/tools or automatic replies`);
         return NextResponse.json({ ok: true }, { status: 200 });
       }
@@ -1001,6 +1092,31 @@ export async function handleNormalizedEvent(
     scheduleBufferProcessing("whatsapp", customerPhone, async (bufferedMessages) => {
       console.log(`[webhook:wa] Buffer callback fired — ${bufferedMessages.length} msgs for ${customerPhone}${isSeller ? " (SELLER)" : ""}`);
 
+      // S15 — honor the conversation's channel-account binding (echoes stamp
+      // it): replies go out as that account. A bound-but-unresolvable account
+      // suppresses the send — fail closed, never reply as a different sender.
+      // Re-read after the debounce so bindings stamped mid-window count.
+      const [convBinding] = await db
+        .select({
+          channel: conversations.channel,
+          channelAccountId: conversations.channelAccountId,
+        })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .limit(1);
+      const replyChannel = convBinding?.channel ?? "whatsapp";
+      let replyAccount: ChannelAccount | undefined;
+      if (convBinding?.channelAccountId != null) {
+        const { resolveChannelAccountById } = await import("./accounts");
+        replyAccount = await resolveChannelAccountById(convBinding.channelAccountId);
+        if (!replyAccount) {
+          console.error(
+            `[webhook:wa] channel_account #${convBinding.channelAccountId} for conv ${conversationId} is not resolvable — AI reply suppressed, no wrong-sender send`
+          );
+          return;
+        }
+      }
+
       // VENDEDOR: solo los últimos 4 mensajes para contexto mínimo
       // (evita que historial viejo contamine la conversación actual)
       if (isSeller) {
@@ -1029,7 +1145,7 @@ export async function handleNormalizedEvent(
         });
         const reply = result.text || "Disculpá, no pude procesar eso.";
         await insertMessage(conversationId, "assistant", reply, undefined, undefined, channelAccountId);
-        const r = await sendWhatsAppBubbles({ to: customerPhone, text: reply, apiKey, from: botNumber });
+        const r = await sendWhatsAppBubbles({ to: customerPhone, text: reply, apiKey, from: botNumber, channel: replyChannel, account: replyAccount });
         if (r?.id) {
           try {
             const { chatMessages } = await import("@/db/schema");
@@ -1132,6 +1248,8 @@ export async function handleNormalizedEvent(
         text: responseText,
         apiKey,
         from: botNumber,
+        channel: replyChannel,
+        account: replyAccount,
       });
 
       // 1c. Guardar wamid en el texto de la DB
@@ -1156,12 +1274,17 @@ export async function handleNormalizedEvent(
           await new Promise((r) => setTimeout(r, 2000));
 
           if (media.type === "image" || media.type === "sticker") {
-            const imgResult = await messenger.send({
-              to: customerPhone,
-              type: "image",
-              mediaUrl: media.url,
-              text: media.caption,
-            });
+            const imgResult = await messenger.send(
+              {
+                to: customerPhone,
+                type: "image",
+                mediaUrl: media.url,
+                text: media.caption,
+              },
+              replyAccount
+                ? { channel: replyChannel, account: replyAccount }
+                : {}
+            );
             if (imgResult.ok) {
               // Guardar en DB con contenido descriptivo para contexto del AI
               await insertMessage(conversationId, "assistant", media.dbContent, undefined, undefined, channelAccountId);
