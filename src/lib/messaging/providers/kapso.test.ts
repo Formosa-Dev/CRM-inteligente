@@ -566,6 +566,27 @@ describe("kapso sendMessage — Graph-proxy wire shape", () => {
     mock.restoreAll();
   });
 
+  test("2xx without a message id is NOT retryable (upstream may have accepted)", async () => {
+    const send = () =>
+      provider.sendMessage(ACCOUNT, { to: "15550001111", type: "text", text: "hola" });
+
+    // 200 with an empty messages[] — retrying could duplicate the send.
+    mock.method(globalThis, "fetch", async () =>
+      new Response(JSON.stringify({ messaging_product: "whatsapp", messages: [] }), { status: 200 }));
+    let res = await send();
+    assert.equal(res.ok, false);
+    if (!res.ok) assert.equal(res.retryable, false);
+    mock.restoreAll();
+
+    // 200 with a message entry that carries no id — same deal.
+    mock.method(globalThis, "fetch", async () =>
+      new Response(JSON.stringify({ messages: [{}] }), { status: 200 }));
+    res = await send();
+    assert.equal(res.ok, false);
+    if (!res.ok) assert.equal(res.retryable, false);
+    mock.restoreAll();
+  });
+
   test("replyToMessageId maps to Graph context.message_id", async () => {
     let body: Record<string, unknown> | undefined;
     mock.method(globalThis, "fetch", async (_url: string, init?: RequestInit) => {
