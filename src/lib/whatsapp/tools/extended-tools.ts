@@ -3,15 +3,13 @@ import { z } from "zod";
 import { db } from "@/db";
 import { products, orders as ordersTable } from "@/db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { resolveAgentConfig } from "@/lib/agent-config-scope";
 
 // --- HELPERS ---
 // Lee las zonas de delivery desde la DB (configurables desde UI)
 async function getDeliveryZonesFromDB(): Promise<{ zona: string; disponible: boolean; tiempo: string; costo: number }[]> {
   try {
-    const config = await db.query.agentConfig.findFirst({
-      where: (c) => eq(c.id, 1),
-      columns: { whatsappZonasDelivery: true },
-    });
+    const config = await resolveAgentConfig();
     const zonas = config?.whatsappZonasDelivery as { zona: string; disponible: boolean; tiempo: string; costo: number }[] | null;
     if (zonas && zonas.length > 0) return zonas;
   } catch {

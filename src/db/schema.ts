@@ -13,6 +13,7 @@ import {
   index,
   unique,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 
@@ -186,9 +187,25 @@ export const agentConfig = pgTable("agent_config", {
   telegramNotifyChatId: varchar("telegram_notify_chat_id", { length: 50 }),
   cronSecret: varchar("cron_secret", { length: 200 }),
   escalationEmail: varchar("escalation_email", { length: 200 }),
-  // ───────────────────────────────────────────────────────────────────────────
+  // ─── Scope (S13) ───────────────────────────────────────────────────────────
+  // Both null = the global default row — identical semantics to the pre-S13
+  // single row. channel set + channelAccountId null = channel-scoped row.
+  // channelAccountId set = per-account row (channel kept informative).
+  channel: channelEnum("channel"),
+  // AnyPgColumn breaks the agentConfig ↔ channelAccounts circular FK.
+  channelAccountId: integer("channel_account_id").references(
+    (): AnyPgColumn => channelAccounts.id,
+    { onDelete: "set null" }
+  ),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  channelAccountUq: uniqueIndex("agent_config_channel_account_uq")
+    .on(table.channelAccountId)
+    .where(sql`channel_account_id is not null`),
+  channelScopeUq: uniqueIndex("agent_config_channel_scope_uq")
+    .on(table.channel)
+    .where(sql`channel is not null and channel_account_id is null`),
+}));
 
 // ─── Channel Accounts (one row per connected provider account/number) ────────
 // Multi-provider support: each row is a concrete sender (WhatsApp number via

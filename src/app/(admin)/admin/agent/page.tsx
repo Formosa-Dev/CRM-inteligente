@@ -1,7 +1,10 @@
-import { db } from "@/db";
-import { agentConfig } from "@/db/schema";
-import { eq } from "drizzle-orm";
 import AgentConfigForm, { type AgentConfigFormData, type BusinessHour } from "./agent-config-form";
+import {
+  findAgentConfigForScope,
+  listAgentConfigScopes,
+  parseScopeKey,
+  scopeKeyOf,
+} from "@/lib/agent-config-scope";
 
 export const metadata = {
   title: "Agente — Admin",
@@ -70,17 +73,8 @@ const DEFAULT_CONFIG: AgentConfigFormData = {
   escalationEmail: "",
 };
 
-export default async function AgentPage() {
-  // Use raw select to avoid Drizzle type issues with new columns
-  const rows = await db
-    .select()
-    .from(agentConfig)
-    .where(eq(agentConfig.id, 1))
-    .limit(1);
-
-  const row = rows[0] as Record<string, unknown> | undefined;
-
-  const config: AgentConfigFormData = row
+function rowToFormData(row: Record<string, unknown> | undefined): AgentConfigFormData {
+  return row
     ? {
         systemPrompt: (row.systemPrompt as string) ?? "",
         phoneNumber: (row.phoneNumber as string) ?? "",
@@ -146,6 +140,27 @@ export default async function AgentPage() {
         escalationEmail: (row.escalationEmail as string) ?? "",
       }
     : DEFAULT_CONFIG;
+}
+
+interface AgentPageProps {
+  searchParams: Promise<{ scope?: string }>;
+}
+
+export default async function AgentPage({ searchParams }: AgentPageProps) {
+  const params = await searchParams;
+  // Unknown/missing scope keys resolve to the global row — pre-S13 behavior.
+  const scope = parseScopeKey(params.scope) ?? {};
+  const scopeKey = scopeKeyOf(scope);
+
+  // Exact-scope load only: editing "channel:X" must show that row or blank
+  // defaults, never the resolved (global-fallback) row — otherwise saving
+  // would write global values into the scoped row.
+  const [row, scopeOptions] = await Promise.all([
+    findAgentConfigForScope(scope),
+    listAgentConfigScopes(),
+  ]);
+
+  const config = rowToFormData(row as Record<string, unknown> | undefined);
 
   return (
     <div className="flex flex-col gap-6">
@@ -157,7 +172,15 @@ export default async function AgentPage() {
           Configurá el comportamiento del agente de IA — credenciales, prompt, IDs permitidos y más
         </p>
       </div>
-      <AgentConfigForm config={config} />
+      {/* key remounts the form on scope switch AND after a copy (updatedAt
+          bumps), so uncontrolled inputs always reflect the loaded row. */}
+      <AgentConfigForm
+        key={`${scopeKey}:${row?.updatedAt ? new Date(row.updatedAt).getTime() : "empty"}`}
+        config={config}
+        scopeKey={scopeKey}
+        scopeOptions={scopeOptions}
+        scopeExists={Boolean(row)}
+      />
     </div>
   );
 }

@@ -13,6 +13,11 @@ import { db } from "@/db";
 import { agentConfig } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { decryptIfEncrypted } from "@/lib/encryption";
+import {
+  currentAgentConfigScope,
+  resolveAgentConfigId,
+  scopeKeyOf,
+} from "@/lib/agent-config-scope";
 import { AI_BASE_URL, AI_MODEL, AI_MODEL_FAST, AI_MODEL_VISION } from "./models";
 
 export interface AIConfig {
@@ -31,18 +36,22 @@ const ENV_CONFIG: AIConfig = {
   modelVision: AI_MODEL_VISION,
 };
 
-// Short-lived cache — saves a DB hit per inbound message while still picking
-// up admin edits within ~30s.
-let cached: { at: number; value: AIConfig } | null = null;
+// Short-lived per-scope cache — saves a DB hit per inbound message while
+// still picking up admin edits within ~30s. Keyed by agent_config scope so a
+// channel/account-scoped run doesn't bleed into another scope's provider.
+const cached = new Map<string, { at: number; value: AIConfig }>();
 const CACHE_TTL_MS = 30_000;
 
 /** Applies an admin provider change to the next inbound agent request. */
 export function invalidateAIConfigCache(): void {
-  cached = null;
+  cached.clear();
 }
 
 export async function getAIConfig(): Promise<AIConfig> {
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
+  const scope = currentAgentConfigScope();
+  const cacheKey = scopeKeyOf(scope);
+  const hit = cached.get(cacheKey);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
   try {
     const [cfg] = await db
       .select({
@@ -53,7 +62,7 @@ export async function getAIConfig(): Promise<AIConfig> {
         aiModelVision: agentConfig.aiModelVision,
       })
       .from(agentConfig)
-      .where(eq(agentConfig.id, 1))
+      .where(eq(agentConfig.id, await resolveAgentConfigId(scope)))
       .limit(1);
     const value: AIConfig = {
       // Stored AES-256-GCM encrypted; tolerant of legacy plaintext rows.
@@ -63,7 +72,7 @@ export async function getAIConfig(): Promise<AIConfig> {
       modelFast: cfg?.aiModelFast?.trim() || ENV_CONFIG.modelFast,
       modelVision: cfg?.aiModelVision?.trim() || ENV_CONFIG.modelVision,
     };
-    cached = { at: Date.now(), value };
+    cached.set(cacheKey, { at: Date.now(), value });
     return value;
   } catch {
     // Columns may not exist on older deployments — env is the fallback.

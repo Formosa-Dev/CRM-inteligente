@@ -3,10 +3,11 @@ import { getFastModel } from "@/lib/ai/config";
 import { getBusinessInfo } from "@/lib/business";
 import type { ModelMessage } from "ai";
 import { db } from "@/db";
-import { agentConfig, products } from "@/db/schema";
+import { products } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { buildSystemPrompt } from "./system-prompt";
 import { makeCaptureOrder, checkHours, getMenu, checkDelivery } from "./tools";
+import { resolveAgentConfig } from "@/lib/agent-config-scope";
 
 const FALLBACK_MESSAGE =
   "Disculpá, hubo un problema de mi lado. Escribinos directamente y te atendemos a la brevedad 🙏";
@@ -17,10 +18,12 @@ export interface ProcessMessageOptions {
   conversationHistory: ModelMessage[];
 }
 
+// Legacy agent path: its signature (phone + text) carries no channel/account
+// context, so it resolves the global scope — the both-null row, identical to
+// the pre-S13 `limit(1)` first row.
 async function loadConfig() {
   try {
-    const rows = await db.select().from(agentConfig).limit(1);
-    return rows[0] ?? null;
+    return (await resolveAgentConfig({})) ?? null;
   } catch {
     return null;
   }

@@ -21,6 +21,10 @@ import {
   setKeepActiveConfirmation,
   type OrderLifecycleRepository,
 } from "@/lib/whatsapp/order-lifecycle";
+import {
+  resolveAgentConfig,
+  resolveAgentConfigId,
+} from "@/lib/agent-config-scope";
 
 export interface OrderCreationContext {
   /** Current-day buffered user text (server truth, not the model's view). */
@@ -42,7 +46,7 @@ async function notifyDeliveryOrder(
   orderId: number
 ): Promise<void> {
   try {
-    const [cfg] = await db.select().from(agentConfig).where(eq(agentConfig.id, 1)).limit(1);
+    const cfg = await resolveAgentConfig();
     const deliveryPhone = cfg?.deliveryPhoneNumber?.trim();
     if (!deliveryPhone) return;
 
@@ -219,7 +223,7 @@ export function createCreateOrderTool(
         const [cfg] = await db
           .select({ sinStock: agentConfig.hamburguesasSinStock })
           .from(agentConfig)
-          .where(eq(agentConfig.id, 1))
+          .where(eq(agentConfig.id, await resolveAgentConfigId()))
           .limit(1);
         if (cfg?.sinStock) {
           return "Hoy no estamos vendiendo hamburguesas. Solo tenemos pan mayorista disponible. Disculpá las molestias.";

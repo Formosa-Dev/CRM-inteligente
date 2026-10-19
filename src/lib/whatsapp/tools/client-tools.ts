@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { products, orders, leads, agentConfig } from "@/db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { normalizePhone } from "@/lib/phone-utils";
+import { resolveAgentConfigId } from "@/lib/agent-config-scope";
 
 // checkProductAvailability - Verificar stock
 export const checkProductAvailabilityTool = tool({
@@ -50,7 +51,7 @@ export const suggestProductsTool = tool({
         const [cfg] = await db
           .select({ sinStock: agentConfig.hamburguesasSinStock })
           .from(agentConfig)
-          .where(eq(agentConfig.id, 1))
+          .where(eq(agentConfig.id, await resolveAgentConfigId()))
           .limit(1);
         if (cfg?.sinStock) {
           if (linea === "b2c") {

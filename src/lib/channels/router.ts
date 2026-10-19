@@ -427,23 +427,36 @@ export async function sendOutboundMessage(
     }
   } else if (channel === "whatsapp" && conv.channelAccountId == null) {
     const { messenger } = await import("@/lib/messaging");
-    const { agentConfig } = await import("@/db/schema");
-    const config = await db.select().from(agentConfig).limit(1);
-    const cfg = config[0];
+    const { resolveAgentConfig } = await import("@/lib/agent-config-scope");
+    // S13: the conversation's own channel_account_id/channel picks the scoped
+    // config row (creds + sender). Legacy rows (both null) → global, unchanged.
+    const cfg = await resolveAgentConfig({
+      channel: conv.channel,
+      channelAccountId: conv.channelAccountId,
+    });
     const { decryptIfEncrypted } = await import("@/lib/encryption");
     const apiKey = decryptIfEncrypted(cfg?.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
     const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
     const to = conv.customerPhone ?? conv.externalUserId ?? "";
 
     if (apiKey && from) {
+      const credentials = { apiKey, senderAddress: from };
       if (mediaUrl && mediaType === "image") {
-        await messenger.send({ to, type: "image", mediaUrl, text: content || undefined });
+        const res = await messenger.send(
+          { to, type: "image", mediaUrl, text: content || undefined },
+          { credentials }
+        );
+        if (!res.ok) throw new Error(res.error);
       } else if (mediaUrl && mediaType === "document") {
-        await messenger.send({ to, type: "document", mediaUrl, text: content || undefined });
+        const res = await messenger.send(
+          { to, type: "document", mediaUrl, text: content || undefined },
+          { credentials }
+        );
+        if (!res.ok) throw new Error(res.error);
       } else {
         const res = await messenger.send(
           { to, type: "text", text: content || " " },
-          { credentials: { apiKey, senderAddress: from } }
+          { credentials }
         );
         if (!res.ok) throw new Error(res.error);
       }

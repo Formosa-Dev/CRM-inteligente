@@ -8,6 +8,14 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { encrypt } from "@/lib/encryption";
 import { invalidateAIConfigCache } from "@/lib/ai/config";
+import {
+  findAgentConfigForScope,
+  invalidateAgentConfigScopeCache,
+  parseScopeKey,
+  resolveAgentConfig,
+  scopeColumnsForInsert,
+  scopeKeyOf,
+} from "@/lib/agent-config-scope";
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
@@ -230,21 +238,15 @@ export async function saveAgentConfig(
     return { success: false, message: `Error en "${field}": ${msg}` };
   }
 
+  // S13: the form posts the scope being edited; an unknown/missing key saves
+  // to the global row (pre-S13 behavior).
+  const scope =
+    parseScopeKey(String(formData.get("agentConfigScope") ?? "global")) ?? {};
+
   try {
-    const existing = await db
-      .select({
-        id: agentConfig.id,
-        aiApiKey: agentConfig.aiApiKey,
-        ycloudApiKey: agentConfig.ycloudApiKey,
-        ycloudWebhookSecret: agentConfig.ycloudWebhookSecret,
-        cloudinaryApiSecret: agentConfig.cloudinaryApiSecret,
-        metaAppSecret: agentConfig.metaAppSecret,
-        metaWebhookVerifyToken: agentConfig.metaWebhookVerifyToken,
-        cronSecret: agentConfig.cronSecret,
-      })
-      .from(agentConfig)
-      .where(eq(agentConfig.id, 1))
-      .limit(1);
+    // Exact-scope row only — never a broader scope's row, so an empty secret
+    // field keeps THIS scope's stored value, not the global one.
+    const existing = await findAgentConfigForScope(scope);
 
     const values = {
       systemPrompt: parsed.data.systemPrompt,
@@ -258,7 +260,7 @@ export async function saveAgentConfig(
           ? null
           : parsed.data.ycloudApiKey
             ? encrypt(parsed.data.ycloudApiKey)
-            : existing[0]?.ycloudApiKey || null,
+            : existing?.ycloudApiKey || null,
       whatsappBotNumber: parsed.data.whatsappBotNumber ?? null,
       allowedPhoneIds: parsed.data.allowedPhoneIds,
       sellerPhoneIds: parsed.data.sellerPhoneIds,
@@ -297,7 +299,7 @@ export async function saveAgentConfig(
           ? null
           : parsed.data.aiApiKey
             ? encrypt(parsed.data.aiApiKey)
-            : existing[0]?.aiApiKey || null,
+            : existing?.aiApiKey || null,
       aiBaseUrl: parsed.data.aiBaseUrl ?? null,
       aiModel: parsed.data.aiModel ?? null,
       aiModelFast: parsed.data.aiModelFast ?? null,
@@ -308,7 +310,7 @@ export async function saveAgentConfig(
           ? null
           : parsed.data.ycloudWebhookSecret
             ? encrypt(parsed.data.ycloudWebhookSecret)
-            : existing[0]?.ycloudWebhookSecret || null,
+            : existing?.ycloudWebhookSecret || null,
       cloudinaryCloudName: parsed.data.cloudinaryCloudName ?? null,
       cloudinaryApiKey: parsed.data.cloudinaryApiKey ?? null,
       cloudinaryApiSecret:
@@ -316,44 +318,50 @@ export async function saveAgentConfig(
           ? null
           : parsed.data.cloudinaryApiSecret
             ? encrypt(parsed.data.cloudinaryApiSecret)
-            : existing[0]?.cloudinaryApiSecret || null,
+            : existing?.cloudinaryApiSecret || null,
       metaAppId: parsed.data.metaAppId ?? null,
       metaAppSecret:
         parsed.data.metaAppSecret === "CLEAR"
           ? null
           : parsed.data.metaAppSecret
             ? encrypt(parsed.data.metaAppSecret)
-            : existing[0]?.metaAppSecret || null,
+            : existing?.metaAppSecret || null,
       metaWebhookVerifyToken:
         parsed.data.metaWebhookVerifyToken === "CLEAR"
           ? null
           : parsed.data.metaWebhookVerifyToken
             ? encrypt(parsed.data.metaWebhookVerifyToken)
-            : existing[0]?.metaWebhookVerifyToken || null,
+            : existing?.metaWebhookVerifyToken || null,
       telegramNotifyChatId: parsed.data.telegramNotifyChatId ?? null,
       cronSecret:
         parsed.data.cronSecret === "CLEAR"
           ? null
           : parsed.data.cronSecret
             ? encrypt(parsed.data.cronSecret)
-            : existing[0]?.cronSecret || null,
+            : existing?.cronSecret || null,
       escalationEmail: parsed.data.escalationEmail ?? null,
       updatedAt: new Date(),
     };
 
-    if (existing.length > 0) {
+    if (existing) {
       await db
         .update(agentConfig)
         .set(values)
-        .where(eq(agentConfig.id, 1));
+        .where(eq(agentConfig.id, existing.id));
     } else {
+      // Create-on-save: selecting a scope never inserts; the first save does.
+      // The partial uniques guard races — a concurrent insert surfaces as an
+      // error to the form rather than a silent overwrite.
+      const scopeCols = await scopeColumnsForInsert(scope);
       await db.insert(agentConfig).values({
-        id: 1,
+        ...(scopeKeyOf(scope) === "global" ? { id: 1 } : {}),
         ...values,
+        ...scopeCols,
       });
     }
 
     invalidateAIConfigCache();
+    invalidateAgentConfigScopeCache();
     revalidatePath("/admin/agent");
     return { success: true, message: "Configuración guardada" };
   } catch (e) {
@@ -362,7 +370,69 @@ export async function saveAgentConfig(
   }
 }
 
-export async function testAgentConnection(): Promise<{
+/**
+ * Clones one scope's configuration into the current scope (create-on-save for
+ * the target). Secret fields are copied VERBATIM: they are AES-256-GCM
+ * ciphertext owned by this install, so the clone decrypts identically under
+ * the same ENCRYPTION_KEY. Documented decision (S13): secrets are copyable
+ * within the same install.
+ */
+export async function copyAgentConfig(
+  fromScopeKey: string,
+  toScopeKey: string
+): Promise<AgentConfigState> {
+  if (!(await requireAdmin())) {
+    return { success: false, message: "No autorizado" };
+  }
+  const from = parseScopeKey(fromScopeKey);
+  const to = parseScopeKey(toScopeKey);
+  if (!from || !to) {
+    return { success: false, message: "Ámbito inválido" };
+  }
+  if (scopeKeyOf(from) === scopeKeyOf(to)) {
+    return { success: false, message: "El origen y el destino son el mismo ámbito" };
+  }
+
+  try {
+    const source = await findAgentConfigForScope(from);
+    if (!source) {
+      return {
+        success: false,
+        message: "El ámbito origen no tiene configuración propia para copiar",
+      };
+    }
+
+    const { id: _id, channel: _ch, channelAccountId: _acc, updatedAt: _u, ...data } = source;
+
+    const target = await findAgentConfigForScope(to);
+    if (target) {
+      await db
+        .update(agentConfig)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(agentConfig.id, target.id));
+    } else {
+      const scopeCols = await scopeColumnsForInsert(to);
+      await db.insert(agentConfig).values({
+        ...(scopeKeyOf(to) === "global" ? { id: 1 } : {}),
+        ...data,
+        ...scopeCols,
+      });
+    }
+
+    invalidateAIConfigCache();
+    invalidateAgentConfigScopeCache();
+    revalidatePath("/admin/agent");
+    return { success: true, message: "Configuración copiada al ámbito actual" };
+  } catch (e) {
+    console.error("[agent-config] Error copying scope:", e);
+    return {
+      success: false,
+      message: `Error al copiar: ${e instanceof Error ? e.message : "desconocido"}`,
+    };
+  }
+}
+
+export async function testAgentConnection(scopeKey?: string): Promise<{
   success: boolean;
   message: string;
 }> {
@@ -371,14 +441,9 @@ export async function testAgentConnection(): Promise<{
   }
 
   try {
-    // Select all columns - use raw query to avoid Drizzle type issues with new columns
-    const rows = await db
-      .select()
-      .from(agentConfig)
-      .where(eq(agentConfig.id, 1))
-      .limit(1);
-
-    const cfg = rows[0];
+    // Effective row for the scope being viewed (account → channel → global).
+    const scope = parseScopeKey(scopeKey ?? "global") ?? {};
+    const cfg = await resolveAgentConfig(scope);
     if (!cfg) {
       return {
         success: false,

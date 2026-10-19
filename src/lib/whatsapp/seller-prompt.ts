@@ -8,6 +8,7 @@ import { manageOrderTools } from "@/lib/telegram/toolsOrder";
 import { managementTools } from "@/lib/telegram/toolsManagement";
 import { analyticsTools } from "@/lib/telegram/toolsAnalytics";
 import { whatsAppTools } from "@/lib/telegram/toolsWhatsApp";
+import { resolveAgentConfig } from "@/lib/agent-config-scope";
 
 // ─── Tools para VENDEDORES (subset de las de Telegram, sin tools admin) ───
 export const internalSellerTools = {
@@ -105,7 +106,7 @@ async function getPromos(): Promise<string> {
 // ─── Capa 3: Estado del negocio ─────────────────────────────────────────
 async function getBusinessStatus(): Promise<string> {
   try {
-    const c = await db.query.agentConfig.findFirst({ where: (c) => eq(c.id, 1) });
+    const c = await resolveAgentConfig();
     if (!c) return "";
     const lines: string[] = [];
     lines.push(`COCINA: ${c.isCooking ? "Abierta" : "Cerrada"}`);

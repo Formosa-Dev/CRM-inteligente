@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { products, agentConfig } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
+import { resolveAgentConfigId } from "@/lib/agent-config-scope";
 
 export const getMenuTool = tool({
   description: "Obtiene el menú de productos disponibles. Categorías: hamburguesa, pizzas, empanadas, acompanamiento, pan_mayorista, tragos_vip (Tragos V.I.P), bebidas, alcohol",
@@ -17,7 +18,7 @@ export const getMenuTool = tool({
         const [cfg] = await db
           .select({ sinStock: agentConfig.hamburguesasSinStock })
           .from(agentConfig)
-          .where(eq(agentConfig.id, 1))
+          .where(eq(agentConfig.id, await resolveAgentConfigId()))
           .limit(1);
         if (cfg?.sinStock && category === "hamburguesa") {
           return "Hoy no tenemos hamburguesas disponibles.";
@@ -35,7 +36,7 @@ export const getMenuTool = tool({
       const [cfg] = await db
         .select({ sinStock: agentConfig.hamburguesasSinStock })
         .from(agentConfig)
-        .where(eq(agentConfig.id, 1))
+        .where(eq(agentConfig.id, await resolveAgentConfigId()))
         .limit(1);
       if (cfg?.sinStock && !category) {
         conditions.push(eq(products.category, "pan_mayorista"));

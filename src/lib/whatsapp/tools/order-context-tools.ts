@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { addOrderContextItem, getOrderContextSummary, formatOrderSummary } from "@/lib/order-context";
 import { getCustomerAddresses, formatAddressesForPrompt } from "@/lib/addresses";
 import { resolveItems, validateResolvedOrderItems } from "@/lib/order-utils";
+import { resolveAgentConfigId } from "@/lib/agent-config-scope";
 
 export function createAddOrderItemTool(conversationId: number, phone: string) {
   return tool({
@@ -22,7 +23,7 @@ export function createAddOrderItemTool(conversationId: number, phone: string) {
         const [cfg] = await db
           .select({ sinStock: agentConfig.hamburguesasSinStock })
           .from(agentConfig)
-          .where(eq(agentConfig.id, 1))
+          .where(eq(agentConfig.id, await resolveAgentConfigId()))
           .limit(1);
         if (cfg?.sinStock) {
           const burgerKeywords = ["hamburguesa", "bookbinder", "genesis", "deli", "crispy", "classic", "especiale", "italiano", "torro", "smash", "cheddar", "bacon", "bbq"];

@@ -42,6 +42,10 @@ import { detectInjection } from "./tools/prompt-security";
 import { buildSystemPrompt, DEFAULT_SYSTEM_PROMPT, type CustomerContext } from "./prompt-builder";
 import { assertSessionContext, type SessionContext } from "./session-policy";
 import { getAIConfig, getMainChatModel, isOpenAIBaseUrl } from "@/lib/ai/config";
+import {
+  resolveScopeForConversation,
+  runWithAgentConfigScope,
+} from "@/lib/agent-config-scope";
 import { getStatusSemantic } from "./status-utils";
 import { classifyTurnIntent, evaluateOrderLifecycle, filterSameDayActiveCartRows } from "./temporal-context";
 
@@ -104,7 +108,17 @@ export interface PendingMedia {
   dbContent: string;
 }
 
-export async function runWhatsAppAgent({
+// S13: every agent_config read inside a run (prompt layers, tool executes,
+// AI creds, delivery notify) resolves the conversation's account/channel row.
+// Outside this wrapper nothing changes — ambient scope is empty → global row.
+export async function runWhatsAppAgent(
+  params: RunAgentParams
+): Promise<{ text: string; pendingMedia: PendingMedia[] }> {
+  const scope = await resolveScopeForConversation(params.conversationId);
+  return runWithAgentConfigScope(scope, () => runWhatsAppAgentImpl(params));
+}
+
+async function runWhatsAppAgentImpl({
   conversationId,
   customerPhone,
   messages,

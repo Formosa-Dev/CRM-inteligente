@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { promotions } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
+import { resolveAgentConfigId } from "@/lib/agent-config-scope";
 import fs from "fs";
 import path from "path";
 
@@ -99,7 +100,7 @@ export function createSendMenuImageTool(_conversationId: number, _customerPhone:
           const [cfg] = await db
             .select({ sinStock: agentConfig.hamburguesasSinStock })
             .from(agentConfig)
-            .where(eq(agentConfig.id, 1))
+            .where(eq(agentConfig.id, await resolveAgentConfigId()))
             .limit(1);
           if (cfg?.sinStock) {
             if (tipo === "hamburguesas") {
@@ -127,7 +128,7 @@ export function createSendMenuImageTool(_conversationId: number, _customerPhone:
             pan: agentConfig.menuImageUrlPan,
           })
           .from(agentConfig)
-          .where(eq(agentConfig.id, 1))
+          .where(eq(agentConfig.id, await resolveAgentConfigId()))
           .limit(1);
 
         const config = rows[0];

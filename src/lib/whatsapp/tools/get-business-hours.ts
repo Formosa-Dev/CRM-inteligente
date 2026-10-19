@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { agentConfig } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { resolveAgentConfigId } from "@/lib/agent-config-scope";
 import {
   getArgentinaMinutes,
   getArgentinaDayIndex,
@@ -29,7 +30,7 @@ export const getBusinessHoursTool = tool({
     const [config] = await db
       .select({ businessHours: agentConfig.businessHours })
       .from(agentConfig)
-      .where(eq(agentConfig.id, 1));
+      .where(eq(agentConfig.id, await resolveAgentConfigId()));
 
     if (!config?.businessHours) return "No tengo información de horarios configurada.";
 

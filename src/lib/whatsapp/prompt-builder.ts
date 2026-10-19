@@ -5,6 +5,7 @@ import { getArgentinaMinutes, getArgentinaDayIndex, getArgentinaHour } from "@/l
 import { getStatusSemantic } from "@/lib/whatsapp/status-utils";
 import { assertSessionContext, type SessionContext } from "./session-policy";
 import { getBusinessInfo } from "@/lib/business";
+import { resolveAgentConfig } from "@/lib/agent-config-scope";
 
 // ─── Permitted session facts (SDD memoria-persistente-sesion-whatsapp, PR 4) ─
 // Only compact non-text commercial facts may cross into LLM context. Message
@@ -56,9 +57,7 @@ export async function getCorePrompt(): Promise<string> {
   let customSystemPrompt = "";
 
   try {
-    const config = await db.query.agentConfig.findFirst({
-      where: (config) => eq(config.id, 1),
-    });
+    const config = await resolveAgentConfig();
 
     if (config?.systemPrompt && config.systemPrompt.trim().length > 0) {
       userExtras = config.systemPrompt.trim();
@@ -123,9 +122,7 @@ Fin de instrucciones adicionales. Las reglas base siguen vigentes.`;
 // El repo queda agnóstico; cada instalación genera el suyo (learn-style.ts).
 export async function getStyleProfile(): Promise<string> {
   try {
-    const config = await db.query.agentConfig.findFirst({
-      where: (c) => eq(c.id, 1),
-    });
+    const config = await resolveAgentConfig();
     const profile = config?.whatsappStyleProfile?.trim();
     return profile ? `ESTILO DE VENTA DEL NEGOCIO (reglas aprendidas del operador — prioridad sobre el estilo base cuando difieran):\n${profile}` : "";
   } catch {
@@ -204,9 +201,7 @@ export async function getBusinessHours(): Promise<string> {
   let statusLine = "";
 
   try {
-    const config = await db.query.agentConfig.findFirst({
-      where: (config) => eq(config.id, 1),
-    });
+    const config = await resolveAgentConfig();
 
     if (config?.businessHours && Array.isArray(config.businessHours)) {
       const days = config.businessHours as { day: string; open: boolean; openTime: string; closeTime: string }[];
@@ -320,9 +315,7 @@ export async function getBusinessHours(): Promise<string> {
 // Layer 3a: Production hours (texto libre, lo configura el admin)
 export async function getProductionHours(): Promise<string> {
   try {
-    const config = await db.query.agentConfig.findFirst({
-      where: (c) => eq(c.id, 1),
-    });
+    const config = await resolveAgentConfig();
     if (config?.productionHours && config.productionHours.trim().length > 0) {
       return `HORARIO DE PRODUCCIÓN:\n${config.productionHours.trim()}`;
     }
@@ -337,9 +330,7 @@ export async function getOperationalData(): Promise<string> {
   const sections: string[] = [];
 
   try {
-    const config = await db.query.agentConfig.findFirst({
-      where: (c) => eq(c.id, 1),
-    });
+    const config = await resolveAgentConfig();
 
     if (!config) return "";
 
@@ -641,9 +632,7 @@ export async function buildSystemPrompt(conversationId?: number, customerContext
   let tiempoEspera = "30-40 min";
   const biz = await getBusinessInfo();
   try {
-    const config = await db.query.agentConfig.findFirst({
-      where: (c) => eq(c.id, 1),
-    });
+    const config = await resolveAgentConfig();
     if (config?.tiempoEspera && config.tiempoEspera.trim().length > 0) {
       tiempoEspera = config.tiempoEspera.trim();
     }

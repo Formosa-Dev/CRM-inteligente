@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { agentConfig, products } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
+import { resolveAgentConfigId } from "@/lib/agent-config-scope";
 
 // ─── checkKitchenStatus ─────────────────────────────────────────────────────
 // Consulta si la cocina está operativa (is_cooking)
@@ -15,7 +16,7 @@ export const checkKitchenStatusTool = tool({
       const rows = await db
         .select({ isCooking: agentConfig.isCooking })
         .from(agentConfig)
-        .where(eq(agentConfig.id, 1))
+        .where(eq(agentConfig.id, await resolveAgentConfigId()))
         .limit(1);
 
       const cooking = rows[0]?.isCooking ?? true;
@@ -37,7 +38,7 @@ export const checkHamburguesasStockTool = tool({
       const rows = await db
         .select({ sinStock: agentConfig.hamburguesasSinStock })
         .from(agentConfig)
-        .where(eq(agentConfig.id, 1))
+        .where(eq(agentConfig.id, await resolveAgentConfigId()))
         .limit(1);
       return { hamburguesasSinStock: rows[0]?.sinStock ?? false };
     } catch {
@@ -57,7 +58,7 @@ export const checkPanStockTool = tool({
       const rows = await db
         .select({ stock: agentConfig.stockPanDocenas })
         .from(agentConfig)
-        .where(eq(agentConfig.id, 1))
+        .where(eq(agentConfig.id, await resolveAgentConfigId()))
         .limit(1);
 
       const stock = rows[0]?.stock ?? 0;
@@ -184,7 +185,7 @@ export const getPaymentAliasTool = tool({
           aliasB2b: agentConfig.aliasB2b,
         })
         .from(agentConfig)
-        .where(eq(agentConfig.id, 1))
+        .where(eq(agentConfig.id, await resolveAgentConfigId()))
         .limit(1);
 
       const config = rows[0];

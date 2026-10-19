@@ -1,20 +1,24 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 import { fadeUpSmall, staggerContainer } from "@/lib/animation-variants";
 import {
   saveAgentConfig,
   testAgentConnection,
+  copyAgentConfig,
   type AgentConfigState,
   type PhoneIdEntry,
 } from "./actions";
+import type { AgentConfigScopeOption } from "@/lib/agent-config-scope";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Select, SelectOption } from "@/components/ui/select";
 import {
   Card,
   CardContent,
@@ -34,6 +38,8 @@ import {
   CheckCircle2,
   AlertCircle,
   MessageCircle,
+  Layers,
+  Copy,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -126,13 +132,23 @@ const DEFAULT_DAYS: BusinessHour[] = [
 
 export default function AgentConfigForm({
   config,
+  scopeKey,
+  scopeOptions,
+  scopeExists,
 }: {
   config: AgentConfigFormData;
+  scopeKey: string;
+  scopeOptions: AgentConfigScopeOption[];
+  scopeExists: boolean;
 }) {
+  const router = useRouter();
   const [state, formAction, isPending] = useActionState(
     saveAgentConfig,
     initialState
   );
+
+  const [copyFrom, setCopyFrom] = useState("");
+  const [copying, setCopying] = useState(false);
 
   const [testState, setTestState] = useState<{
     loading: boolean;
@@ -237,7 +253,7 @@ export default function AgentConfigForm({
   const handleTestConfig = async () => {
     setTestState({ loading: true, result: null });
     try {
-      const result = await testAgentConnection();
+      const result = await testAgentConnection(scopeKey);
       setTestState({ loading: false, result });
       if (result.success) {
         toast.success("✅ Todas las verificaciones pasaron");
@@ -260,14 +276,115 @@ export default function AgentConfigForm({
         : "")
     : "(sin prompt del sistema)";
 
+  const handleCopyScope = async () => {
+    if (!copyFrom) return;
+    setCopying(true);
+    try {
+      const result = await copyAgentConfig(copyFrom, scopeKey);
+      if (result.success) {
+        toast.success(result.message);
+        setCopyFrom("");
+        router.refresh();
+      } else {
+        toast.error(result.message);
+      }
+    } catch {
+      toast.error("Error al copiar la configuración");
+    } finally {
+      setCopying(false);
+    }
+  };
+
   return (
     <form action={formAction} className="flex flex-col gap-6">
+      {/* Scope being edited — saveAgentConfig creates the row only on save. */}
+      <input type="hidden" name="agentConfigScope" value={scopeKey} />
       <motion.div
         variants={staggerContainer}
         initial="hidden"
         animate="visible"
         className="flex flex-col gap-6"
       >
+        {/* ═════════════════════════════════════════════════════════════════════
+           0. Ámbito de la configuración (global / canal / cuenta)
+           ═════════════════════════════════════════════════════════════════════ */}
+        <motion.div variants={fadeUpSmall}>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Layers size={18} />
+                Ámbito de la configuración
+              </CardTitle>
+              <CardDescription>
+                La config global aplica a todo. Un ámbito de canal o cuenta la
+                reemplaza completa cuando el agente atiende ese ámbito.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div>
+                <Label htmlFor="agentScopeSelect">Ámbito a editar</Label>
+                <Select
+                  id="agentScopeSelect"
+                  value={scopeKey}
+                  onChange={(e) =>
+                    router.push(
+                      `/admin/agent?scope=${encodeURIComponent(e.target.value)}`
+                    )
+                  }
+                >
+                  {scopeOptions.map((o) => (
+                    <SelectOption key={o.key} value={o.key}>
+                      {o.label}
+                      {o.exists ? "" : " · sin configurar"}
+                    </SelectOption>
+                  ))}
+                </Select>
+                {!scopeExists && scopeKey !== "global" && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Este ámbito todavía no tiene fila propia — se crea al guardar.
+                    Mientras tanto se usa la config global.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-end gap-2">
+                <div className="flex-1">
+                  <Label htmlFor="copyFromScope">Copiar desde…</Label>
+                  <Select
+                    id="copyFromScope"
+                    value={copyFrom}
+                    onChange={(e) => setCopyFrom(e.target.value)}
+                  >
+                    <SelectOption value="">Elegí un ámbito…</SelectOption>
+                    {scopeOptions
+                      .filter((o) => o.key !== scopeKey && o.exists)
+                      .map((o) => (
+                        <SelectOption key={o.key} value={o.key}>
+                          {o.label}
+                        </SelectOption>
+                      ))}
+                  </Select>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="gap-2"
+                  onClick={handleCopyScope}
+                  disabled={!copyFrom || copying}
+                >
+                  <Copy size={16} />
+                  {copying ? "Copiando..." : "Copiar"}
+                </Button>
+              </div>
+              {/* Secrets copy verbatim (already-encrypted install data). */}
+              <p className="text-xs text-muted-foreground">
+                La copia incluye credenciales guardadas — son datos de esta
+                instalación y se copian ya cifradas.
+              </p>
+            </CardContent>
+          </Card>
+        </motion.div>
+
         {/* ═════════════════════════════════════════════════════════════════════
            1. Estado del agente
            ═════════════════════════════════════════════════════════════════════ */}
