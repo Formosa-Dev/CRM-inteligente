@@ -12,7 +12,7 @@ import type { ChatMessage, ConversationSummary } from "@/types/chat";
 interface ChatPanelProps {
   conversation: ConversationSummary;
   messages: ChatMessage[];
-  onSend: (message: string) => void;
+  onSend: (message: string) => Promise<void>;
   onBack?: () => void;
   onHumanOverride?: () => void;
   onShowContext?: () => void;

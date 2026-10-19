@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Plus, Minus, ShoppingBag, Save } from "lucide-react";
+import { toast } from "sonner";
 import { updateOrder, type OrderRow } from "./actions";
 
 interface OrderEditModalProps {
@@ -70,9 +71,12 @@ export function OrderEditModal({ order, open, onClose }: OrderEditModalProps) {
 
     // Cargar productos disponibles
     fetch("/api/products?available=true")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then(setProducts)
-      .catch(() => {});
+      .catch(() => toast.error("No se pudieron cargar los productos"));
   }, [open, order]);
 
   const addItem = (product: ProductOption) => {
@@ -94,7 +98,7 @@ export function OrderEditModal({ order, open, onClose }: OrderEditModalProps) {
 
   const handleSave = async () => {
     setSaving(true);
-    await updateOrder(order.id, {
+    const result = await updateOrder(order.id, {
       customerName,
       phoneNumber,
       address: address || null,
@@ -104,6 +108,10 @@ export function OrderEditModal({ order, open, onClose }: OrderEditModalProps) {
       items: items.map((i) => ({ name: i.name, quantity: i.quantity, price: i.price, unitPrice: i.price })),
     });
     setSaving(false);
+    if (!result.success) {
+      toast.error(result.error ?? "No se pudo actualizar el pedido");
+      return;
+    }
     setDone(true);
     setTimeout(() => { onClose(); setDone(false); }, 1200);
   };

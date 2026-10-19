@@ -8,6 +8,7 @@ import { ChatPanel } from "@/components/messages/chat-panel";
 import { CustomerContextPanel } from "@/components/messages/customer-context-panel";
 import { CreateOrderModal } from "@/components/orders/create-order-modal";
 import { ChevronLeft } from "lucide-react";
+import { toast } from "sonner";
 import {
   useConversation,
   useConversations,
@@ -111,7 +112,8 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
   }, [router, searchParams]);
 
   const handleSend = useCallback(
-    (content: string) => sendMutation.mutate(content),
+    // mutateAsync propaga el error al ReplyInput, que mantiene el borrador.
+    (content: string) => sendMutation.mutateAsync(content),
     [sendMutation]
   );
 
@@ -132,7 +134,15 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
 
   const handleHumanOverride = useCallback(async () => {
     if (!selectedId) return;
-    await toggleHumanOverride(selectedId, !isHumanOverride);
+    const result = await toggleHumanOverride(selectedId, !isHumanOverride);
+    if (!result.success) {
+      toast.error("No se pudo cambiar el modo manual");
+      return;
+    }
+    toast.success(
+      isHumanOverride ? "Bot reactivado" : "Control manual activado por 24h"
+    );
+    queryClient.invalidateQueries({ queryKey: ["conversations"] });
   }, [selectedId, isHumanOverride]);
 
   const handleNewOrder = useCallback((phone: string, name: string) => {

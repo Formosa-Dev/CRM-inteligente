@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
+import { toast } from "sonner";
 import { CheckCircle, Clock, DollarSign, Inbox, MessageSquare, Target, Truck, UserPlus } from "lucide-react";
 import { fadeUpSmall, staggerContainer, cardEntrance } from "@/lib/animation-variants";
 import type { ActionCard } from "./page";
@@ -32,6 +33,13 @@ const ICON_MAP: Record<string, typeof Truck> = {
 function CardIcon({ name }: { name: string }) {
   const Icon = ICON_MAP[name] ?? Inbox;
   return <Icon size={16} aria-hidden="true" />;
+}
+
+// Every server action answers {success,message} — surface it instead of
+// letting clicks die silently.
+function notifyResult(result: { success: boolean; message?: string }) {
+  if (result.success) toast.success(result.message ?? "Listo");
+  else toast.error(result.message ?? "La acción falló");
 }
 
 // ─── Action Button ────────────────────────────────────────────────────────
@@ -83,13 +91,13 @@ function ActionCardComponent({
     try {
       switch (action) {
         case "mark-delivered":
-          await updateOrderStatus(Number(itemId), "delivered");
+          notifyResult(await updateOrderStatus(Number(itemId), "delivered"));
           break;
         case "mark-ready":
-          await updateOrderStatus(Number(itemId), "ready");
+          notifyResult(await updateOrderStatus(Number(itemId), "ready"));
           break;
         case "mark-paid":
-          await markPaidAndDelivered(Number(itemId));
+          notifyResult(await markPaidAndDelivered(Number(itemId)));
           break;
         case "open-chat":
           if (item.conversationId) {
@@ -98,10 +106,7 @@ function ActionCardComponent({
           break;
         case "trigger-agent":
           if (item.conversationId && item.phone) {
-            const result = await triggerAgentForConversation(item.conversationId, item.phone);
-            if (!result.success) {
-              console.warn("[dashboard] triggerAgent failed:", result.message);
-            }
+            notifyResult(await triggerAgentForConversation(item.conversationId, item.phone));
           }
           break;
         case "view-lead":
@@ -113,6 +118,7 @@ function ActionCardComponent({
       // Re-cargar la página para refrescar datos
       router.refresh();
     } catch (err) {
+      toast.error("La acción falló — reintentá");
       console.warn(`[dashboard] Action ${action} failed:`, err);
     } finally {
       setLoadingItems((prev) => ({

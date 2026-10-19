@@ -22,6 +22,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { ShoppingBag, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { CreateOrderModal } from "@/components/orders/create-order-modal";
 import { deleteLead } from "@/app/(admin)/admin/clients/actions";
 
@@ -385,11 +386,18 @@ export default function LeadsTable({
                       <button
                         onClick={async () => {
                           setDeleting(true);
-                          if (selectedLead?.phone) await deleteLead(selectedLead.phone);
+                          const result = selectedLead?.phone
+                            ? await deleteLead(selectedLead.phone)
+                            : { success: false, error: "Este lead no tiene teléfono" };
+                          setDeleting(false);
+                          if (!result.success) {
+                            toast.error(result.error ?? "No se pudo eliminar el lead");
+                            return;
+                          }
+                          toast.success("Lead eliminado");
                           setSheetOpen(false);
                           setConfirmDelete(false);
-                          setDeleting(false);
-                          window.location.reload();
+                          router.refresh();
                         }}
                         disabled={deleting}
                         className="flex-1 rounded-lg bg-red-500/20 text-red-400 px-4 py-2.5 text-xs font-semibold hover:bg-red-500/30 transition-colors"
