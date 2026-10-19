@@ -262,7 +262,6 @@ describe("send facade — migrated call sites (C10)", () => {
   // messenger.send(); the folded client file no longer exists.
   const MIGRATED = [
     "src/lib/whatsapp/broadcast.ts",
-    "src/lib/queue/worker.ts",
     "src/app/api/cron/followup/route.ts",
     "src/lib/telegram/toolsWhatsApp.ts",
     "src/lib/telegram/toolsManagement.ts",
