@@ -117,6 +117,17 @@ export async function POST(req: NextRequest) {
 
 // ─── GET /api/leads ───────────────────────────────────────────────────────────
 
+/**
+ * Parses a ?from=/?to= filter. Invalid dates return null so the param is
+ * simply ignored — `new Date("garbage")` inside a Drizzle comparison throws
+ * a RangeError that used to surface as a 500.
+ */
+export function parseDateParam(value: string | null): Date | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session) {
@@ -145,11 +156,13 @@ export async function GET(req: NextRequest) {
     if (status) {
       conditions.push(eq(leads.status, status));
     }
-    if (from) {
-      conditions.push(gte(leads.createdAt, new Date(from)));
+    const fromDate = parseDateParam(from);
+    if (fromDate) {
+      conditions.push(gte(leads.createdAt, fromDate));
     }
-    if (to) {
-      conditions.push(lte(leads.createdAt, new Date(to)));
+    const toDate = parseDateParam(to);
+    if (toDate) {
+      conditions.push(lte(leads.createdAt, toDate));
     }
     if (search) {
       const cleaned = search.trim();
