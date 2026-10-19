@@ -12,6 +12,7 @@ import {
   argentinaTodayRange,
   argentinaWeekStart,
 } from "./ar-time";
+import { applyOrderStatusTransition } from "./order-lifecycle";
 
 // Formatos soportados de agent_config.business_hours: array por día (admin UI)
 // u objeto legacy { enabled, days, open, close }
@@ -200,15 +201,10 @@ export const updateOrderStatusTool = tool({
       .describe("Nuevo estado: preparing | ready | delivered | cancelled"),
   }),
   execute: async ({ orderId, status }) => {
-    const [existing] = await db
-      .select({ id: orders.id, status: orders.status, customerName: orders.customerName })
-      .from(orders)
-      .where(eq(orders.id, orderId))
-      .limit(1);
-
-    if (!existing) {
-      return `No encontré el pedido #${orderId}.`;
-    }
+    // Misma semántica que el camino admin: deliveredAt + follow-up +
+    // notificación al cliente (order-lifecycle.ts).
+    const result = await applyOrderStatusTransition(orderId, status);
+    if (!result.ok) return result.error ?? `No encontré el pedido #${orderId}.`;
 
     const statusLabels: Record<string, string> = {
       pending: "pendiente",
@@ -218,12 +214,13 @@ export const updateOrderStatusTool = tool({
       cancelled: "cancelado",
     };
 
-    await db
-      .update(orders)
-      .set({ status, updatedAt: new Date() })
-      .where(eq(orders.id, orderId));
+    const suffix = result.notifyError
+      ? ` — pero no se pudo notificar al cliente: ${result.notifyError}`
+      : result.notified
+        ? " — cliente notificado"
+        : "";
 
-    return `✅ Pedido #${orderId}${existing.customerName ? ` (${existing.customerName})` : ""} marcado como *${statusLabels[status]}*.`;
+    return `✅ Pedido #${orderId}${result.customerName ? ` (${result.customerName})` : ""} marcado como *${statusLabels[status]}*.${suffix}`;
   },
 });
 

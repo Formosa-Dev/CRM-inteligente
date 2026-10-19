@@ -8,6 +8,7 @@ import { normalizePhone, isValidPhone } from "@/lib/phone-utils";
 import { resolveClientName } from "@/lib/lead-utils";
 import { isSafeCustomerNameMatch } from "./customer-match";
 import { argentinaWallTime } from "./ar-time";
+import { applyOrderStatusTransition } from "./order-lifecycle";
 
 
 // ─── manageOrder: Herramientas de gestión de pedidos
@@ -316,20 +317,10 @@ export const updateOrderStatus = tool({
       .describe("Nuevo estado"),
   }),
   execute: async ({ orderId, status }) => {
-    const [existing] = await db
-      .select({ id: orders.id, status: orders.status })
-      .from(orders)
-      .where(eq(orders.id, orderId))
-      .limit(1);
-
-    if (!existing) {
-      return { success: false, message: "Pedido no encontrado" };
-    }
-
-    await db
-      .update(orders)
-      .set({ status, updatedAt: new Date() })
-      .where(eq(orders.id, orderId));
+    // Misma semántica que el camino admin: deliveredAt + follow-up +
+    // notificación al cliente (order-lifecycle.ts).
+    const result = await applyOrderStatusTransition(orderId, status);
+    if (!result.ok) return { success: false, message: result.error };
 
     const statusLabels: Record<string, string> = {
       pending: "pendiente",
@@ -339,9 +330,15 @@ export const updateOrderStatus = tool({
       cancelled: "cancelado",
     };
 
+    const suffix = result.notifyError
+      ? ` — pero no se pudo notificar al cliente: ${result.notifyError}`
+      : result.notified
+        ? " — cliente notificado"
+        : "";
+
     return {
       success: true,
-      message: `Pedido #${orderId} marcado como ${statusLabels[status]}`,
+      message: `Pedido #${orderId} marcado como ${statusLabels[status]}${suffix}`,
     };
   },
 });
