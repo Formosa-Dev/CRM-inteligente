@@ -10,6 +10,7 @@ import { db } from "@/db";
 import { agentConfig } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { reportInternalError } from "@/lib/errors";
+import { invalidateIntegrationSecretsCache } from "@/lib/integrations";
 
 export type MetaConfigState = {
   success: boolean;
@@ -203,6 +204,8 @@ export async function disconnectMeta(): Promise<{ success: boolean; error?: stri
       })
       .where(eq(agentConfig.id, 1));
 
+    // Secret write path — drop cached secrets so nothing stale is accepted.
+    invalidateIntegrationSecretsCache();
     return { success: true };
   } catch (error) {
     console.error("[disconnectMeta] Error:", error);

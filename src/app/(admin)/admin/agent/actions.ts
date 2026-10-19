@@ -8,6 +8,7 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { encrypt } from "@/lib/encryption";
 import { invalidateAIConfigCache } from "@/lib/ai/config";
+import { invalidateIntegrationSecretsCache } from "@/lib/integrations";
 import {
   findAgentConfigForScope,
   invalidateAgentConfigScopeCache,
@@ -358,6 +359,8 @@ export async function saveAgentConfig(
 
     invalidateAIConfigCache();
     invalidateAgentConfigScopeCache();
+    // F15: a rotated webhook/app/cron secret takes effect now, not in 30s.
+    invalidateIntegrationSecretsCache();
     revalidatePath("/admin/agent");
     return { success: true, message: "Configuración guardada" };
   } catch (e) {
@@ -418,6 +421,8 @@ export async function copyAgentConfig(
 
     invalidateAIConfigCache();
     invalidateAgentConfigScopeCache();
+    // Secrets are copied verbatim (same ENCRYPTION_KEY) — same invalidation.
+    invalidateIntegrationSecretsCache();
     revalidatePath("/admin/agent");
     return { success: true, message: "Configuración copiada al ámbito actual" };
   } catch (e) {
