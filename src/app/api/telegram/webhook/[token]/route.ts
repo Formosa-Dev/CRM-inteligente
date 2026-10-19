@@ -212,11 +212,11 @@ export async function POST(
     }
     setIdempotency(idempotencyKey);
 
-    // Structured log
+    // Structured log — opaque ids only; chat ids and message text are PII
+    // (F4) and stay out of logs.
     logRequestReceived(logger, {
       messageId: correlationId,
-      chatId,
-      text: text.slice(0, 50),
+      hasText: text.length > 0,
     });
 
     // ── DB-level deduplication ──
