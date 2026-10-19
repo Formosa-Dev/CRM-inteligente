@@ -462,6 +462,69 @@ async function runWhatsAppAgentImpl({
     console.warn("[agent] Customer context load failed, continuing without it", err);
   }
 
+  // 🛡️ A-22: persisted fields bypass the per-turn check on the incoming
+  // message — screen them with the same injection patterns. A poisoned field
+  // is dropped/neutralized instead of trusted into the prompt.
+  if (customerContext) {
+    const screen = (value: string | null | undefined, label: string): string | undefined => {
+      if (value == null) return undefined;
+      if (detectInjection(value).detected) {
+        console.warn(`[agent] prompt-injection pattern in persisted ${label} — field dropped`);
+        return undefined;
+      }
+      return value;
+    };
+    const screenItems = (items: unknown, label: string): unknown => {
+      if (!Array.isArray(items)) return items;
+      return items.map((it) => {
+        if (it && typeof it === "object" && typeof (it as { name?: unknown }).name === "string") {
+          const name = (it as { name: string }).name;
+          if (detectInjection(name).detected) {
+            console.warn(`[agent] prompt-injection pattern in persisted ${label} item name — dropped`);
+            const { name: _dropped, ...rest } = it as Record<string, unknown>;
+            return rest;
+          }
+        }
+        return it;
+      });
+    };
+    customerContext.name = screen(customerContext.name, "customer name");
+    customerContext.phone = screen(customerContext.phone, "phone");
+    customerContext.address = screen(customerContext.address, "address") ?? null;
+    customerContext.notes = screen(customerContext.notes, "lead notes") ?? null;
+    customerContext.previousContext = screen(customerContext.previousContext, "previousContext");
+    if (customerContext.savedAddresses) {
+      customerContext.savedAddresses = customerContext.savedAddresses
+        .map((a) => screen(a, "saved address"))
+        .filter((a): a is string => a !== undefined);
+      if (customerContext.savedAddresses.length === 0) customerContext.savedAddresses = undefined;
+    }
+    if (customerContext.preferences) {
+      customerContext.preferences = customerContext.preferences
+        .map((p) => screen(p, "preference"))
+        .filter((p): p is string => p !== undefined);
+      if (customerContext.preferences.length === 0) customerContext.preferences = undefined;
+    }
+    if (customerContext.orderHistory) {
+      for (const o of customerContext.orderHistory) o.items = screenItems(o.items, "orderHistory");
+    }
+    if (customerContext.pendingOrder) {
+      customerContext.pendingOrder.items = screenItems(customerContext.pendingOrder.items, "pendingOrder");
+      customerContext.pendingOrder.address = screen(customerContext.pendingOrder.address, "pendingOrder address") ?? null;
+    }
+    if (customerContext.lastOrder) {
+      customerContext.lastOrder.items = screenItems(customerContext.lastOrder.items, "lastOrder");
+    }
+    if (customerContext.currentCart) {
+      customerContext.currentCart = customerContext.currentCart.map((i) => ({
+        ...i,
+        productName: screen(i.productName, "cart product") ?? "[omitido]",
+        variant: screen(i.variant, "cart variant") ?? null,
+        notes: screen(i.notes, "cart notes") ?? null,
+      }));
+    }
+  }
+
   // 🔍 DETECTAR si el cliente está respondiendo a una notificación de estado
   // Si el último mensaje en el historial es "system" (notificación automática de estado)
   // y el mensaje actual del cliente es del humano → el cliente responde a la notificación

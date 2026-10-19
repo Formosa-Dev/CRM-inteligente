@@ -93,10 +93,33 @@ export function detectInjection(message: string): InjectionResult {
   };
 }
 
+// ─── Persisted-field sanitization ────────────────────────────────────────
+// Persisted, customer/admin-controlled strings (lead name/address/notes,
+// saved addresses, cart notes, product names inside stored order items,
+// previousContext) bypass the per-turn detectInjection() that only sees the
+// incoming message. sanitizePersistedField() neutralizes them for prompt
+// interpolation: control characters and line breaks are flattened (a field
+// can never break out of its own line and impersonate a new instruction
+// block), the delimiter characters are stripped so the wrapper cannot be
+// forged from stored data, the value is truncated, and the result is wrapped
+// in explicit «» delimiters so the model reads it as DATA, never instructions.
+export const MAX_PERSISTED_FIELD_LENGTH = 200;
+
+export function sanitizePersistedField(value: string | null | undefined): string {
+  const cleaned = String(value ?? "")
+    .replace(/[\x00-\x1F\x7F]/g, " ")
+    .replace(/[«»]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_PERSISTED_FIELD_LENGTH);
+  return `«${cleaned}»`;
+}
+
 // Server-side version for agent
 export function createPromptSecurityServer() {
   return {
     sanitizeInput,
     detectInjection,
+    sanitizePersistedField,
   };
 }
