@@ -2,15 +2,19 @@
  * Provider registry — explicit map, no magic discovery.
  *
  * v1 wires exactly one route: channel 'whatsapp' → provider 'ycloud'
- * (evidence doc §5). Zernio/Kapso land here when their adapters exist;
- * `channel_accounts` rows replace the hard-coded channel route in B3.
+ * (evidence doc §5). Kapso is registered (reachable via
+ * POST /api/webhooks/ingress/kapso) but not channel-routed — the whatsapp
+ * binding stays ycloud in v1. `channel_accounts` rows replace the hard-coded
+ * channel route in B3; Zernio lands here when its adapter exists.
  */
 
+import { kapsoProvider } from "./providers/kapso";
 import { ycloudProvider } from "./providers/ycloud";
 import type { ChannelKind, MessagingProvider, ProviderId } from "./types";
 
 const PROVIDERS = new Map<ProviderId, MessagingProvider>([
   [ycloudProvider.id, ycloudProvider],
+  [kapsoProvider.id, kapsoProvider],
 ]);
 
 const CHANNEL_PROVIDER = new Map<ChannelKind, ProviderId>([

@@ -9,10 +9,12 @@ const ALLOWED_DOMAINS = [
 
 const UPLOADS_DIR = path.join(process.cwd(), "public", "uploads");
 
-function isAllowedDomain(url: string): boolean {
+function isAllowedDomain(url: string, extraAllowedDomains: readonly string[] = []): boolean {
   try {
     const parsed = new URL(url);
-    return ALLOWED_DOMAINS.some((d) => parsed.hostname.endsWith(d));
+    return [...ALLOWED_DOMAINS, ...extraAllowedDomains].some((d) =>
+      parsed.hostname.endsWith(d)
+    );
   } catch {
     return false;
   }
@@ -22,11 +24,17 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
 }
 
+/**
+ * `extraAllowedDomains` is the per-provider seam (C12): provider adapters
+ * pass their media domains (e.g. KAPSO_MEDIA_DOMAINS) so the global
+ * allowlist never grows speculatively.
+ */
 export async function downloadMedia(
   url: string,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  extraAllowedDomains?: readonly string[]
 ): Promise<Buffer> {
-  if (!isAllowedDomain(url)) {
+  if (!isAllowedDomain(url, extraAllowedDomains)) {
     throw new Error(`Domain not allowed: ${url}`);
   }
 

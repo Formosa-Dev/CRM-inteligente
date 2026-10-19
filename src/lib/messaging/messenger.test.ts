@@ -189,12 +189,12 @@ describe("messenger.send — account-bound sends (S15)", () => {
         { to: "+15550001234", type: "text", text: "hola" },
         {
           channel: "whatsapp",
-          account: { ...ACCOUNT, provider: "kapso" },
+          account: { ...ACCOUNT, provider: "zernio" },
         },
       );
       assert.deepEqual(res, {
         ok: false,
-        error: "no messaging provider registered for provider 'kapso'",
+        error: "no messaging provider registered for provider 'zernio'",
         retryable: false,
       });
       assert.equal(fetched, false);
