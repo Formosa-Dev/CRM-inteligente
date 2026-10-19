@@ -14,8 +14,11 @@ export function extractRefCode(text: string): string | null {
 /**
  * Auto-capture lead on first contact — no duplicates by phone.
  * `channelAccountId` attributes the lead to the account that received the
- * contact (a re-contact through a different account moves the ownership so
- * scoped order lookups follow the latest account); NULL leaves the column
+ * contact. An existing lead is only stamped when it has NO account yet
+ * (first attribution): arbitrary inbound traffic on another account must
+ * never migrate the ownership, or account-scoped order lookups silently
+ * follow the wrong account. Order-bearing transitions re-stamp explicitly
+ * in the order path (create-order), not here. NULL leaves the column
  * untouched, preserving the legacy shared-lead behavior.
  */
 export async function captureLeadIfNew(
@@ -35,7 +38,7 @@ export async function captureLeadIfNew(
 
   if (existing.length > 0) {
     const lead = existing[0];
-    if (channelAccountId != null && lead.channelAccountId !== channelAccountId) {
+    if (channelAccountId != null && lead.channelAccountId == null) {
       await db
         .update(leads)
         .set({ channelAccountId })

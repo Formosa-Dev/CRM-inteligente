@@ -29,8 +29,11 @@
  *   WhatsApp-bound until S15 generalizes it.
  */
 
+import { and, eq, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
+import { db } from "@/db";
+import { channelEvents } from "@/db/schema";
 import {
   findOrCreateConversation,
   insertMessage,
@@ -43,7 +46,7 @@ import {
   resolveChannelAccount,
   resolveChannelAccountStrict,
 } from "./accounts";
-import { isChannelDeliveryRecorded, persistChannelEvent } from "./channel-events";
+import { persistChannelEvent } from "./channel-events";
 import { classifyError } from "./errors";
 import { channelForProvider, isChannelKind } from "./registry";
 import type {
@@ -288,21 +291,74 @@ export function passiveMessageRole(
 }
 
 /**
+ * Thread id worth persisting to `conversations.external_thread_id` — the
+ * send-routing handle for conversation-scoped providers (zernio). The
+ * dedicated `providerThreadId` always wins; `providerConversationId` is only
+ * a fallback on NON-echo events, where it is a true conversation id (kapso
+ * conv.id, zernio conversation.id). Echoes carry the CUSTOMER key there —
+ * stamping it would store a phone number as a thread id and mis-route
+ * future thread-scoped sends.
+ */
+export function eventThreadId(
+  event: NormalizedInboundEvent
+): string | undefined {
+  if (event.providerThreadId) return event.providerThreadId;
+  if (event.kind === "message.echo") return undefined;
+  return event.providerConversationId;
+}
+
+/**
+ * Release a claimed delivery marker after a failed persistence, so the
+ * provider's redelivery can claim it again. Without the release, a crash
+ * between claim and insert would turn every retry into a permanent skip —
+ * the exact message loss the claim was added to prevent. Best-effort: a
+ * failed release keeps the marker claimed (fail-safe against double
+ * persistence).
+ */
+export async function releaseChannelDeliveryMarker(
+  provider: string,
+  deliveryId: string,
+  channelAccountId: number | null
+): Promise<void> {
+  try {
+    await db
+      .delete(channelEvents)
+      .where(
+        and(
+          eq(channelEvents.provider, provider),
+          sql`coalesce(${channelEvents.channelAccountId}, -1) = coalesce(${sql.param(channelAccountId)}, -1)`,
+          eq(channelEvents.deliveryId, deliveryId)
+        )
+      );
+  } catch (error) {
+    console.warn(
+      `[ingress] delivery marker release failed for ${provider}/${deliveryId}`,
+      error
+    );
+  }
+}
+
+/**
  * Passive persistence for inbound events on channels other than the
  * WhatsApp/YCloud app pipeline: find-or-create the conversation keyed by
  * (channel, externalUserId), dedup on deliveryId (channel_events marker)
- * then platformMessageId (chat_messages), and store the content. Echoes
- * persist as role "human" unless the adapter stamped raw.echoOrigin="api"
- * (kapso cloud_api sends → "assistant"); own-API echoes are also absorbed
- * by the platformMessageId dedup. No agent run — agent dispatch for
- * non-WhatsApp channels is deferred until the agent layer is
- * provider-generalized (S15). Never throws: every event is acknowledged
- * 200 so providers don't retry.
+ * then platformMessageId (chat_messages), and store the content. The
+ * delivery marker is claimed BEFORE any write — the channel_events unique
+ * insert is the claim itself, so concurrent same-deliveryId events cannot
+ * both pass a read-then-write check and duplicate an id-less delivery. A
+ * failed persistence releases the claim so the provider's redelivery can
+ * retry. Echoes persist as role "human" unless the adapter stamped
+ * raw.echoOrigin="api" (kapso cloud_api sends → "assistant"); own-API
+ * echoes are also absorbed by the platformMessageId dedup. No agent run —
+ * agent dispatch for non-WhatsApp channels is deferred until the agent
+ * layer is provider-generalized (S15). Never throws: every event is
+ * acknowledged 200 so providers don't retry.
  */
 export async function handlePassiveChannelEvent(
   event: NormalizedInboundEvent,
   ctx: IngressContext
 ): Promise<NextResponse> {
+  let deliveryClaimed = false;
   try {
     if (!PASSIVE_PERSISTED_KINDS.has(event.kind)) {
       const persisted = await persistChannelEvent(event, {
@@ -325,52 +381,37 @@ export async function handlePassiveChannelEvent(
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
-    /** Delivery marker claimed in channel_events (provider+deliveryId unique)
-     * after a handled delivery — best-effort: the message row is already
-     * durable, so a failed marker only weakens deliveryId dedup (documented
-     * residual for id-less replays under a rotated delivery key). */
-    const markDeliveryHandled = async () => {
-      try {
-        const marker = await persistChannelEvent(event, {
-          channel: ctx.channel,
-          account: ctx.account,
-          channelAccountId: ctx.channelAccountId,
-        });
-        if (marker.kind === "schema-not-ready") {
-          console.warn(
-            `[ingress] channel_events schema not ready — ${event.provider}/${event.deliveryId} ` +
-              `dedups on platformMessageId only`
-          );
-        }
-      } catch (markerError) {
-        console.warn(
-          `[ingress] delivery marker write failed for ${event.provider}/${event.deliveryId} — ` +
-            `deliveryId dedup degraded`,
-          markerError
-        );
-      }
-    };
-
-    // Delivery-level dedup first: the same X-Idempotency-Key redelivery is
-    // already fully handled even when the message carried no wamid.
-    if (
-      await isChannelDeliveryRecorded(
-        event.provider,
-        event.deliveryId,
-        ctx.channelAccountId ?? null
-      )
-    ) {
+    // Delivery-level dedup: claim the marker BEFORE persisting. The
+    // channel_events unique insert (provider + coalesced account +
+    // deliveryId) IS the claim — a lost claim means the delivery was
+    // already handled, not merely seen. This closes the read→insert→mark
+    // window that let concurrent id-less redeliveries persist twice.
+    const marker = await persistChannelEvent(event, {
+      channel: ctx.channel,
+      account: ctx.account,
+      channelAccountId: ctx.channelAccountId,
+    });
+    if (marker.kind === "duplicate") {
       console.log(
         `[ingress] Duplicate delivery ${event.provider}:${event.deliveryId} on ${ctx.channel} — skipping`
       );
       return NextResponse.json({ ok: true }, { status: 200 });
     }
+    deliveryClaimed = marker.kind === "persisted";
+    if (marker.kind === "schema-not-ready") {
+      console.warn(
+        `[ingress] channel_events schema not ready — ${event.provider}/${event.deliveryId} ` +
+          `dedups on platformMessageId only`
+      );
+    }
 
-    if (event.platformMessageId && (await isMessageDuplicate(event.platformMessageId))) {
+    if (
+      event.platformMessageId &&
+      (await isMessageDuplicate(event.platformMessageId, ctx.channelAccountId ?? null))
+    ) {
       console.log(
         `[ingress] Duplicate ${event.kind} ${event.platformMessageId} on ${ctx.channel} — skipping`
       );
-      await markDeliveryHandled();
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
@@ -386,7 +427,7 @@ export async function handlePassiveChannelEvent(
     // send-routing handle for conversation-scoped providers (zernio). Echoes
     // key providerConversationId by the customer, so the thread arrives on
     // providerThreadId instead.
-    const threadId = event.providerThreadId ?? event.providerConversationId;
+    const threadId = eventThreadId(event);
     if (threadId) {
       await stampConversationThreadId(conversationId, threadId);
     }
@@ -409,12 +450,18 @@ export async function handlePassiveChannelEvent(
         ? `[ingress] Duplicate ${event.kind} ${event.platformMessageId} — already persisted`
         : `[ingress] Persisted ${event.kind} on ${ctx.channel} conv=${conversationId} account=${ctx.account.id} role=${role}`
     );
-    await markDeliveryHandled();
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (error) {
     // Transient persistence failures must be retried, not acked/dropped.
     // Conversation/message dedup on platformMessageId keeps replays idempotent;
     // channel_events dedups on provider delivery id.
+    if (deliveryClaimed) {
+      await releaseChannelDeliveryMarker(
+        event.provider,
+        event.deliveryId,
+        ctx.channelAccountId ?? null
+      );
+    }
     console.error(
       `[ingress] ${event.provider} kind=${event.kind} deliveryId=${event.deliveryId} — persistence failed`,
       error

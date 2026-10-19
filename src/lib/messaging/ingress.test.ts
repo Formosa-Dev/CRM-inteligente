@@ -20,6 +20,7 @@ import {
   channelAccountRowId,
   eventConversationExternalUserId,
   eventSelfAddresses,
+  eventThreadId,
   logAckedWithoutPersistence,
   resolveEventChannel,
   resolveIngressContext,
@@ -219,5 +220,44 @@ describe("passive conversation identity", () => {
       eventConversationExternalUserId(makeEvent({ sender: { phone: "+15550001234" } })),
       "+15550001234"
     );
+  });
+});
+
+describe("eventThreadId — never stamps the customer key as a thread", () => {
+  it("ignores providerConversationId on echoes (it carries the customer)", () => {
+    const echo = makeEvent({
+      kind: "message.echo",
+      direction: "outbound",
+      sender: { phone: "+15550009999" },
+      providerConversationId: "+15550001234",
+    });
+    assert.equal(eventThreadId(echo), undefined);
+  });
+
+  it("prefers providerThreadId on echoes", () => {
+    const echo = makeEvent({
+      kind: "message.echo",
+      direction: "outbound",
+      providerConversationId: "17841405823604595",
+      providerThreadId: "conv_zrn_9",
+    });
+    assert.equal(eventThreadId(echo), "conv_zrn_9");
+  });
+
+  it("falls back to providerConversationId on non-echo events", () => {
+    assert.equal(
+      eventThreadId(makeEvent({ providerConversationId: "conv_test_1" })),
+      "conv_test_1"
+    );
+    assert.equal(
+      eventThreadId(
+        makeEvent({ kind: "comment.received", providerConversationId: "conv_c_1" })
+      ),
+      "conv_c_1"
+    );
+  });
+
+  it("returns undefined when no thread identity exists", () => {
+    assert.equal(eventThreadId(makeEvent()), undefined);
   });
 });

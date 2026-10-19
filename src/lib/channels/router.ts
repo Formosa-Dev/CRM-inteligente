@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { conversations, chatMessages, leads, attachments } from "@/db/schema";
-import { eq, and, desc, isNull, or } from "drizzle-orm";
+import { eq, and, desc, isNull, or, sql } from "drizzle-orm";
 import { normalizePhone } from "@/lib/phone-utils";
 import {
   resolveConversationIdentity,
@@ -234,16 +234,25 @@ async function autoLinkLeadToConversation(
 ): Promise<void> {
   try {
     const [lead] = await db
-      .select({ id: leads.id, conversationId: leads.conversationId })
+      .select({
+        id: leads.id,
+        conversationId: leads.conversationId,
+        channelAccountId: leads.channelAccountId,
+      })
       .from(leads)
       .where(eq(leads.phone, phone))
       .limit(1);
 
     if (lead && !lead.conversationId) {
+      // First account attribution only: a lead already owned by account A
+      // must never migrate to account B on an arbitrary inbound — that moves
+      // account-scoped order lookups with it. Order paths stamp explicitly.
+      const stampAccount =
+        channelAccountId != null && lead.channelAccountId == null;
       await db
         .update(leads)
         .set(
-          channelAccountId != null
+          stampAccount
             ? { conversationId, channelAccountId }
             : { conversationId }
         )
@@ -289,13 +298,20 @@ export async function insertMessage(
       })
       .returning({ id: chatMessages.id });
   } catch (err: unknown) {
-    // P0001 / 23505 = unique_violation on platform_message_id
-    // If this is a duplicate platformMessageId, return the existing message ID
+    // P0001 / 23505 = unique_violation on (coalesce(channel_account_id, -1),
+    // platform_message_id). If this is a duplicate platformMessageId in THIS
+    // account's partition, return the existing message ID — another account's
+    // identical platform id lives in its own partition and must not match.
     if (platformMessageId && (err as { code?: string } | null)?.code === "23505") {
       const [existing] = await db
         .select({ id: chatMessages.id })
         .from(chatMessages)
-        .where(eq(chatMessages.platformMessageId, platformMessageId))
+        .where(
+          and(
+            eq(chatMessages.platformMessageId, platformMessageId),
+            sql`coalesce(${chatMessages.channelAccountId}, -1) = coalesce(${sql.param(channelAccountId ?? null)}, -1)`
+          )
+        )
         .limit(1);
       if (existing) {
         console.log(`[router] Duplicate platformMessageId ${platformMessageId} — returning existing msg ${existing.id}`);
@@ -372,16 +388,28 @@ async function autoAttachToLead(
   }
 }
 
-// Check if message was already processed (deduplication)
+// Check if message was already processed (deduplication).
+// Pass the owning channel account when known: the check then mirrors the
+// (coalesce(channel_account_id, -1), platform_message_id) unique partition so
+// dual-account setups never drop each other's messages. Omitting it keeps the
+// legacy provider-wide read for callers that carry no account context.
 export async function isMessageDuplicate(
-  platformMessageId: string
+  platformMessageId: string,
+  channelAccountId?: number | null
 ): Promise<boolean> {
   if (!platformMessageId) return false;
 
   const existing = await db
     .select({ id: chatMessages.id })
     .from(chatMessages)
-    .where(eq(chatMessages.platformMessageId, platformMessageId))
+    .where(
+      channelAccountId === undefined
+        ? eq(chatMessages.platformMessageId, platformMessageId)
+        : and(
+            eq(chatMessages.platformMessageId, platformMessageId),
+            sql`coalesce(${chatMessages.channelAccountId}, -1) = coalesce(${sql.param(channelAccountId)}, -1)`
+          )
+    )
     .limit(1);
 
   return existing.length > 0;
@@ -512,7 +540,10 @@ export async function resolveConversationAccountForPhone(
 
   const accountId = accountIds[0];
   const { resolveChannelAccountByIdStrict } = await import("@/lib/messaging");
-  const resolution = await resolveChannelAccountByIdStrict(accountId, "ycloud");
+  // No expected provider: the row's own provider wins (kapso/zernio/ycloud) —
+  // messenger.send already binds `account.provider`. A ycloud-only assumption
+  // here mismatched every non-ycloud bound conversation into a silent drop.
+  const resolution = await resolveChannelAccountByIdStrict(accountId);
   if (resolution.kind === "resolved") {
     const conversationId = selectBoundConversationId(rows, accountId);
     if (conversationId === undefined) {
@@ -541,7 +572,9 @@ export async function resolveConversationAccountForPhone(
  */
 export async function resolveDefaultWhatsAppAccount(): Promise<DefaultAccountResolution> {
   const { resolveChannelAccountStrict } = await import("@/lib/messaging");
-  const resolution = await resolveChannelAccountStrict("whatsapp", [], "ycloud");
+  // Provider-agnostic: exactly one active whatsapp account wins regardless of
+  // provider — hard-coding ycloud dropped kapso/zernio-bound sends silently.
+  const resolution = await resolveChannelAccountStrict("whatsapp", []);
   switch (resolution.kind) {
     case "resolved":
       return { kind: "resolved", account: resolution.account };

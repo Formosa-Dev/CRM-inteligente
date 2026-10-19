@@ -400,7 +400,14 @@ export const chatMessages = pgTable("chat_messages", {
   channelAccountId: integer("channel_account_id").references(() => channelAccounts.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
-  platformMsgUq: uniqueIndex("idx_chat_messages_platform_id").on(table.platformMessageId),
+  // Dedup is per ACCOUNT: dual-provider/dual-account setups can deliver the
+  // same platform_message_id on each account, so a provider-wide unique
+  // silently dropped every account but the first. COALESCE keeps legacy
+  // NULL-account rows in their own (-1) partition — same swap as 0019.
+  platformMsgUq: uniqueIndex("idx_chat_messages_platform_id").on(
+    sql`coalesce(${table.channelAccountId}, -1)`,
+    table.platformMessageId
+  ),
 }));
 
 export const leads = pgTable("leads", {
