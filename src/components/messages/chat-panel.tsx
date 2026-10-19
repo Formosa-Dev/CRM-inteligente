@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Phone, MoreVertical, UserCheck, UserRound } from "lucide-react";
+import { ArrowLeft, UserCheck, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChannelBadge } from "./channel-badge";
 import { MessageBubble } from "./message-bubble";
@@ -151,12 +151,6 @@ export function ChatPanel({
               <UserCheck className="h-4 w-4" />
             </button>
           )}
-          <button className="p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors">
-            <Phone className="h-4 w-4" />
-          </button>
-          <button className="p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors">
-            <MoreVertical className="h-4 w-4" />
-          </button>
         </div>
       </motion.div>
 

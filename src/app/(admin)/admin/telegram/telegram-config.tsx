@@ -44,9 +44,13 @@ export function TelegramConfigClient({ initialStatus }: Props) {
   const [confirmDeleteWebhook, setConfirmDeleteWebhook] = useState(false);
   const isAdmin = useIsAdmin();
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`${label} copiado`);
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label} copiado`);
+    } catch {
+      toast.error("No se pudo copiar — seleccioná el texto a mano");
+    }
   };
 
   const handleSetWebhook = async () => {

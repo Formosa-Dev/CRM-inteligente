@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { motion } from "framer-motion";
 import { fadeUpSmall, staggerContainer } from "@/lib/animation-variants";
 import type { ClientSummary } from "./actions";
@@ -306,8 +307,12 @@ export function ClientsView({
                       )
                     );
                     setEditClient(null);
+                  } else {
+                    toast.error(result.error ?? "No se pudo guardar el cliente");
                   }
-                } catch (e) { console.error(e); }
+                } catch {
+                  toast.error("No se pudo guardar el cliente");
+                }
                 setSavingEdit(false);
               }} disabled={savingEdit}
                 className="flex items-center gap-1.5 px-6 py-2.5 sm:px-5 sm:py-2 rounded-lg text-xs font-semibold bg-primary text-primary-foreground hover:bg-gold-bright disabled:opacity-40">

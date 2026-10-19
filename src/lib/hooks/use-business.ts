@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import type { BusinessInfo } from "@/lib/business";
 
 let cache: BusinessInfo | null = null;
@@ -24,7 +25,9 @@ export function useBusiness(): BusinessInfo | null {
           setInfo(data);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        toast.error("No se pudo cargar la información del negocio");
+      });
     return () => {
       cancelled = true;
     };

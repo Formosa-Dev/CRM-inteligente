@@ -142,27 +142,6 @@ export async function sendReply(
 }
 
 /**
- * Actualiza el estado de una conversación (active / closed / archived).
- */
-export async function updateConversationStatus(
-  conversationId: number,
-  status: "active" | "closed" | "archived"
-): Promise<{ success: boolean }> {
-  if (!(await requireAdmin())) return { success: false };
-  if (!["active", "closed", "archived"].includes(status)) return { success: false };
-  try {
-    await db
-      .update(conversations)
-      .set({ status, updatedAt: new Date() })
-      .where(eq(conversations.id, conversationId));
-    return { success: true };
-  } catch (error) {
-    console.error("[updateConversationStatus] Error:", error);
-    return { success: false };
-  }
-}
-
-/**
  * Activa o desactiva el override humano con una ventana de 24 horas.
  * Cuando se desactiva, limpia la fecha.
  */
@@ -201,32 +180,6 @@ export async function getConversation(
     .where(eq(conversations.id, conversationId))
     .limit(1);
   return conv ?? null;
-}
-
-/**
- * Obtiene el lead vinculado a una conversación.
- */
-export async function getLeadByConversation(conversationId: number) {
-  await requireSession();
-  const [lead] = await db
-    .select()
-    .from(leads)
-    .where(eq(leads.conversationId, conversationId))
-    .limit(1);
-  return lead ?? null;
-}
-
-/**
- * Obtiene las órdenes de un lead.
- */
-export async function getOrdersByLead(leadId: number) {
-  await requireSession();
-  return db
-    .select()
-    .from(orders)
-    .where(eq(orders.leadId, leadId))
-    .orderBy(desc(orders.createdAt))
-    .limit(20);
 }
 
 /**

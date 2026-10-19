@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState, useCallback } from "react";
+import { toast } from "sonner";
 import { motion } from "framer-motion";
 import { fadeUpSmall, staggerContainer } from "@/lib/animation-variants";
 import { testMetaConnection, type MetaConnectionStatus, type WebhookConfig } from "./actions";
@@ -27,11 +28,14 @@ function StatusDot({ active }: { active: boolean }) {
 function CopyField({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
 
-  const copy = useCallback(() => {
-    navigator.clipboard.writeText(value).then(() => {
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(value);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    });
+    } catch {
+      toast.error("No se pudo copiar — seleccioná el texto a mano");
+    }
   }, [value]);
 
   return (
