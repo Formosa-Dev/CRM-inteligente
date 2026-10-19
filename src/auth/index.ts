@@ -34,7 +34,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   // 7-day sessions — a stolen JWT expires in a week, not a month.
   session: { strategy: "jwt", maxAge: 7 * 24 * 60 * 60 },
   pages: {
-    signIn: "/admin/login",
+    signIn: "/login",
   },
   providers: [
     Credentials({
