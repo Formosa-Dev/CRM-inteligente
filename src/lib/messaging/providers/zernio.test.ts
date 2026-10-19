@@ -451,7 +451,7 @@ describe("zernio sendMessage / sendTemplate", () => {
         ],
       };
       // In-thread: template object
-      await zernioProvider.sendTemplate(wa, {
+      await zernioProvider.sendTemplate!(wa, {
         to: "5493704000000",
         type: "template",
         template: tpl,
@@ -461,7 +461,7 @@ describe("zernio sendMessage / sendTemplate", () => {
       assert.equal(sent.template.elements[0].name, "hackathon_welcome");
       assert.equal(sent.template.elements[0].language, "es");
       // First contact: templateName + flat params
-      await zernioProvider.sendTemplate(wa, {
+      await zernioProvider.sendTemplate!(wa, {
         to: "5493704000000",
         type: "template",
         template: tpl,

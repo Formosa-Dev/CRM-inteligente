@@ -145,9 +145,14 @@ stated in the pages read).
   `whatsapp.template.*`, `whatsapp.account.*`, `whatsapp.number.*`,
   `whatsapp.contact.identity_changed`, plus posts/ads/calls/automation
   families. `comment.received` covers the IG/FB comment-to-inbox flow.
-- **Inbound media.** Attachments carry `{type, url (signed, expires),
-  refreshUrl, mimeType, originalType}` — persist `refreshUrl` (re-mints the
-  URL), never the signed `url`.
+- **Inbound media.** Attachments carry `{type, url, mimeType, originalType,
+  payload}`. **Correction 2026-10-19** (webhooks/inbox.mdx): webhook payloads
+  carry NO `refreshUrl` — that field appears only on REST reads
+  (`GET /v1/inbox/conversations/{id}/messages`). `url` differs by platform:
+  WhatsApp points at the authenticated `/v1/whatsapp/media/{mediaId}` (Bearer
+  required; Meta drops media after retention), IG/FB/Telegram are signed CDN
+  links that expire. Durable handle = the re-mint endpoint
+  `GET …/messages/{platformMessageId}/attachments/{index}?accountId=…`.
 - **Channels.** The current docs list 17 platforms including Google Business
   Profile: Instagram, Facebook, Threads, TikTok, YouTube, X, LinkedIn,
   Pinterest, Reddit, Bluesky, Telegram, Discord, Slack, Snapchat (pending
@@ -213,7 +218,7 @@ stated in the pages read).
 | Kapso send idempotency | No idempotency/`externalId` equivalent documented for the proxy send; duplicate-safe retries are not guaranteed. |
 | Kapso project/platform webhook signature | Overview implies the same `X-Webhook-Signature` HMAC flow with an auto-generated secret, but the platform-webhook header isn't separately documented. |
 | Zernio signature freshness | `X-Zernio-Signature` has no timestamp — replay protection is dedup-only (`X-Zernio-Event-Id`). Their sample uses `!==` string compare; we should still use `timingSafeEqual`. |
-| Zernio `POST /v1/inbox/conversations` request shape | Referenced everywhere (participantId, template-first-contact) but the full field list wasn't verified; check before implementing `ZernioAdapter.sendMessage`. |
+| ~~Zernio `POST /v1/inbox/conversations` request shape~~ | RESOLVED 2026-10-19 from create-inbox-conversation.mdx: `{accountId*, participantId|participantUsername, message?, templateName?, templateLanguage?, templateParams?, templateButtonParams?, templateCards?, headerMedia?, headerLocation?, category?, skipDmCheck?}` → 201 `{data:{messageId, conversationId}}`. IG/FB return PLATFORM_NOT_SUPPORTED; WhatsApp open requires templateName (TEMPLATE_REQUIRED). |
 | YCloud `GET ?token` echo | The repo's GET handler echoes a `token` query param (console verification handshake); not seen in the docs pages reviewed — keep it as-is, it's harmless. |
 | Zernio = "Late" rebrand | Inferred from `X-Late-*` legacy header aliases; not stated in the pages read. |
 | Pricing / messaging limits per plan | Out of scope; not evaluated. |
