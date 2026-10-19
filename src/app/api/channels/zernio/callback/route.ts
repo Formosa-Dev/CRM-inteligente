@@ -25,13 +25,13 @@ import {
  * with a flash param the view turns into a toast.
  */
 
-function backToChannels(params: Record<string, string>): NextResponse {
-  const url = new URL(
-    "/admin/channels",
-    process.env.AUTH_URL ??
-      process.env.NEXT_PUBLIC_APP_URL ??
-      "http://localhost:3000"
-  );
+function backToChannels(
+  req: NextRequest,
+  params: Record<string, string>
+): NextResponse {
+  // The browser is already on our origin — env config could be wrong or
+  // absent; the request's own origin is the authoritative redirect base.
+  const url = new URL("/admin/channels", req.nextUrl.origin);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   return NextResponse.redirect(url);
 }
@@ -55,11 +55,11 @@ export async function GET(req: NextRequest) {
   const a = Buffer.from(state);
   const b = Buffer.from(expected);
   if (!expected || a.length !== b.length || !timingSafeEqual(a, b)) {
-    return backToChannels({ error: "oauth-state" });
+    return backToChannels(req, { error: "oauth-state" });
   }
 
   if (!isChannelKind(platform) || !accountId) {
-    return backToChannels({ error: "connect-params" });
+    return backToChannels(req, { error: "connect-params" });
   }
 
   const apiKey = process.env.ZERNIO_API_KEY?.trim();
@@ -99,8 +99,8 @@ export async function GET(req: NextRequest) {
       });
   } catch (error) {
     console.error("[zernio/callback] channel_accounts upsert failed", error);
-    return backToChannels({ error: "persist-failed" });
+    return backToChannels(req, { error: "persist-failed" });
   }
 
-  return backToChannels({ connected: `zernio:${platform}` });
+  return backToChannels(req, { connected: `zernio:${platform}` });
 }

@@ -155,6 +155,9 @@ export async function fetchZernioAccount(
     (a) => (a.id ?? a._id) === accountId
   );
   if (!row) return null;
+  // [RESEARCH] zernioAccountFieldNames — SocialAccount field names below are
+  // read defensively (both camelCase and snake_case where plausible); verify
+  // against a real payload once connected.
   const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
   return {
     username: str(row.username),
