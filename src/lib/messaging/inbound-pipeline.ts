@@ -54,6 +54,13 @@ import { mergeBufferedTurn } from "@/lib/whatsapp/buffered-history";
 import { buildTemporalAgentMessages } from "@/lib/whatsapp/temporal-context";
 import { getActiveOrderSnapshot } from "@/lib/whatsapp/order-lifecycle";
 import { resolveWhatsAppActor, shouldCaptureLead } from "@/lib/whatsapp/actor";
+import {
+  resolveAgentConfig,
+  resolveAgentConfigStrict,
+  runWithAgentConfigScope,
+  type AgentConfigScope,
+} from "@/lib/agent-config-scope";
+import { classifyError } from "./errors";
 import { downloadYCloudMedia, saveMediaLocally } from "@/lib/media/downloader";
 import { transcribeAudio } from "@/lib/media/transcription";
 import { analyzeVideo } from "@/lib/media/video";
@@ -117,13 +124,31 @@ async function handleEcho(
     // unmatched sender is a foreign echo → ack + ignore, no conversation
     // created. When no rows exist (unmigrated installs) the match is
     // "unprovisioned" and the legacy phone-only flow below runs unchanged.
-    const senderMatch = await matchSenderToChannelAccount("whatsapp", {
-      senderAddress: botPhone,
-      providerAccountId: event.providerAccountId || undefined,
-    });
-    if (senderMatch.kind === "unmatched") {
+    const senderMatch = await matchSenderToChannelAccount(
+      "whatsapp",
+      {
+        senderAddress: botPhone,
+        providerAccountId: event.providerAccountId || undefined,
+      },
+      event.provider
+    );
+    if (senderMatch.kind === "db-error") {
+      console.error(
+        "[webhook:echo] channel account lookup failed — retryable",
+        senderMatch.error
+      );
+      return NextResponse.json(
+        { error: "account-resolution-failed" },
+        { status: 503 }
+      );
+    }
+    if (senderMatch.kind === "unmatched" || senderMatch.kind === "mismatch") {
       console.warn(
-        `[webhook:echo] Echo sender ${botPhone} (providerAccountId ${event.providerAccountId || "n/a"}) matches no active channel_accounts row — ignoring`
+        `[webhook:echo] Echo sender ${botPhone} (providerAccountId ${event.providerAccountId || "n/a"}) ` +
+          (senderMatch.kind === "mismatch"
+            ? `mismatched: ${senderMatch.reason}`
+            : "matches no active channel_accounts row") +
+          " — ignoring"
       );
       return NextResponse.json({ ok: true }, { status: 200 });
     }
@@ -243,14 +268,13 @@ async function handleEcho(
           | undefined;
         if (mediaObj?.id) {
           try {
-            const [acConfig] = await db
-              .select({ apiKey: agentConfig.ycloudApiKey })
-              .from(agentConfig)
-              .where(eq(agentConfig.id, 1))
-              .limit(1);
+            const echoConfig = await resolveAgentConfig({
+              channel: "whatsapp",
+              channelAccountId: echoAccountId ?? channelAccountId,
+            });
 
             const { decryptIfEncrypted } = await import("@/lib/encryption");
-            const mediaApiKey = decryptIfEncrypted(acConfig?.apiKey);
+            const mediaApiKey = decryptIfEncrypted(echoConfig?.ycloudApiKey);
             if (mediaApiKey) {
               const { buffer, mimeType, filename } = await downloadYCloudMedia(
                 mediaObj.id as string,
@@ -345,7 +369,10 @@ async function handleEcho(
 
   } catch (error) {
     console.error("[webhook:echo] Error processing echo:", error);
-    // Siempre devolver 200 para evitar retries de YCloud
+    if (classifyError(error) === "retryable-db") {
+      return NextResponse.json({ error: "transient-failure" }, { status: 503 });
+    }
+    return NextResponse.json({ error: "echo-processing-failed" }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });
@@ -383,7 +410,10 @@ async function handleDeliveryNotification(
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (error) {
     console.error("[delivery] Error handling delivery notification:", error);
-    return NextResponse.json({ ok: true }, { status: 200 });
+    return NextResponse.json(
+      { error: "delivery-notification-failed" },
+      { status: classifyError(error) === "retryable-db" ? 503 : 500 }
+    );
   }
 }
 
@@ -526,10 +556,9 @@ export async function handleNormalizedEvent(
     channelAccountRowId(effectiveCtx.account);
   const payload = event.raw as Record<string, unknown>;
 
-  // 2a. Protocol-eligibility gate FIRST: empty Business echoes and
-  //     delivery/status events are acknowledged with 200 and cause no
-  //     conversation lookup, session/event mutation, routing, or reply.
-  //     Non-empty echoes (human override) still fall through to handleEcho.
+  // 2a. Protocol-eligibility gate: empty Business echoes are acknowledged
+  //     with 200 and cause no conversation lookup, mutation, routing, or
+  //     reply. Non-empty echoes fall through to handleEcho.
   if (isProtocolArtifact(payload)) {
     logAckedWithoutPersistence(event, "protocol artifact");
     return NextResponse.json({ ok: true }, { status: 200 });
@@ -578,8 +607,11 @@ export async function handleNormalizedEvent(
       return NextResponse.json({ ok: true }, { status: 200 });
     }
   } catch (dedupError) {
-    console.error("[webhook:wa] Dedup lookup failed — fail closed, no routing or output", dedupError);
-    return NextResponse.json({ ok: true }, { status: 200 });
+    console.error(
+      "[webhook:wa] Dedup lookup failed — fail closed, retryable (503)",
+      dedupError
+    );
+    return NextResponse.json({ error: "dedup-unavailable" }, { status: 503 });
   }
 
   // Normalizar teléfono para operaciones DB
@@ -598,24 +630,48 @@ export async function handleNormalizedEvent(
 
   try {
     // ─────────────────────────────────────────────────────────────────────────
-    // 4. Load agent config — SIN filtro de enabled
-    //    (siempre cargamos la config, aunque la AI esté apagada,
-    //    para poder guardar el mensaje igual)
+    // 4. Load the EXACT effective config for this conversation/account.
+    //    enabled, allowlists, seller/delivery routing, auto-reply/redirect,
+    //    API key and sender phone all come from this row — never from id=1
+    //    implicitly. A transient resolution failure is retryable (503).
     // ─────────────────────────────────────────────────────────────────────────
-    const [config] = await db
-      .select()
-      .from(agentConfig)
-      .where(eq(agentConfig.id, 1))
-      .limit(1);
+    const configScope: AgentConfigScope = {
+      channel: effectiveCtx.channel,
+      channelAccountId,
+    };
+    const configResolution = await resolveAgentConfigStrict(configScope);
+    let config: Awaited<ReturnType<typeof resolveAgentConfig>>;
+    if (configResolution.kind === "db-error") {
+      console.error(
+        "[webhook:wa] Agent config resolution failed — retryable",
+        configResolution.error
+      );
+      return NextResponse.json(
+        { error: "agent-config-unavailable" },
+        { status: 503 }
+      );
+    }
+    if (configResolution.kind === "resolved") {
+      config = configResolution.row;
+    } else {
+      // `schema-not-ready` may use the legacy global row; `not-found` has no
+      // safe sender/config and must not pretend one exists.
+      config = await resolveAgentConfig(configScope);
+    }
 
     if (!config) {
       console.error("[webhook:wa] No agent config found — is DB initialized?");
-      return NextResponse.json({ ok: true }, { status: 200 });
+      return NextResponse.json(
+        { error: "agent-config-unavailable" },
+        { status: 503 }
+      );
     }
     // Stored encrypted at rest — decrypt once for every downstream use.
     const { decryptIfEncrypted } = await import("@/lib/encryption");
     config.ycloudApiKey = decryptIfEncrypted(config.ycloudApiKey);
-    console.log(`[webhook:wa] Config loaded — enabled:${config.enabled} phone:${config.phoneNumber || "N/A"}`);
+    console.log(
+      `[webhook:wa] Config loaded — scope=${configScope.channelAccountId ?? configScope.channel ?? "global"} source=${configResolution.kind === "resolved" ? configResolution.source : configResolution.kind} enabled:${config.enabled} phone:${config.phoneNumber ? "SET" : "N/A"}`
+    );
 
     // 4b. DELIVERY DETECTION: si el mensaje es del número del delivery,
     //     tratar como notificación de delivery, no como mensaje de cliente.
@@ -720,7 +776,16 @@ export async function handleNormalizedEvent(
                 },
               },
         );
-        if (!autoReplyResult.ok) throw new Error(autoReplyResult.error);
+        if (!autoReplyResult.ok) {
+          console.error(
+            "[webhook:wa] Auto-reply send failed — retryable, inbound not acked",
+            autoReplyResult.error
+          );
+          return NextResponse.json(
+            { error: "auto-reply-send-failed" },
+            { status: 503 }
+          );
+        }
       }
     }
 
@@ -1001,8 +1066,14 @@ export async function handleNormalizedEvent(
           hasActiveOrder,
         });
       } catch (sessionError) {
-        console.error("[webhook:wa] Session persistence failed — fail closed, no routing or output", sessionError);
-        return NextResponse.json({ ok: true }, { status: 200 });
+        console.error(
+          "[webhook:wa] Session persistence failed — fail closed, retryable (503)",
+          sessionError
+        );
+        return NextResponse.json(
+          { error: "session-persistence-failed" },
+          { status: 503 }
+        );
       }
       if (sessionDecision.kind === "duplicate") {
         console.log(`[webhook:wa] Duplicate session transition ${messageId} — skipping`);
@@ -1103,6 +1174,7 @@ export async function handleNormalizedEvent(
 
     // Fire-and-forget: webhook returns 200 immediately, processing happens in background
     scheduleBufferProcessing("whatsapp", customerPhone, async (bufferedMessages) => {
+      return runWithAgentConfigScope(configScope, async () => {
       console.log(`[webhook:wa] Buffer callback fired — ${bufferedMessages.length} msgs for ${customerPhone}${isSeller ? " (SELLER)" : ""}`);
 
       // S15 — honor the conversation's channel-account binding (echoes stamp
@@ -1313,12 +1385,21 @@ export async function handleNormalizedEvent(
       }
 
       console.log(`[webhook:wa] Response sent to ${customerPhone}`);
+      });
     }).catch((err) => console.error("[webhook:wa] Buffer processing error:", err));
 
   } catch (error) {
     console.error("[webhook] Error processing message:", error);
-    // Always return 200 after signature verification passes
-    // to prevent YCloud from retrying
+    // Persistence/transport failures must be retryable, not acked/dropped.
+    // Durable dedup makes provider redelivery idempotent.
+    const kind = classifyError(error);
+    if (kind === "retryable-db") {
+      return NextResponse.json(
+        { error: "transient-failure" },
+        { status: 503 }
+      );
+    }
+    return NextResponse.json({ error: "processing-failed" }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });

@@ -1,10 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
+  configCacheKey,
   currentAgentConfigScope,
   parseScopeKey,
   runWithAgentConfigScope,
   scopeKeyOf,
+  shouldCacheResolution,
 } from "./agent-config-scope";
 
 // S13 — pure scope-key/ALS behavior. DB resolution paths are exercised
@@ -69,4 +72,41 @@ test("ambient scope flows through async work and never leaks between runs", asyn
   ]);
   assert.deepEqual(a, { channel: "whatsapp" });
   assert.deepEqual(b, { channelAccountId: 9 });
+});
+
+test("config cache identity is channel+account, not account alone", () => {
+  assert.notEqual(
+    configCacheKey({ channel: "whatsapp", channelAccountId: 7 }),
+    configCacheKey({ channel: "telegram", channelAccountId: 7 })
+  );
+  assert.equal(
+    configCacheKey({ channel: "whatsapp", channelAccountId: 7 }),
+    "channel:whatsapp|account:7"
+  );
+  assert.equal(configCacheKey({}), "channel:*|account:none");
+});
+
+test("only exact-scope results are cached under scoped keys", () => {
+  // Account scope: only an account-row hit may be cached.
+  assert.equal(shouldCacheResolution({ channelAccountId: 7 }, "account"), true);
+  assert.equal(shouldCacheResolution({ channelAccountId: 7 }, "channel"), false);
+  assert.equal(shouldCacheResolution({ channelAccountId: 7 }, "global"), false);
+  // Channel scope: a global chain result is not cached as channel config.
+  assert.equal(shouldCacheResolution({ channel: "whatsapp" }, "channel"), true);
+  assert.equal(shouldCacheResolution({ channel: "whatsapp" }, "global"), false);
+  // Global scope may cache the global row.
+  assert.equal(shouldCacheResolution({}, "global"), true);
+});
+
+test("account-config FK uses cascade instead of set-null", () => {
+  const schema = readFileSync("src/db/schema.ts", "utf8");
+  const agentConfigBlock = schema.slice(
+    schema.indexOf("export const agentConfig"),
+    schema.indexOf("export const channelAccounts")
+  );
+  assert.match(agentConfigBlock, /channelAccountId:[\s\S]{0,400}onDelete: "cascade"/);
+  assert.doesNotMatch(agentConfigBlock, /onDelete: "set null"/);
+  const migration = readFileSync("drizzle/0016_account_config_cascade.sql", "utf8");
+  assert.match(migration, /ON DELETE cascade/);
+  assert.doesNotMatch(migration, /ON DELETE set null/i);
 });

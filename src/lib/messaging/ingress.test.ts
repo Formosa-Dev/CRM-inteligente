@@ -2,10 +2,8 @@
  * Unit tests for the S12 unified-ingress seam (node:test — runs via
  * `npm run test:agents`). Pure/logic coverage only: no DB, no network.
  *
- * `resolveIngressContext` is exercised on the degraded path: with no
- * DATABASE_URL the channel_accounts query throws inside resolveChannelAccount,
- * which falls back to the agent_config placeholder for registered channels —
- * that degraded-resolution contract is what these tests pin down.
+ * With no DATABASE_URL, account resolution is a transient DB failure: it must
+ * surface (503 at the route) instead of silently resolving to a placeholder.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -20,6 +18,7 @@ import {
 import { ycloudProvider } from "./providers/ycloud";
 import {
   channelAccountRowId,
+  eventConversationExternalUserId,
   logAckedWithoutPersistence,
   resolveEventChannel,
   resolveIngressContext,
@@ -137,29 +136,56 @@ describe("resolveEventChannel", () => {
   });
 });
 
-describe("resolveIngressContext (degraded DB)", () => {
-  it("resolves whatsapp events to the legacy placeholder account", async () => {
-    const ctx = await resolveIngressContext(
-      ycloudProvider,
-      makeEvent({ providerAccountId: "waba-123" })
+describe("resolveIngressContext (no DB)", () => {
+  it("surfaces a transient account-resolution failure instead of a placeholder", async () => {
+    await assert.rejects(() =>
+      resolveIngressContext(
+        ycloudProvider,
+        makeEvent({ providerAccountId: "waba-123" })
+      )
     );
-    assert.ok(ctx);
-    assert.equal(ctx.channel, "whatsapp");
-    assert.equal(ctx.account.id, "whatsapp:agent-config");
-    assert.equal(ctx.channelAccountId, undefined);
   });
 
-  it("fails closed for channels with no registered provider", async () => {
-    const ctx = await resolveIngressContext(
-      ycloudProvider,
-      makeEvent({ raw: { channel: "instagram" }, providerAccountId: "acc-9" })
+  it("does not ack a foreign channel by falling back to another sender", async () => {
+    await assert.rejects(() =>
+      resolveIngressContext(
+        ycloudProvider,
+        makeEvent({ raw: { channel: "instagram" }, providerAccountId: "acc-9" })
+      )
     );
-    assert.equal(ctx, undefined);
   });
 });
 
 describe("logAckedWithoutPersistence", () => {
   it("does not throw", () => {
     logAckedWithoutPersistence(makeEvent({ kind: "message.status" }), "test");
+  });
+});
+
+describe("passive conversation identity", () => {
+  it("keys echoes by providerConversationId, never the business phone", () => {
+    const echo = makeEvent({
+      kind: "message.echo",
+      direction: "outbound",
+      sender: { phone: "+15550009999" },
+      providerConversationId: "+15550001234",
+    });
+    assert.equal(eventConversationExternalUserId(echo), "+15550001234");
+  });
+
+  it("does not fall back to the business phone when an echo has no customer id", () => {
+    const echo = makeEvent({
+      kind: "message.echo",
+      direction: "outbound",
+      sender: { phone: "+15550009999" },
+    });
+    assert.equal(eventConversationExternalUserId(echo), undefined);
+  });
+
+  it("keys inbound messages by the sender", () => {
+    assert.equal(
+      eventConversationExternalUserId(makeEvent({ sender: { phone: "+15550001234" } })),
+      "+15550001234"
+    );
   });
 });

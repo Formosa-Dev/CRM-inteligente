@@ -193,9 +193,12 @@ export const agentConfig = pgTable("agent_config", {
   // channelAccountId set = per-account row (channel kept informative).
   channel: channelEnum("channel"),
   // AnyPgColumn breaks the agentConfig ↔ channelAccounts circular FK.
+  // Account deletion cascades its scoped config row. `SET NULL` was unsafe:
+  // clearing the account while keeping `channel` could collide with the
+  // channel-scope partial unique index.
   channelAccountId: integer("channel_account_id").references(
     (): AnyPgColumn => channelAccounts.id,
-    { onDelete: "set null" }
+    { onDelete: "cascade" }
   ),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({

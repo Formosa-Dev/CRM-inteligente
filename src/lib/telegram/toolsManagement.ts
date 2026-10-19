@@ -1025,11 +1025,17 @@ export const sendMessageAsOperatorTool = tool({
       const tgConfig = await getTelegramConfigFromDB();
       if (!tgConfig?.botToken || !conv.externalUserId)
         return `La conversación #${conversationId} no tiene un chat de Telegram resoluble.`;
-      await sendTelegramMessage(
-        tgConfig.botToken,
-        Number(conv.externalUserId),
-        text
-      );
+      try {
+        await sendTelegramMessage(
+          tgConfig.botToken,
+          Number(conv.externalUserId),
+          text
+        );
+      } catch (error) {
+        return `Error al enviar mensaje por Telegram: ${
+          error instanceof Error ? error.message : "error desconocido"
+        }`;
+      }
       await insertMessage(conversationId, "assistant", text);
       return `✅ Mensaje enviado a ${conv.customerName || conv.externalUserId}: "${text.slice(0, 100)}"`;
     }
@@ -1044,6 +1050,9 @@ export const sendMessageAsOperatorTool = tool({
     //       → surfaced error, never a silent drop or wrong-sender send
     const { messenger, resolveChannelAccount, resolveChannelAccountById } =
       await import("@/lib/messaging");
+    const {
+      resolveDefaultWhatsAppAccount,
+    } = await import("@/lib/channels/router");
 
     let result;
     if (conv.channelAccountId != null) {
@@ -1055,7 +1064,17 @@ export const sendMessageAsOperatorTool = tool({
         { channel, account }
       );
     } else if (channel === "whatsapp") {
-      result = await messenger.send({ to: conv.customerPhone, type: "text", text });
+      const fallback = await resolveDefaultWhatsAppAccount();
+      if (fallback.kind === "db-error")
+        return "Error al enviar mensaje: no se pudo resolver la cuenta (error transitorio).";
+      if (fallback.kind === "ambiguous")
+        return `Error al enviar mensaje: hay varias cuentas activas y ninguna vinculada (${fallback.reason}).`;
+      result = await messenger.send(
+        { to: conv.customerPhone, type: "text", text },
+        fallback.kind === "resolved"
+          ? { channel, account: fallback.account }
+          : {}
+      );
     } else {
       const account = await resolveChannelAccount(channel);
       if (!account)

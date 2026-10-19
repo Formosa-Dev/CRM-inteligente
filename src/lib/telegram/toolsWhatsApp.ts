@@ -30,18 +30,36 @@ export const sendWhatsAppMessage = tool({
     if (!message.trim()) return "No envié el WhatsApp: el mensaje está vacío.";
     const phone = `+${normalized}`;
 
-    // S15 — si la conversación existente está vinculada a una
-    // channel_account el mensaje sale por esa cuenta; si no hay binding
-    // (o no hay conversación todavía) queda el placeholder de siempre.
+    // Bound conversation → its account; unbound → the single active
+    // account; ambiguous/unresolvable/transient → explicit failure, never a
+    // global wrong-sender send.
     const { messenger } = await import("@/lib/messaging");
-    const { resolveConversationAccountForPhone } = await import(
-      "@/lib/channels/router"
-    );
+    const {
+      resolveConversationAccountForPhone,
+      resolveDefaultWhatsAppAccount,
+    } = await import("@/lib/channels/router");
     const binding = await resolveConversationAccountForPhone(phone);
+    if (binding.kind === "error") {
+      return `Error al enviar WhatsApp a ${to}: no se pudo resolver la cuenta (error transitorio).`;
+    }
+    if (binding.kind === "ambiguous") {
+      return `Error al enviar WhatsApp a ${to}: el teléfono está vinculado a varias cuentas (${binding.accountIds.join(", ")}).`;
+    }
     if (binding.kind === "unresolvable") {
       return `Error al enviar WhatsApp a ${to}: la cuenta de canal #${binding.accountId} no es resoluble.`;
     }
-    const account = binding.kind === "resolved" ? binding.account : undefined;
+
+    let account = binding.kind === "resolved" ? binding.account : undefined;
+    if (!account) {
+      const fallback = await resolveDefaultWhatsAppAccount();
+      if (fallback.kind === "db-error") {
+        return `Error al enviar WhatsApp a ${to}: no se pudo resolver la cuenta (error transitorio).`;
+      }
+      if (fallback.kind === "ambiguous") {
+        return `Error al enviar WhatsApp a ${to}: hay varias cuentas activas y ninguna vinculada (${fallback.reason}).`;
+      }
+      if (fallback.kind === "resolved") account = fallback.account;
+    }
 
     // Enviar WhatsApp
     const result = await messenger.send(
@@ -53,11 +71,29 @@ export const sendWhatsAppMessage = tool({
       return `Error al enviar WhatsApp a ${to}: ${result.error}`;
     }
 
-    // Guardar en chat_messages
+    // Guardar en chat_messages (account stamped so later sends stay bound)
     try {
       const { findOrCreateConversation, insertMessage } = await import("@/lib/channels/router");
-      const conv = await findOrCreateConversation("whatsapp", phone, undefined, to);
-      await insertMessage(conv.id, "assistant", message, undefined, result.providerMessageId || undefined);
+      const accountId = account ? Number(account.id) : null;
+      const channelAccountId =
+        accountId != null && Number.isInteger(accountId) && accountId > 0
+          ? accountId
+          : null;
+      const conv = await findOrCreateConversation(
+        "whatsapp",
+        phone,
+        undefined,
+        to,
+        channelAccountId
+      );
+      await insertMessage(
+        conv.id,
+        "assistant",
+        message,
+        undefined,
+        result.providerMessageId || undefined,
+        channelAccountId
+      );
     } catch (err) {
       console.warn("[sendWhatsAppMessage] No se pudo guardar en DB:", err);
     }

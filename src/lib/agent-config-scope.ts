@@ -38,6 +38,7 @@ import {
   channelEnum,
   conversations,
 } from "@/db/schema";
+import { isSchemaNotReady } from "@/lib/messaging/errors";
 
 export type AgentConfigRow = typeof agentConfig.$inferSelect;
 export type AgentConfigChannel = (typeof channelEnum.enumValues)[number];
@@ -45,6 +46,69 @@ export type AgentConfigChannel = (typeof channelEnum.enumValues)[number];
 export interface AgentConfigScope {
   channel?: AgentConfigChannel | null;
   channelAccountId?: number | null;
+}
+
+export type AgentConfigResolutionSource = "account" | "channel" | "global";
+
+export type AgentConfigResolution =
+  | {
+      kind: "resolved";
+      id: number;
+      row: AgentConfigRow;
+      source: AgentConfigResolutionSource;
+    }
+  /** No global row exists yet (uninitialized install). */
+  | { kind: "not-found" }
+  /** Positive evidence that the S13 scope columns are absent. */
+  | { kind: "schema-not-ready"; error: unknown }
+  /** Transient failure — never degrade to a global/placeholder config. */
+  | { kind: "db-error"; error: unknown };
+
+export class AgentConfigResolutionError extends Error {
+  readonly retryable: boolean;
+  readonly resolution: Exclude<AgentConfigResolution, { kind: "resolved" }>;
+
+  constructor(
+    resolution: Exclude<AgentConfigResolution, { kind: "resolved" }>
+  ) {
+    super(
+      resolution.kind === "db-error"
+        ? "agent config resolution failed (retryable)"
+        : `agent config resolution: ${resolution.kind}`
+    );
+    this.name = "AgentConfigResolutionError";
+    this.retryable = resolution.kind === "db-error";
+    this.resolution = resolution;
+  }
+}
+
+/**
+ * Cache identity is channel + account (never account alone): the same numeric
+ * account id can be addressed with different channel hints, and a channel
+ * fallback must not be reused as if it were the account's own row.
+ */
+export function configCacheKey(scope: AgentConfigScope): string {
+  const channel = scope.channel ?? "*";
+  const account =
+    scope.channelAccountId != null
+      ? `account:${scope.channelAccountId}`
+      : "account:none";
+  return `channel:${channel}|${account}`;
+}
+
+/**
+ * Only an exact scope result may be cached under that scope's key. Chained
+ * global fallbacks (account -> channel -> global) are resolved on every
+ * request so a missing scoped row can never masquerade as a cached account
+ * answer.
+ */
+export function shouldCacheResolution(
+  scope: AgentConfigScope,
+  source: AgentConfigResolutionSource
+): boolean {
+  if (scope.channelAccountId != null) return source === "account";
+  if (scope.channel) return source === "channel";
+  return source === "global";
 }
 
 /** Legacy convention: the global row is id=1 on every deployed install. */
@@ -94,29 +158,23 @@ export function currentAgentConfigScope(): AgentConfigScope {
 
 // ─── Resolution ───────────────────────────────────────────────────────────────
 
-const idCache = new Map<string, { at: number; id: number }>();
+const resolutionCache = new Map<
+  string,
+  { at: number; id: number; source: AgentConfigResolutionSource }
+>();
 
 /** Applies an admin edit to the next resolver call (same TTL as ai/config). */
 export function invalidateAgentConfigScopeCache(): void {
-  idCache.clear();
+  resolutionCache.clear();
 }
 
-async function queryGlobalId(): Promise<number> {
-  const [row] = await db
-    .select({ id: agentConfig.id })
-    .from(agentConfig)
-    .where(
-      and(
-        isNull(agentConfig.channel),
-        isNull(agentConfig.channelAccountId)
-      )
-    )
-    .orderBy(asc(agentConfig.id))
-    .limit(1);
-  return row?.id ?? GLOBAL_CONFIG_ID;
-}
+type ScopedRowResolution =
+  | { kind: "resolved"; id: number; source: AgentConfigResolutionSource }
+  | { kind: "not-found" };
 
-async function resolveIdUncached(scope: AgentConfigScope): Promise<number> {
+async function resolveScopedRowId(
+  scope: AgentConfigScope
+): Promise<ScopedRowResolution> {
   let channel = scope.channel ?? undefined;
 
   if (scope.channelAccountId != null) {
@@ -125,10 +183,9 @@ async function resolveIdUncached(scope: AgentConfigScope): Promise<number> {
       .from(agentConfig)
       .where(eq(agentConfig.channelAccountId, scope.channelAccountId))
       .limit(1);
-    if (scoped) return scoped.id;
+    if (scoped) return { kind: "resolved", id: scoped.id, source: "account" };
 
     // S11 binding seam: an account row can point straight at any config row.
-    // Also supplies the channel for the channel-level fallback below.
     const [account] = await db
       .select({
         channel: channelAccounts.channel,
@@ -144,7 +201,7 @@ async function resolveIdUncached(scope: AgentConfigScope): Promise<number> {
         .from(agentConfig)
         .where(eq(agentConfig.id, account.boundConfigId))
         .limit(1);
-      if (bound) return bound.id;
+      if (bound) return { kind: "resolved", id: bound.id, source: "account" };
     }
   }
 
@@ -159,29 +216,78 @@ async function resolveIdUncached(scope: AgentConfigScope): Promise<number> {
         )
       )
       .limit(1);
-    if (row) return row.id;
+    if (row) return { kind: "resolved", id: row.id, source: "channel" };
   }
 
-  return queryGlobalId();
+  const [global] = await db
+    .select({ id: agentConfig.id })
+    .from(agentConfig)
+    .where(
+      and(isNull(agentConfig.channel), isNull(agentConfig.channelAccountId))
+    )
+    .orderBy(asc(agentConfig.id))
+    .limit(1);
+  return global
+    ? { kind: "resolved", id: global.id, source: "global" }
+    : { kind: "not-found" };
+}
+
+async function fetchConfigById(id: number): Promise<AgentConfigRow | undefined> {
+  const [row] = await db
+    .select()
+    .from(agentConfig)
+    .where(eq(agentConfig.id, id))
+    .limit(1);
+  return row;
 }
 
 /**
- * Resolves the effective `agent_config.id` for a scope: account → channel →
- * global. Falls back to id=1 on un-migrated deploys (query errors) so every
- * existing `where eq(id, …)` reader keeps today's semantics.
+ * Strict, explicit resolution. Callers get a typed result and must handle
+ * transient errors; only `schema-not-ready` may use a compatibility fallback.
  */
-export async function resolveAgentConfigId(
+export async function resolveAgentConfigStrict(
   scope: AgentConfigScope = currentAgentConfigScope()
-): Promise<number> {
-  const key = scopeKeyOf(scope);
-  const hit = idCache.get(key);
-  if (hit && Date.now() - hit.at < RESOLVE_TTL_MS) return hit.id;
+): Promise<AgentConfigResolution> {
+  const key = configCacheKey(scope);
+  const hit = resolutionCache.get(key);
+  if (hit && Date.now() - hit.at < RESOLVE_TTL_MS) {
+    try {
+      const row = await fetchConfigById(hit.id);
+      return row
+        ? { kind: "resolved", id: hit.id, row, source: hit.source }
+        : { kind: "not-found" };
+    } catch (error) {
+      if (isSchemaNotReady(error)) return { kind: "schema-not-ready", error };
+      return { kind: "db-error", error };
+    }
+  }
+
   try {
-    const id = await resolveIdUncached(scope);
-    idCache.set(key, { at: Date.now(), id });
-    return id;
-  } catch {
-    return GLOBAL_CONFIG_ID;
+    const resolved = await resolveScopedRowId(scope);
+    if (resolved.kind === "not-found") return { kind: "not-found" };
+    const row = await fetchConfigById(resolved.id);
+    if (!row) return { kind: "not-found" };
+    if (shouldCacheResolution(scope, resolved.source)) {
+      resolutionCache.set(key, {
+        at: Date.now(),
+        id: resolved.id,
+        source: resolved.source,
+      });
+    }
+    return {
+      kind: "resolved",
+      id: resolved.id,
+      row,
+      source: resolved.source,
+    };
+  } catch (error) {
+    if (isSchemaNotReady(error)) {
+      console.warn(
+        "[agent-config] scope columns missing - legacy compatibility path"
+      );
+      return { kind: "schema-not-ready", error };
+    }
+    return { kind: "db-error", error };
   }
 }
 
@@ -195,31 +301,56 @@ function legacyColumns() {
   return rest;
 }
 
-/** Resolves the effective config row for a scope (account → channel → global). */
+async function fetchLegacyRowById(
+  id: number
+): Promise<AgentConfigRow | undefined> {
+  const [row] = await db
+    .select(legacyColumns())
+    .from(agentConfig)
+    .where(eq(agentConfig.id, id))
+    .limit(1);
+  return row
+    ? ({ ...row, channel: null, channelAccountId: null } as AgentConfigRow)
+    : undefined;
+}
+
+/**
+ * Compatibility read for existing call sites: resolves strictly and maps the
+ * result. `schema-not-ready` returns the legacy global row (positive evidence
+ * only); DB errors throw instead of silently reading the global row.
+ */
 export async function resolveAgentConfig(
   scope: AgentConfigScope = currentAgentConfigScope()
 ): Promise<AgentConfigRow | undefined> {
-  const id = await resolveAgentConfigId(scope);
-  try {
-    const [row] = await db
-      .select()
-      .from(agentConfig)
-      .where(eq(agentConfig.id, id))
-      .limit(1);
-    return row;
-  } catch {
-    try {
-      const [row] = await db
-        .select(legacyColumns())
-        .from(agentConfig)
-        .where(eq(agentConfig.id, id))
-        .limit(1);
-      return row
-        ? ({ ...row, channel: null, channelAccountId: null } as AgentConfigRow)
-        : undefined;
-    } catch {
+  const resolution = await resolveAgentConfigStrict(scope);
+  switch (resolution.kind) {
+    case "resolved":
+      return resolution.row;
+    case "not-found":
       return undefined;
-    }
+    case "schema-not-ready":
+      try {
+        return await fetchLegacyRowById(GLOBAL_CONFIG_ID);
+      } catch {
+        throw new AgentConfigResolutionError(resolution);
+      }
+    case "db-error":
+      throw new AgentConfigResolutionError(resolution);
+  }
+}
+
+export async function resolveAgentConfigId(
+  scope: AgentConfigScope = currentAgentConfigScope()
+): Promise<number> {
+  const resolution = await resolveAgentConfigStrict(scope);
+  switch (resolution.kind) {
+    case "resolved":
+      return resolution.id;
+    case "not-found":
+    case "schema-not-ready":
+      return GLOBAL_CONFIG_ID;
+    case "db-error":
+      throw new AgentConfigResolutionError(resolution);
   }
 }
 
@@ -250,19 +381,14 @@ export async function findAgentConfigForScope(
       .orderBy(asc(agentConfig.id))
       .limit(1);
     return row;
-  } catch {
-    // Un-migrated: only the legacy global row can exist.
+  } catch (error) {
+    // Only a positively identified missing schema may use the legacy row.
+    if (!isSchemaNotReady(error)) throw error;
     if (scope.channelAccountId != null || scope.channel) return undefined;
     try {
-      const [row] = await db
-        .select(legacyColumns())
-        .from(agentConfig)
-        .where(eq(agentConfig.id, GLOBAL_CONFIG_ID))
-        .limit(1);
-      return row
-        ? ({ ...row, channel: null, channelAccountId: null } as AgentConfigRow)
-        : undefined;
-    } catch {
+      return await fetchLegacyRowById(GLOBAL_CONFIG_ID);
+    } catch (legacyError) {
+      if (!isSchemaNotReady(legacyError)) throw legacyError;
       return undefined;
     }
   }
@@ -286,7 +412,8 @@ export async function scopeColumnsForInsert(
         .where(eq(channelAccounts.id, channelAccountId))
         .limit(1);
       channel = account?.channel ?? null;
-    } catch {
+    } catch (error) {
+      if (!isSchemaNotReady(error)) throw error;
       channel = null;
     }
   }
@@ -311,8 +438,9 @@ export async function resolveScopeForConversation(
       channel: conv.channel ?? undefined,
       channelAccountId: conv.channelAccountId ?? undefined,
     };
-  } catch {
-    return {};
+  } catch (error) {
+    if (isSchemaNotReady(error)) return {};
+    throw error;
   }
 }
 

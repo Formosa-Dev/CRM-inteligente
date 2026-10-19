@@ -6,6 +6,7 @@ import {
   resolveConversationIdentity,
   type ConversationIdentityRepository,
 } from "@/lib/messaging/conversation-identity";
+import { isSchemaNotReady } from "@/lib/messaging/errors";
 import type { ChannelAccount, ChannelKind, OutboundMessage } from "@/lib/messaging/types";
 
 // Full channel universe (parity with schema channelEnum / ChannelKind).
@@ -362,40 +363,111 @@ export type BoundAccountResolution =
   /** No conversation, or conversation without a channel_account binding. */
   | { kind: "unbound" }
   /** Conversation is bound and the account resolved cleanly. */
-  | { kind: "resolved"; account: ChannelAccount }
+  | { kind: "resolved"; account: ChannelAccount; conversationId: number }
   /** Bound but missing/inactive/unregistered — callers must fail closed. */
-  | { kind: "unresolvable"; accountId: number };
+  | { kind: "unresolvable"; accountId: number; reason: string }
+  /** The same phone has conversations on several accounts — no safe sender. */
+  | { kind: "ambiguous"; accountIds: number[] }
+  /** Transient lookup failure — caller must surface a retryable error. */
+  | { kind: "error"; error: unknown; retryable: boolean };
+
+export type DefaultAccountResolution =
+  | { kind: "unprovisioned" }
+  | { kind: "resolved"; account: ChannelAccount }
+  | { kind: "ambiguous"; reason: string }
+  | { kind: "db-error"; error: unknown };
 
 /**
  * Resolve the channel_account bound to an existing WhatsApp conversation
- * addressed by phone (externalUserId or legacy whatsappId). Read-only — no
- * conversation is created. Phone-addressed send paths (manual sends, order
- * notifications, broadcasts) use this to honor the conversation binding
- * before falling back to the legacy placeholder.
+ * addressed by canonical (+/digits) phone. Read-only — no conversation is
+ * created. Multiple conversations for the same phone on different accounts
+ * are ambiguous and fail closed instead of picking a global/wrong sender.
  */
 export async function resolveConversationAccountForPhone(
   phone: string
 ): Promise<BoundAccountResolution> {
-  const [conv] = await db
-    .select({ channelAccountId: conversations.channelAccountId })
-    .from(conversations)
-    .where(
-      or(
+  const digits = normalizePhone(phone);
+  if (!digits) return { kind: "unbound" };
+
+  let rows: { id: number; channelAccountId: number | null }[];
+  try {
+    rows = await db
+      .select({
+        id: conversations.id,
+        channelAccountId: conversations.channelAccountId,
+      })
+      .from(conversations)
+      .where(
         and(
           eq(conversations.channel, "whatsapp"),
-          eq(conversations.externalUserId, phone)
-        ),
-        eq(conversations.whatsappId, phone)
-      )
-    )
-    .limit(1);
+          or(
+            eq(conversations.externalUserIdNormalized, digits),
+            eq(conversations.whatsappId, digits),
+            eq(conversations.whatsappId, phone)
+          )
+        )
+      );
+  } catch (error) {
+    // Positively identified un-migrated install: legacy phone lookup is the
+    // only available behavior. Any other DB error is surfaced.
+    if (isSchemaNotReady(error)) return { kind: "unbound" };
+    return { kind: "error", error, retryable: true };
+  }
 
-  if (!conv || conv.channelAccountId == null) return { kind: "unbound" };
-  const { resolveChannelAccountById } = await import("@/lib/messaging");
-  const account = await resolveChannelAccountById(conv.channelAccountId);
-  return account
-    ? { kind: "resolved", account }
-    : { kind: "unresolvable", accountId: conv.channelAccountId };
+  if (rows.length === 0) return { kind: "unbound" };
+
+  const accountIds = [
+    ...new Set(
+      rows
+        .map((row) => row.channelAccountId)
+        .filter((id): id is number => id != null)
+    ),
+  ];
+  if (accountIds.length > 1) return { kind: "ambiguous", accountIds };
+  if (accountIds.length === 0) return { kind: "unbound" };
+
+  const accountId = accountIds[0];
+  const { resolveChannelAccountByIdStrict } = await import("@/lib/messaging");
+  const resolution = await resolveChannelAccountByIdStrict(accountId, "ycloud");
+  if (resolution.kind === "resolved") {
+    return {
+      kind: "resolved",
+      account: resolution.account,
+      conversationId: rows[0].id,
+    };
+  }
+  if (resolution.kind === "db-error") {
+    return { kind: "error", error: resolution.error, retryable: true };
+  }
+  return {
+    kind: "unresolvable",
+    accountId,
+    reason: resolution.kind === "mismatch" ? resolution.reason : "missing/inactive",
+  };
+}
+
+/**
+ * Account for a phone-addressed send with no conversation binding. Exactly one
+ * active WhatsApp account wins; zero keeps the legacy placeholder; several is
+ * ambiguous and must fail closed.
+ */
+export async function resolveDefaultWhatsAppAccount(): Promise<DefaultAccountResolution> {
+  const { resolveChannelAccountStrict } = await import("@/lib/messaging");
+  const resolution = await resolveChannelAccountStrict("whatsapp", [], "ycloud");
+  switch (resolution.kind) {
+    case "resolved":
+      return { kind: "resolved", account: resolution.account };
+    case "unprovisioned":
+    case "schema-not-ready":
+    case "not-found":
+      return { kind: "unprovisioned" };
+    case "mismatch":
+      return { kind: "ambiguous", reason: resolution.reason };
+    case "db-error":
+      return { kind: "db-error", error: resolution.error };
+    default:
+      return { kind: "ambiguous", reason: "unresolved account state" };
+  }
 }
 
 // Send outbound message via the correct channel
@@ -430,13 +502,16 @@ export async function sendOutboundMessage(
       "@/lib/telegram/bot"
     );
     const tgConfig = await getTelegramConfigFromDB();
-    if (tgConfig?.botToken && conv.externalUserId) {
-      await sendTelegramMessage(
-        tgConfig.botToken,
-        Number(conv.externalUserId),
-        content || (mediaUrl || "")
+    if (!tgConfig?.botToken || !conv.externalUserId) {
+      throw new Error(
+        `Conversation ${conversationId} has no resolvable Telegram bot/chat`
       );
     }
+    await sendTelegramMessage(
+      tgConfig.botToken,
+      Number(conv.externalUserId),
+      content || (mediaUrl || "")
+    );
   } else if (channel === "whatsapp" && conv.channelAccountId == null) {
     const { messenger } = await import("@/lib/messaging");
     const { resolveAgentConfig } = await import("@/lib/agent-config-scope");
@@ -451,7 +526,12 @@ export async function sendOutboundMessage(
     const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
     const to = conv.customerPhone ?? conv.externalUserId ?? "";
 
-    if (apiKey && from) {
+    if (!apiKey || !from) {
+      throw new Error(
+        `Conversation ${conversationId} has no resolvable WhatsApp credentials/sender`
+      );
+    }
+    {
       const credentials = { apiKey, senderAddress: from };
       if (mediaUrl && mediaType === "image") {
         const res = await messenger.send(

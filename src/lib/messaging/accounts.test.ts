@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import {
+  rowMatchesCandidate,
   matchSenderInRows,
   resolveChannelAccount,
   resolveChannelAccountById,
@@ -76,16 +77,39 @@ describe("matchSenderInRows — echo sender attribution", () => {
   });
 });
 
-describe("channel account resolvers — fail closed", () => {
-  test("resolveChannelAccountById returns undefined for a missing row or an unavailable table", async () => {
-    // Works deterministically: with no DB the lookup throws → undefined;
-    // against a real DB id -1 simply does not exist → undefined.
-    assert.equal(await resolveChannelAccountById(-1), undefined);
+describe("canonical candidate matching", () => {
+  test("matches +/digits forms against both routing key and sender address", () => {
+    const rows = [
+      row({ providerAccountId: "15550009999", senderAddress: "+15550009999" }),
+      row({ id: 2, providerAccountId: "waba-2", senderAddress: "+15550002222" }),
+    ];
+    assert.equal(rowMatchesCandidate(rows[0], "+1 (555) 000-9999"), true);
+    assert.equal(rowMatchesCandidate(rows[0], "15550009999"), true);
+    assert.equal(rowMatchesCandidate(rows[1], "waba-2"), true);
+    assert.equal(rowMatchesCandidate(rows[1], "15550002222"), true);
+    assert.equal(rowMatchesCandidate(rows[0], ""), false);
   });
 
-  test("resolveChannelAccount returns undefined for channels with no registered provider", async () => {
+  test("a candidate that matches two rows is treated as ambiguous by the pure matcher", () => {
+    const rows = [
+      row({ id: 1, providerAccountId: "shared", senderAddress: "+15550001111" }),
+      row({ id: 2, providerAccountId: "shared", senderAddress: "+15550002222" }),
+    ];
+    assert.equal(matchSenderInRows(rows, { providerAccountId: "shared" }), undefined);
+  });
+});
+
+describe("channel account resolvers — never degrade on DB failure", () => {
+  test("does not return a placeholder when the database is unavailable", async () => {
+    // No DATABASE_URL in the test environment: the strict resolver surfaces a
+    // typed DB failure instead of the old fail-open placeholder.
+    await assert.rejects(() => resolveChannelAccountById(-1));
+    await assert.rejects(() => resolveChannelAccount("whatsapp"));
+  });
+
+  test("surfaces DB failure before channel-provider fallback", async () => {
     for (const channel of ["instagram", "facebook", "sms", "reddit"] as const) {
-      assert.equal(await resolveChannelAccount(channel), undefined);
+      await assert.rejects(() => resolveChannelAccount(channel));
     }
   });
 });

@@ -1259,8 +1259,9 @@ test("S15 operator sends resolve the conversation's channel account", () => {
   // channel_accounts row before creating the conversation. (S12 moved the
   // webhook route's app logic into the shared inbound pipeline.)
   const route = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
-  assert.match(route, /matchSenderToChannelAccount\("whatsapp"/);
+  assert.match(route, /matchSenderToChannelAccount\(\s*"whatsapp",/);
   assert.match(route, /senderAddress: botPhone/);
+  assert.match(route, /event\.provider/);
   assert.match(route, /providerAccountId: event\.providerAccountId/);
   // Unmatched senders are ignored BEFORE findOrCreateConversation.
   const echoStart = route.indexOf("async function handleEcho");

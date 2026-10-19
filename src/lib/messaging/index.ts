@@ -7,11 +7,18 @@ export {
 } from "./registry";
 export { ycloudProvider } from "./providers/ycloud";
 export {
+  ChannelAccountResolutionError,
   matchSenderInRows,
   matchSenderToChannelAccount,
   resolveChannelAccount,
   resolveChannelAccountById,
+  resolveChannelAccountByIdStrict,
+  resolveChannelAccountStrict,
 } from "./accounts";
-export type { ChannelAccountRow, SenderAccountMatch } from "./accounts";
+export type {
+  ChannelAccountResolution,
+  ChannelAccountRow,
+  SenderAccountMatch,
+} from "./accounts";
 export { messenger } from "./messenger";
 export type { ExplicitCredentials, SendOptions } from "./messenger";

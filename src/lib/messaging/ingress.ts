@@ -34,7 +34,12 @@ import {
   isMessageDuplicate,
 } from "@/lib/channels/router";
 
-import { resolveChannelAccount } from "./accounts";
+import {
+  ChannelAccountResolutionError,
+  resolveChannelAccount,
+  resolveChannelAccountStrict,
+} from "./accounts";
+import { classifyError } from "./errors";
 import { channelForProvider, isChannelKind } from "./registry";
 import type {
   ChannelAccount,
@@ -151,23 +156,38 @@ export async function resolveIngressContext(
     ...eventSelfAddresses(event),
   ].filter((k): k is string => typeof k === "string" && k.length > 0);
 
-  let account: ChannelAccount | undefined;
-  if (keys.length === 0) {
-    // No routing key at all — unspecified resolution (first active row, or
-    // the legacy agent_config placeholder when the channel is unprovisioned).
-    account = await resolveChannelAccount(channel);
-  } else {
-    for (const key of [...new Set(keys)]) {
-      account = await resolveChannelAccount(channel, key);
-      if (account) break;
-    }
+  const resolution = await resolveChannelAccountStrict(
+    channel,
+    keys,
+    provider.id
+  );
+
+  if (resolution.kind === "db-error") {
+    // Retryable: the route/pipeline maps this to 503, never a silent ack.
+    throw new ChannelAccountResolutionError(resolution);
+  }
+  if (resolution.kind === "not-found" || resolution.kind === "mismatch") {
+    console.warn(
+      `[ingress] ${provider.id}/${channel} event ${event.deliveryId} skipped — ` +
+        `${
+          resolution.kind === "mismatch"
+            ? resolution.reason
+            : `no channel_accounts row matches providerAccountId=${event.providerAccountId || "n/a"}`
+        }; fail-closed`
+    );
+    return undefined;
   }
 
+  // resolved, unprovisioned, or a positively identified un-migrated install:
+  // the latter two use the secret-less legacy placeholder.
+  const account =
+    resolution.kind === "resolved"
+      ? resolution.account
+      : await resolveChannelAccount(channel);
   if (!account) {
     console.warn(
       `[ingress] ${provider.id}/${channel} event ${event.deliveryId} skipped — ` +
-        `no channel_accounts row matches ` +
-        `(providerAccountId=${event.providerAccountId || "n/a"}); fail-closed`
+        `no registered provider for channel '${channel}'`
     );
     return undefined;
   }
@@ -192,6 +212,31 @@ export function logAckedWithoutPersistence(
     `[ingress] ${event.provider} kind=${event.kind} deliveryId=${event.deliveryId}` +
       ` platformMessageId=${event.platformMessageId ?? "n/a"} — acknowledged without persistence` +
       (reason ? ` (${reason})` : "")
+  );
+}
+
+/**
+ * Identity key for passive persistence. Echoes carry the BUSINESS in
+ * `sender.phone` and the CUSTOMER in `providerConversationId` — keying an echo
+ * by the business number would merge every customer into one conversation.
+ */
+export function eventConversationExternalUserId(
+  event: NormalizedInboundEvent
+): string | undefined {
+  if (event.kind === "message.echo") {
+    return (
+      event.providerConversationId ??
+      event.sender.socialId ??
+      event.sender.bsuid ??
+      event.sender.username
+    );
+  }
+  return (
+    event.sender.phone ??
+    event.sender.socialId ??
+    event.sender.bsuid ??
+    event.sender.username ??
+    event.providerConversationId
   );
 }
 
@@ -223,12 +268,7 @@ export async function handlePassiveChannelEvent(
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
-    const externalUserId =
-      event.sender.phone ??
-      event.sender.socialId ??
-      event.sender.bsuid ??
-      event.sender.username ??
-      event.providerConversationId;
+    const externalUserId = eventConversationExternalUserId(event);
     if (!externalUserId) {
       logAckedWithoutPersistence(event, "no sender identity to key a conversation");
       return NextResponse.json({ ok: true }, { status: 200 });
@@ -269,12 +309,16 @@ export async function handlePassiveChannelEvent(
     );
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (error) {
-    // Passive path must never break the webhook ack — provider retries would
-    // replay the event; dedup on platformMessageId keeps replays idempotent.
+    // Transient persistence failures must be retried, not acked/dropped.
+    // Conversation/message dedup on platformMessageId keeps replays idempotent;
+    // channel_events dedups on provider delivery id.
     console.error(
-      `[ingress] ${event.provider} kind=${event.kind} deliveryId=${event.deliveryId} — persistence failed, acked:`,
+      `[ingress] ${event.provider} kind=${event.kind} deliveryId=${event.deliveryId} — persistence failed`,
       error
     );
-    return NextResponse.json({ ok: true }, { status: 200 });
+    return NextResponse.json(
+      { error: "event-persistence-failed" },
+      { status: classifyError(error) === "retryable-db" ? 503 : 500 }
+    );
   }
 }

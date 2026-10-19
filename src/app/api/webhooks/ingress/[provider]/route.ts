@@ -59,7 +59,19 @@ export async function POST(
 
   let response: NextResponse = NextResponse.json({ ok: true }, { status: 200 });
   for (const event of events) {
-    const ctx = await resolveIngressContext(provider, event);
+    let ctx;
+    try {
+      ctx = await resolveIngressContext(provider, event);
+    } catch (error) {
+      console.error(
+        `[ingress] ${provider.id} event ${event.deliveryId} — account resolution failed, retryable`,
+        error
+      );
+      return NextResponse.json(
+        { error: "account-resolution-failed" },
+        { status: 503 }
+      );
+    }
     if (!ctx) continue; // fail-closed — reason already logged
     response =
       provider.id === "ycloud" && ctx.channel === "whatsapp"

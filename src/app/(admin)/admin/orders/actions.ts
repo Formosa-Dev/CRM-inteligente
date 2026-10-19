@@ -182,52 +182,67 @@ export async function updateOrderStatus(
         .where(eq(orders.id, orderId));
     }
 
-    // Send WhatsApp notification + save to conversation history
+    // Send WhatsApp notification + save to conversation history. A send
+    // failure is surfaced to the caller — the status update itself succeeded,
+    // but the UI must not claim the customer was notified.
     const message = await buildWhatsAppMessage(newStatus, order as OrderRow);
     if (message && order.phoneNumber) {
       try {
-        // S15: honor the conversation's channel_account binding when one
-        // exists; unbound → placeholder (identical legacy behavior).
         const { messenger } = await import("@/lib/messaging");
-        const { resolveConversationAccountForPhone } = await import(
-          "@/lib/channels/router"
+        const {
+          resolveConversationAccountForPhone,
+          resolveDefaultWhatsAppAccount,
+        } = await import("@/lib/channels/router");
+        const { sendOrderStatusNotification } = await import(
+          "@/lib/whatsapp/order-status-notify"
         );
-        const phoneNorm = order.phoneNumber.startsWith("+")
+        const notified = await sendOrderStatusNotification(
+          { phoneNumber: order.phoneNumber, message },
+          {
+            resolveBinding: resolveConversationAccountForPhone,
+            resolveDefaultAccount: resolveDefaultWhatsAppAccount,
+            send: (msg, opts) => messenger.send(msg, opts),
+          }
+        );
+        if (!notified.ok) {
+          return {
+            success: false,
+            message: `Estado actualizado, pero no se pudo notificar: ${notified.error}`,
+          };
+        }
+
+        // Save the outgoing message in chat_messages so AI has context.
+        const { insertMessage } = await import("@/lib/channels/router");
+        const phone = order.phoneNumber.startsWith("+")
           ? order.phoneNumber
           : `+${order.phoneNumber}`;
-        const binding = await resolveConversationAccountForPhone(phoneNorm);
-        if (binding.kind === "unresolvable") {
-          throw new Error(
-            `cuenta de canal #${binding.accountId} no es resoluble`
-          );
-        }
-        const result = await messenger.send(
-          {
-            to: order.phoneNumber,
-            type: "text",
-            text: message,
-          },
-          binding.kind === "resolved"
-            ? { channel: "whatsapp", account: binding.account }
-            : {}
-        );
-        console.log(`[orders] WhatsApp sent to ${order.phoneNumber} for order #${orderId}: ${newStatus}`);
-
-        // Save the outgoing message in chat_messages so AI has context
-        // Se guarda como "system" (no "assistant") para que el AI sepa que es notificación automática
-        const { insertMessage } = await import("@/lib/channels/router");
-        const phone = order.phoneNumber.startsWith("+") ? order.phoneNumber : `+${order.phoneNumber}`;
+        const { normalizePhone } = await import("@/lib/phone-utils");
         const conv = await db
           .select({ id: conversations.id })
           .from(conversations)
-          .where(eq(conversations.whatsappId, phone))
+          .where(
+            or(
+              eq(conversations.whatsappId, phone),
+              eq(conversations.externalUserIdNormalized, normalizePhone(phone))
+            )
+          )
           .limit(1);
         if (conv[0]) {
-          await insertMessage(conv[0].id, "system", message, undefined, result.ok ? result.providerMessageId || undefined : undefined);
-          console.log(`[orders] Status message saved to conversation #${conv[0].id} (role=system, wamid=${result.ok ? result.providerMessageId : "none"})`);
+          await insertMessage(
+            conv[0].id,
+            "system",
+            message,
+            undefined,
+            notified.providerMessageId
+          );
         }
       } catch (e) {
-        console.warn(`[orders] Failed to send WhatsApp for order #${orderId}:`, e);
+        return {
+          success: false,
+          message: `Estado actualizado, pero no se pudo notificar: ${
+            e instanceof Error ? e.message : "error desconocido"
+          }`,
+        };
       }
     }
 
@@ -259,43 +274,55 @@ export async function notifyCustomer(
     const msg = await buildWhatsAppMessage(order.status, order as OrderRow);
     if (!msg) return { success: false, message: "No hay mensaje para este estado" };
 
-    // S15: honor the conversation's channel_account binding when one exists.
+    // Send through the conversation's account (or the single active account);
+    // ambiguous/unresolvable bindings fail closed and are surfaced.
     const { messenger } = await import("@/lib/messaging");
-    const { resolveConversationAccountForPhone } = await import(
-      "@/lib/channels/router"
+    const {
+      resolveConversationAccountForPhone,
+      resolveDefaultWhatsAppAccount,
+    } = await import("@/lib/channels/router");
+    const { sendOrderStatusNotification } = await import(
+      "@/lib/whatsapp/order-status-notify"
     );
-    const phoneNorm = order.phoneNumber.startsWith("+")
-      ? order.phoneNumber
-      : `+${order.phoneNumber}`;
-    const binding = await resolveConversationAccountForPhone(phoneNorm);
-    if (binding.kind === "unresolvable") {
+    const notified = await sendOrderStatusNotification(
+      { phoneNumber: order.phoneNumber, message: msg },
+      {
+        resolveBinding: resolveConversationAccountForPhone,
+        resolveDefaultAccount: resolveDefaultWhatsAppAccount,
+        send: (message, opts) => messenger.send(message, opts),
+      }
+    );
+    if (!notified.ok) {
       return {
         success: false,
-        message: `Error al enviar: la cuenta de canal #${binding.accountId} no es resoluble`,
+        message: `Error al enviar: ${notified.error}`,
       };
     }
-    const result = await messenger.send(
-      {
-        to: order.phoneNumber,
-        type: "text",
-        text: msg,
-      },
-      binding.kind === "resolved"
-        ? { channel: "whatsapp", account: binding.account }
-        : {}
-    );
-    if (!result.ok) return { success: false, message: `Error al enviar: ${result.error}` };
 
     // Save notification in conversation history so AI has context (role "system")
     const { insertMessage } = await import("@/lib/channels/router");
-    const phone = order.phoneNumber.startsWith("+") ? order.phoneNumber : `+${order.phoneNumber}`;
+    const phone = order.phoneNumber.startsWith("+")
+      ? order.phoneNumber
+      : `+${order.phoneNumber}`;
+    const { normalizePhone } = await import("@/lib/phone-utils");
     const conv = await db
       .select({ id: conversations.id })
       .from(conversations)
-      .where(eq(conversations.whatsappId, phone))
+      .where(
+        or(
+          eq(conversations.whatsappId, phone),
+          eq(conversations.externalUserIdNormalized, normalizePhone(phone))
+        )
+      )
       .limit(1);
     if (conv[0]) {
-      await insertMessage(conv[0].id, "system", msg, undefined, result.providerMessageId || undefined);
+      await insertMessage(
+        conv[0].id,
+        "system",
+        msg,
+        undefined,
+        notified.providerMessageId
+      );
     }
 
     return { success: true, message: "Notificación enviada" };

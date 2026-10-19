@@ -249,25 +249,69 @@ export async function broadcastText(
     const result: BroadcastResult = { phone: r.phone, name: r.name, success: false };
 
     try {
-      // 1. Enviar WhatsApp — si la conversación del destinatario está
-      //    vinculada a una channel_account, el envío sale por esa cuenta
-      //    (S15); unbound → placeholder, igual que siempre.
-      const { resolveConversationAccountForPhone } = await import(
-        "@/lib/channels/router"
-      );
+      // 1. Enviar WhatsApp — bound conversation → its account; unbound →
+      //    the single active account. Ambiguous/unresolvable/transient
+      //    bindings fail closed per recipient, never a global send.
+      const {
+        resolveConversationAccountForPhone,
+        resolveDefaultWhatsAppAccount,
+      } = await import("@/lib/channels/router");
       const binding = await resolveConversationAccountForPhone(phone);
-      if (binding.kind === "unresolvable") {
-        result.error = `cuenta de canal #${binding.accountId} no es resoluble`;
+      if (binding.kind === "error") {
+        result.error = "no se pudo resolver la cuenta del canal (error transitorio)";
         results.push(result);
         failed++;
         onProgress?.(i + 1, recipients.length, result);
         await sleep(DELAY_BETWEEN_MS);
         continue;
       }
-      const sendOpts =
-        binding.kind === "resolved"
-          ? { channel: "whatsapp" as const, account: binding.account }
-          : {};
+      if (binding.kind === "ambiguous") {
+        result.error = `teléfono vinculado a varias cuentas (${binding.accountIds.join(", ")})`;
+        results.push(result);
+        failed++;
+        onProgress?.(i + 1, recipients.length, result);
+        await sleep(DELAY_BETWEEN_MS);
+        continue;
+      }
+      if (binding.kind === "unresolvable") {
+        result.error = `cuenta de canal #${binding.accountId} no es resoluble (${binding.reason})`;
+        results.push(result);
+        failed++;
+        onProgress?.(i + 1, recipients.length, result);
+        await sleep(DELAY_BETWEEN_MS);
+        continue;
+      }
+
+      let account = binding.kind === "resolved" ? binding.account : undefined;
+      if (!account) {
+        const fallback = await resolveDefaultWhatsAppAccount();
+        if (fallback.kind === "db-error") {
+          result.error = "no se pudo resolver la cuenta por defecto (error transitorio)";
+          results.push(result);
+          failed++;
+          onProgress?.(i + 1, recipients.length, result);
+          await sleep(DELAY_BETWEEN_MS);
+          continue;
+        }
+        if (fallback.kind === "ambiguous") {
+          result.error = `varias cuentas activas y ninguna vinculada (${fallback.reason})`;
+          results.push(result);
+          failed++;
+          onProgress?.(i + 1, recipients.length, result);
+          await sleep(DELAY_BETWEEN_MS);
+          continue;
+        }
+        if (fallback.kind === "resolved") account = fallback.account;
+      }
+
+      const accountId = account ? Number(account.id) : undefined;
+      const channelAccountId =
+        accountId != null && Number.isInteger(accountId) && accountId > 0
+          ? accountId
+          : null;
+      const sendOpts = account
+        ? { channel: "whatsapp" as const, account }
+        : {};
 
       let wamid: string | undefined;
       if (imageUrl) {
@@ -310,15 +354,28 @@ export async function broadcastText(
         phone,
         r.name || undefined,
         r.phone,
+        channelAccountId
       );
 
-      // 3. Guardar el mensaje en chat_messages
+      // 3. Guardar el mensaje en chat_messages (stamped with the same account)
       if (imageUrl) {
-        await insertMessage(conv.id, "assistant", text, [
-          { type: "image", url: imageUrl, caption: text },
-        ]);
+        await insertMessage(
+          conv.id,
+          "assistant",
+          text,
+          [{ type: "image", url: imageUrl, caption: text }],
+          undefined,
+          channelAccountId
+        );
       } else {
-        await insertMessage(conv.id, "assistant", text, undefined, wamid);
+        await insertMessage(
+          conv.id,
+          "assistant",
+          text,
+          undefined,
+          wamid,
+          channelAccountId
+        );
       }
 
       result.success = true;

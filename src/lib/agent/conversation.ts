@@ -2,13 +2,13 @@ import { db } from "@/db";
 import { conversations } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import type { ModelMessage } from "ai";
+import { normalizePhone } from "@/lib/phone-utils";
 
 const MAX_MESSAGES = 50;
 const TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export async function loadConversation(phone: string): Promise<ModelMessage[]> {
   try {
-    const { normalizePhone } = await import("@/lib/phone-utils");
     const normalizedPhone = normalizePhone(phone);
     const rows = await db
       .select()
@@ -60,6 +60,9 @@ export async function saveConversation(
       await db.insert(conversations).values({
         whatsappId: phone,
         customerPhone: phone,
+        channel: "whatsapp",
+        externalUserId: phone,
+        externalUserIdNormalized: normalizePhone(phone),
         messages: trimmed as unknown as Record<string, unknown>[],
         status: "active",
       });

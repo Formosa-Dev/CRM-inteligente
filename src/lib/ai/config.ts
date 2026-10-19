@@ -9,14 +9,13 @@
 
 import { createOpenAI, openai as defaultOpenai } from "@ai-sdk/openai";
 import type { OpenAIProvider } from "@ai-sdk/openai";
-import { db } from "@/db";
-import { agentConfig } from "@/db/schema";
-import { eq } from "drizzle-orm";
 import { decryptIfEncrypted } from "@/lib/encryption";
 import {
+  AgentConfigResolutionError,
+  configCacheKey,
   currentAgentConfigScope,
-  resolveAgentConfigId,
-  scopeKeyOf,
+  resolveAgentConfigStrict,
+  shouldCacheResolution,
 } from "@/lib/agent-config-scope";
 import { AI_BASE_URL, AI_MODEL, AI_MODEL_FAST, AI_MODEL_VISION } from "./models";
 
@@ -49,35 +48,37 @@ export function invalidateAIConfigCache(): void {
 
 export async function getAIConfig(): Promise<AIConfig> {
   const scope = currentAgentConfigScope();
-  const cacheKey = scopeKeyOf(scope);
+  const cacheKey = configCacheKey(scope);
   const hit = cached.get(cacheKey);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
-  try {
-    const [cfg] = await db
-      .select({
-        aiApiKey: agentConfig.aiApiKey,
-        aiBaseUrl: agentConfig.aiBaseUrl,
-        aiModel: agentConfig.aiModel,
-        aiModelFast: agentConfig.aiModelFast,
-        aiModelVision: agentConfig.aiModelVision,
-      })
-      .from(agentConfig)
-      .where(eq(agentConfig.id, await resolveAgentConfigId(scope)))
-      .limit(1);
-    const value: AIConfig = {
-      // Stored AES-256-GCM encrypted; tolerant of legacy plaintext rows.
-      apiKey: decryptIfEncrypted(cfg?.aiApiKey?.trim() || "") || ENV_CONFIG.apiKey,
-      baseUrl: (cfg?.aiBaseUrl?.trim() || ENV_CONFIG.baseUrl).replace(/\/+$/, ""),
-      model: cfg?.aiModel?.trim() || ENV_CONFIG.model,
-      modelFast: cfg?.aiModelFast?.trim() || ENV_CONFIG.modelFast,
-      modelVision: cfg?.aiModelVision?.trim() || ENV_CONFIG.modelVision,
-    };
-    cached.set(cacheKey, { at: Date.now(), value });
-    return value;
-  } catch {
-    // Columns may not exist on older deployments — env is the fallback.
+
+  const resolution = await resolveAgentConfigStrict(scope);
+  if (resolution.kind === "db-error") {
+    // A transient DB failure must not silently switch provider credentials.
+    throw new AgentConfigResolutionError(resolution);
+  }
+
+  if (resolution.kind !== "resolved") {
+    // No row (or an un-migrated schema) is a bootstrap state, not a scoped
+    // fallback: use env without polluting a scoped cache key.
     return ENV_CONFIG;
   }
+
+  const cfg = resolution.row;
+  const value: AIConfig = {
+    // Stored AES-256-GCM encrypted; tolerant of legacy plaintext rows.
+    apiKey: decryptIfEncrypted(cfg.aiApiKey?.trim() || "") || ENV_CONFIG.apiKey,
+    baseUrl: (cfg.aiBaseUrl?.trim() || ENV_CONFIG.baseUrl).replace(/\/+$/, ""),
+    model: cfg.aiModel?.trim() || ENV_CONFIG.model,
+    modelFast: cfg.aiModelFast?.trim() || ENV_CONFIG.modelFast,
+    modelVision: cfg.aiModelVision?.trim() || ENV_CONFIG.modelVision,
+  };
+  // Only an exact-scope result is cached under this key. Chained global
+  // fallbacks stay uncached so they can never masquerade as account config.
+  if (shouldCacheResolution(scope, resolution.source)) {
+    cached.set(cacheKey, { at: Date.now(), value });
+  }
+  return value;
 }
 
 /**
