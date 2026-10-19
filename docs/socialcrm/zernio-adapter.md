@@ -61,15 +61,45 @@ Zernio `accountId`, `credentialsRef` e.g. `env:ZERNIO_`).
 | `templateParams` ordering | `createTemplateParams()` flattens Meta `components[].parameters[]` texts | positional order assumed; verify vs approved template |
 | Non-ChannelKind platforms (tiktok, slack, …) | `raw.platform` hint + `isChannelKind` gate | events fail closed (no channel) — expand enum if adopted |
 
+## Embedded connect (S16 — /admin/channels → "Conexión rápida con Zernio")
+
+`src/lib/messaging/providers/zernio-connect.ts` drives the hosted connect:
+
+1. `startZernioConnect(platform)` (server action, admin-only) resolves the
+   profile — `ZERNIO_PROFILE_ID` env or `GET /v1/profiles` default-first —
+   and calls `GET /v1/connect/{platform}?profileId&redirect_url` with
+   `Authorization: Bearer $ZERNIO_API_KEY` (env, never DB). WhatsApp adds
+   `onboarding=api` (Embedded Signup).
+2. The browser navigates to the returned `authUrl`. Our `redirect_url`
+   carries a `state` nonce inside its own query string — Zernio preserves
+   it through the OAuth roundtrip, and the callback verifies it against a
+   one-shot httpOnly cookie (CSRF).
+3. `GET /api/channels/zernio/callback` (admin session required) reads
+   `connected`/`accountId`/`username`, best-effort hydrates the account via
+   `GET /v1/accounts?search={accountId}` (phoneNumber for WhatsApp,
+   username/displayName elsewhere), and upserts `channel_accounts` on
+   `(provider, providerAccountId)` with `credentialsRef=env:ZERNIO_`.
+4. "Registrar en Zernio" posts our ingress URL + the caller-chosen
+   `ZERNIO_WEBHOOK_SECRET` to `POST /v1/webhooks/settings` — no dashboard
+   copy-paste needed. YCloud/Kapso still register webhooks manually; their
+   URLs are shown for copy.
+
+Platforms with a connect button: whatsapp, instagram, facebook, reddit
+(OAuth-capable). Telegram/SMS stay manual — Telegram connects by bot token,
+not OAuth. Facebook runs in STANDARD mode: Zernio hosts Page selection, so
+the callback still lands with a final `accountId`.
+
 ## Provisioning checklist (per account)
 
-1. Zernio dashboard → API key + `accountId` for the connected profile.
-2. `POST /v1/webhooks/settings` (or dashboard) with
+1. Zernio dashboard → API key + `accountId` for the connected profile —
+   OR the embedded connect above (it writes the row for you).
+2. `POST /v1/webhooks/settings` (or the "Registrar en Zernio" button) with
    `url = https://<host>/api/webhooks/ingress/zernio`, caller-chosen `secret`,
    `events` incl. `message.received`, `message.sent`, `message.delivered`,
    `message.read`, `message.failed`, `comment.received`, `account.*`.
 3. Env: `ZERNIO_WEBHOOK_SECRET` (the same secret), `ZERNIO_API_KEY` when
    `credentialsRef = env:ZERNIO_` (per-account: `env:ZERNIO_MAIN_` →
-   `ZERNIO_MAIN_API_KEY`).
+   `ZERNIO_MAIN_API_KEY`). Optional `ZERNIO_PROFILE_ID` pins the connect
+   profile; without it the default profile is used.
 4. Admin → Canales → row `provider=zernio`, `channel`, `providerAccountId`,
    `senderAddress`, `credentialsRef`.

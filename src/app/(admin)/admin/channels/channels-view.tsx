@@ -1,9 +1,17 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { PlugIcon, PowerIcon, PowerOffIcon } from "lucide-react";
+import {
+  CheckIcon,
+  CopyIcon,
+  LinkIcon,
+  PlugIcon,
+  PowerIcon,
+  PowerOffIcon,
+  WebhookIcon,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,9 +27,18 @@ import {
 } from "@/components/ui/table";
 import {
   createChannelAccount,
+  registerZernioWebhookAction,
   setChannelAccountStatus,
+  startZernioConnect,
   type ChannelAccountRow,
 } from "./actions";
+import type { ProviderId } from "@/lib/messaging/types";
+
+export interface WebhookEndpoint {
+  provider: ProviderId;
+  url: string;
+  note?: string;
+}
 
 const PROVIDERS = [
   { value: "ycloud", label: "YCloud" },
@@ -44,10 +61,68 @@ const PROVIDER_HINTS: Record<string, string> = {
   kapso: "phone_number_id de Meta asignado por Kapso",
 };
 
+/** Zernio embedded-connect buttons (OAuth / WhatsApp Embedded Signup). */
+const ZERNIO_CONNECT: { platform: string; label: string }[] = [
+  { platform: "whatsapp", label: "WhatsApp (Embedded Signup)" },
+  { platform: "instagram", label: "Instagram" },
+  { platform: "facebook", label: "Facebook" },
+  { platform: "reddit", label: "Reddit" },
+];
+
+const FLASH_ERRORS: Record<string, string> = {
+  "oauth-state": "Estado OAuth inválido — reintentá la conexión",
+  "connect-params": "Zernio no devolvió plataforma/cuenta válidas",
+  "persist-failed": "No se pudo guardar la cuenta — revisá el log del servidor",
+};
+
+const PROVIDER_LABELS: Record<string, string> = {
+  ycloud: "YCloud",
+  zernio: "Zernio",
+  kapso: "Kapso",
+};
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(null);
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          timer.current = setTimeout(() => setCopied(false), 2000);
+        } catch {
+          toast.error("No se pudo copiar — seleccioná la URL a mano");
+        }
+      }}
+    >
+      {copied ? (
+        <CheckIcon className="size-3.5 text-emerald-400" />
+      ) : (
+        <CopyIcon className="size-3.5" />
+      )}
+      {copied ? "Copiado" : "Copiar"}
+    </Button>
+  );
+}
+
 export function ChannelsView({
   initialAccounts,
+  webhooks,
+  baseUrlMissing,
+  flashConnected,
+  flashError,
 }: {
   initialAccounts: ChannelAccountRow[];
+  webhooks: WebhookEndpoint[];
+  baseUrlMissing: boolean;
+  flashConnected?: string;
+  flashError?: string;
 }) {
   const router = useRouter();
   const [accounts, setAccounts] = useState(initialAccounts);
@@ -59,6 +134,39 @@ export function ChannelsView({
   const [senderAddress, setSenderAddress] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [credentialsRef, setCredentialsRef] = useState("");
+
+  // Flash from the zernio connect callback (?connected=zernio:ig | ?error=…)
+  useEffect(() => {
+    if (flashConnected) {
+      toast.success(`Cuenta conectada (${flashConnected})`);
+    } else if (flashError) {
+      toast.error(FLASH_ERRORS[flashError] ?? "Error al conectar la cuenta");
+    }
+    if (flashConnected || flashError) router.replace("/admin/channels");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function connectZernio(platform: string) {
+    startTransition(async () => {
+      const res = await startZernioConnect(platform);
+      if (!res.ok || !res.authUrl) {
+        toast.error(res.error ?? "No se pudo iniciar la conexión");
+        return;
+      }
+      window.location.href = res.authUrl;
+    });
+  }
+
+  function registerZernioHook() {
+    startTransition(async () => {
+      const res = await registerZernioWebhookAction();
+      if (!res.ok) {
+        toast.error(res.error ?? "No se pudo registrar el webhook");
+        return;
+      }
+      toast.success("Webhook registrado en Zernio");
+    });
+  }
 
   function submit() {
     startTransition(async () => {
@@ -193,6 +301,88 @@ export function ChannelsView({
           <PlugIcon className="size-4" />
           Conectar
         </Button>
+      </div>
+
+      {/* Zernio embedded connect */}
+      <div className="glass-card rounded-xl p-5">
+        <div className="mb-4 flex items-center gap-2">
+          <LinkIcon className="size-4 text-primary" />
+          <h2 className="text-sm font-semibold">Conexión rápida con Zernio</h2>
+        </div>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Requiere <code className="font-mono text-xs">ZERNIO_API_KEY</code> en el
+          entorno. Te redirige a Zernio para autorizar la cuenta; al volver se
+          crea la fila automáticamente (credenciales vía{" "}
+          <code className="font-mono text-xs">env:ZERNIO_</code>). Facebook
+          incluye la selección de página dentro del flujo.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {ZERNIO_CONNECT.map((c) => (
+            <Button
+              key={c.platform}
+              variant="outline"
+              disabled={pending}
+              onClick={() => connectZernio(c.platform)}
+            >
+              <PlugIcon className="size-3.5" />
+              {c.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      {/* Webhook endpoints per provider */}
+      <div className="glass-card rounded-xl p-5">
+        <div className="mb-4 flex items-center gap-2">
+          <WebhookIcon className="size-4 text-primary" />
+          <h2 className="text-sm font-semibold">Webhooks entrantes</h2>
+        </div>
+        {baseUrlMissing ? (
+          <p className="text-sm text-muted-foreground">
+            Configurá <code className="font-mono text-xs">AUTH_URL</code> o{" "}
+            <code className="font-mono text-xs">NEXT_PUBLIC_APP_URL</code> para
+            ver las URLs de webhook de este deploy.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {webhooks.map((w) => (
+              <div
+                key={w.provider}
+                className="flex flex-col gap-1 rounded-lg border border-border/60 p-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    {PROVIDER_LABELS[w.provider] ?? w.provider}
+                  </div>
+                  <div className="truncate font-mono text-xs">{w.url}</div>
+                  {w.note && (
+                    <div className="text-[11px] text-muted-foreground">
+                      {w.note}
+                    </div>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <CopyButton text={w.url} />
+                  {w.provider === "zernio" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={pending}
+                      onClick={registerZernioHook}
+                    >
+                      Registrar en Zernio
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+            <p className="text-[11px] text-muted-foreground">
+              En Zernio el secret es <code className="font-mono">ZERNIO_WEBHOOK_SECRET</code>;
+              en Kapso, el de su dashboard; en YCloud, el token de verificación
+              habitual.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Accounts table */}

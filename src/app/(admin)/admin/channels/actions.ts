@@ -1,7 +1,10 @@
 "use server";
 
+import { randomBytes } from "node:crypto";
+
 import { desc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 
 import { db } from "@/db";
 import { channelAccounts } from "@/db/schema";
@@ -11,7 +14,15 @@ import {
   CHANNEL_KINDS,
   PROVIDER_IDS,
 } from "@/lib/messaging/registry";
+import {
+  ZERNIO_CONNECT_STATE_COOKIE,
+  getZernioConnectUrl,
+  isZernioConnectPlatform,
+  registerZernioWebhook,
+  resolveZernioProfileId,
+} from "@/lib/messaging/providers/zernio-connect";
 import type { ChannelKind, ProviderId } from "@/lib/messaging/types";
+import { publicBaseUrl } from "./webhook-endpoints";
 
 export interface ChannelAccountRow {
   id: number;
@@ -123,4 +134,95 @@ export async function setChannelAccountStatus(
     .where(eq(channelAccounts.id, id));
   revalidatePath("/admin/channels");
   return { ok: true };
+}
+
+/**
+ * Embedded connect for Zernio: returns Zernio's `authUrl` so the client
+ * navigates the operator there. The callback lands on
+ * /api/channels/zernio/callback and upserts the channel_accounts row.
+ * Requires ZERNIO_API_KEY in env (the same key the row references via
+ * env:ZERNIO_) — this action never sees or stores the key itself.
+ */
+export async function startZernioConnect(
+  platform: string
+): Promise<{ ok: boolean; authUrl?: string; error?: string }> {
+  if (!(await requireAdmin())) {
+    return { ok: false, error: "Solo administradores pueden conectar cuentas" };
+  }
+  if (!isZernioConnectPlatform(platform)) {
+    return { ok: false, error: `Conexión embebida no disponible para '${platform}'` };
+  }
+  const apiKey = process.env.ZERNIO_API_KEY?.trim();
+  if (!apiKey) {
+    return {
+      ok: false,
+      error: "Falta ZERNIO_API_KEY en las variables de entorno",
+    };
+  }
+  const baseUrl = publicBaseUrl();
+  if (!baseUrl) {
+    return {
+      ok: false,
+      error: "Falta la URL pública (AUTH_URL o NEXT_PUBLIC_APP_URL)",
+    };
+  }
+
+  const profile = await resolveZernioProfileId(apiKey);
+  if (!profile.ok) return { ok: false, error: profile.error };
+
+  // CSRF nonce rides inside our own redirect_url — Zernio preserves the
+  // query string through the OAuth roundtrip (connecting-accounts.mdx).
+  const state = randomBytes(16).toString("hex");
+  const cookieStore = await cookies();
+  cookieStore.set(ZERNIO_CONNECT_STATE_COOKIE, state, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: baseUrl.startsWith("https"),
+    path: "/",
+    maxAge: 10 * 60,
+  });
+
+  const connect = await getZernioConnectUrl({
+    platform,
+    profileId: profile.profileId,
+    redirectUrl: `${baseUrl}/api/channels/zernio/callback?state=${state}`,
+    apiKey,
+  });
+  if (!connect.ok) return { ok: false, error: connect.error };
+  return { ok: true, authUrl: connect.authUrl };
+}
+
+/**
+ * One-click webhook registration for Zernio: posts our ingress URL and the
+ * caller-chosen secret (ZERNIO_WEBHOOK_SECRET) to /v1/webhooks/settings.
+ * YCloud/Kapso still configure webhooks in their own consoles — the URLs
+ * shown above are what to paste there.
+ */
+export async function registerZernioWebhookAction(): Promise<{
+  ok: boolean;
+  error?: string;
+}> {
+  if (!(await requireAdmin())) {
+    return { ok: false, error: "Solo administradores pueden registrar webhooks" };
+  }
+  const apiKey = process.env.ZERNIO_API_KEY?.trim();
+  const secret = process.env.ZERNIO_WEBHOOK_SECRET?.trim();
+  if (!apiKey || !secret) {
+    return {
+      ok: false,
+      error: "Faltan ZERNIO_API_KEY y/o ZERNIO_WEBHOOK_SECRET en el entorno",
+    };
+  }
+  const baseUrl = publicBaseUrl();
+  if (!baseUrl) {
+    return {
+      ok: false,
+      error: "Falta la URL pública (AUTH_URL o NEXT_PUBLIC_APP_URL)",
+    };
+  }
+  return registerZernioWebhook({
+    url: `${baseUrl}/api/webhooks/ingress/zernio`,
+    secret,
+    apiKey,
+  });
 }

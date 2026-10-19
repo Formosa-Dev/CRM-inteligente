@@ -1,5 +1,6 @@
 import { fetchChannelAccounts } from "./actions";
 import { ChannelsView } from "./channels-view";
+import { publicBaseUrl, webhookEndpoints } from "./webhook-endpoints";
 
 export const metadata = {
   title: "Canales — Admin",
@@ -7,8 +8,14 @@ export const metadata = {
 
 export const dynamic = "force-dynamic";
 
-export default async function ChannelsPage() {
+export default async function ChannelsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ connected?: string; error?: string }>;
+}) {
+  const { connected, error } = await searchParams;
   const accounts = await fetchChannelAccounts();
+  const baseUrl = publicBaseUrl();
 
   return (
     <div className="flex flex-col gap-6">
@@ -22,7 +29,13 @@ export default async function ChannelsPage() {
         </p>
       </div>
 
-      <ChannelsView initialAccounts={accounts} />
+      <ChannelsView
+        initialAccounts={accounts}
+        webhooks={baseUrl ? webhookEndpoints(baseUrl) : []}
+        baseUrlMissing={!baseUrl}
+        flashConnected={connected}
+        flashError={error}
+      />
     </div>
   );
 }
