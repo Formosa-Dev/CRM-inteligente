@@ -108,7 +108,7 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
             Tu Pedido
             {itemCount > 0 && (
               <span className="text-muted-foreground text-sm font-normal">
-                ({itemCount} {itemCount === 1 ? "item" : "items"})
+                ({itemCount} {itemCount === 1 ? "producto" : "productos"})
               </span>
             )}
           </SheetTitle>
