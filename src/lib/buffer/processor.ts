@@ -10,6 +10,11 @@ function sleep(ms: number): Promise<void> {
 // keep arriving mid-processing (e.g. a very chatty user).
 const MAX_REPROCESS_DEPTH = 3;
 
+// Maximum times a batch is handed to processCallback before it is dead-
+// lettered. The retry delay comes free: each re-enqueue resets the debounce
+// timer, so retries ride the normal drain cadence instead of hot-looping.
+const MAX_CALLBACK_ATTEMPTS = 3;
+
 // Main processing function — called after enqueue
 export async function scheduleBufferProcessing(
   channel: Channel,
@@ -92,7 +97,34 @@ async function processBufferLoop(
         err instanceof Error ? err.message : err,
         err instanceof Error ? err.stack : ''
       );
-      // Don't re-throw — we still need to check for new messages and release the lock cleanly
+      // A-11 — the batch was destructively fetched before the callback ran,
+      // so a failed callback must never mean silent data loss. Re-enqueue
+      // it with a bumped attempt counter (bounded); once retries are
+      // exhausted the batch is dead-lettered durably instead of dropped.
+      // Returning here skips the content-dedup block below — it would
+      // fetch-and-clear the re-enqueued copy and mistake it for a new
+      // duplicate batch.
+      const attempts = Math.max(0, ...messages.map((m) => m.attempt ?? 0)) + 1;
+      if (attempts < MAX_CALLBACK_ATTEMPTS) {
+        for (const m of messages) {
+          await BufferManager.enqueue(channel, userId, { ...m, attempt: attempts });
+        }
+        console.warn(
+          `[buffer:retry] Re-enqueued ${messages.length} msg(s) for ${channel}:${userId} (attempt ${attempts + 1}/${MAX_CALLBACK_ATTEMPTS})`
+        );
+      } else {
+        await BufferManager.enqueueDeadLetter(channel, userId, {
+          failedAt: Date.now(),
+          attempts,
+          messages,
+        });
+        console.error(
+          `[buffer:dead-letter] ${messages.length} msg(s) for ${channel}:${userId} exhausted ${MAX_CALLBACK_ATTEMPTS} callback attempts — moved to dead letter`
+        );
+      }
+      // The outer loop's post-release hasNewMessages re-check picks the
+      // re-enqueued batch up on the next drain.
+      return;
     }
 
   // GRACEFUL INTERRUPTION: check if new messages arrived during processing

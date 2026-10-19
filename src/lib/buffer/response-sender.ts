@@ -121,6 +121,20 @@ export async function sendWhatsAppBubbles(params: {
    * PLATFORM_NOT_SUPPORTED / TEMPLATE_REQUIRED).
    */
   providerConversationId?: string;
+  /**
+   * A-11 — invoked right after each bubble's send resolves ok, with the
+   * fragment that was actually delivered and its providerMessageId. Lets
+   * the caller persist per-bubble (only delivered fragments reach history,
+   * each with its own wamid for echo dedup). A throwing callback aborts
+   * the remaining bubbles like a send failure — wrap persistence errors
+   * inside the callback if they must not poison the send.
+   */
+  onBubbleSent?: (bubble: {
+    index: number;
+    text: string;
+    providerMessageId: string;
+    status: string;
+  }) => void | Promise<void>;
 }): Promise<YCloudResponse | null> {
   const bubbles = splitIntoBubbles(params.text);
   let lastResult: YCloudResponse | null = null;
@@ -156,6 +170,12 @@ export async function sendWhatsAppBubbles(params: {
       throw error;
     }
     lastResult = { id: res.providerMessageId, status: res.status };
+    await params.onBubbleSent?.({
+      index: i,
+      text: bubbles[i],
+      providerMessageId: res.providerMessageId,
+      status: res.status,
+    });
   }
 
   return lastResult;

@@ -19,6 +19,19 @@ export interface BufferedMessage {
   messageId: string;
   timestamp: number;
   contentAttributes?: unknown[];
+  /**
+   * A-11 — callback retry counter, incremented each time the batch is
+   * re-enqueued after a processing failure. Serialized with the message so
+   * it survives the Redis round trip.
+   */
+  attempt?: number;
+}
+
+/** A-11 — a batch that exhausted its callback retries. Never dropped silently. */
+export interface DeadLetterEntry {
+  failedAt: number;
+  attempts: number;
+  messages: BufferedMessage[];
 }
 
 // ─── In-Memory Fallback (cuando Redis no está disponible) ───────────────────
@@ -46,6 +59,14 @@ setInterval(() => {
 function memKey(channel: Channel, userId: string): string {
   return `${channel}:${userId}`;
 }
+
+function deadLetterKey(channel: Channel, userId: string): string {
+  return `deadletter:${channel}:${userId}`;
+}
+
+// Dead letters are rare — in-memory fallback is bounded implicitly by the
+// small failure volume; entries expire with the process like the buffer.
+const inMemoryDeadLetters = new Map<string, DeadLetterEntry[]>();
 
 /** Full normalized content fingerprint for the level-2 dedup (A-50). */
 function contentHash(content: string): string {
@@ -195,6 +216,44 @@ export const BufferManager = {
     const key = memKey(channel, userId);
     const entry = inMemoryStore.get(key);
     return entry ? entry.messages.length > 0 : false;
+  },
+
+  // A-11 — durable failure signal: a batch that exhausted its callback
+  // retries is pushed to a dead-letter list (7d TTL on Redis) instead of
+  // being dropped. Inspectable via getDeadLetters for ops/replay.
+  async enqueueDeadLetter(
+    channel: Channel,
+    userId: string,
+    entry: DeadLetterEntry
+  ): Promise<void> {
+    if (redis && !redisDown) {
+      try {
+        const dKey = deadLetterKey(channel, userId);
+        await redis.rpush(dKey, JSON.stringify(entry));
+        await redis.expire(dKey, 7 * 24 * 60 * 60);
+        return;
+      } catch (err) {
+        warnRedisDown(err);
+      }
+    }
+    const key = memKey(channel, userId);
+    const list = inMemoryDeadLetters.get(key) ?? [];
+    list.push(entry);
+    inMemoryDeadLetters.set(key, list);
+  },
+
+  async getDeadLetters(channel: Channel, userId: string): Promise<DeadLetterEntry[]> {
+    if (redis && !redisDown) {
+      try {
+        const raw = await redis.lrange(deadLetterKey(channel, userId), 0, -1);
+        return raw.map((item) =>
+          (typeof item === "string" ? JSON.parse(item) : item) as DeadLetterEntry
+        );
+      } catch (err) {
+        warnRedisDown(err);
+      }
+    }
+    return inMemoryDeadLetters.get(memKey(channel, userId)) ?? [];
   },
 
   // Level-2 content dedup: returns true if the same content was seen in the last 5 seconds

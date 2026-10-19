@@ -1356,6 +1356,36 @@ export async function handleNormalizedEvent(
       // (zernio) cannot send to `to` directly: every outbound send below
       // must carry this as providerConversationId.
       const replyThreadId = convBinding?.externalThreadId ?? undefined;
+
+      // A-11 — per-bubble persistence: each bubble is inserted the moment
+      // its send succeeds, carrying its own providerMessageId. A failed
+      // send leaves no phantom assistant reply in history; a mid-send
+      // failure keeps only the fragments actually delivered; and every
+      // stored wamid lets the echo pipeline recognize that bubble as ours
+      // (the A-04 fragment match covers providers that return no id).
+      // A persist hiccup must NOT abort the remaining sends — the bubble
+      // was already delivered — so it is logged, not thrown.
+      const persistSentBubble = async (bubble: {
+        text: string;
+        providerMessageId: string;
+      }) => {
+        try {
+          await insertMessage(
+            conversationId,
+            "assistant",
+            bubble.text,
+            undefined,
+            bubble.providerMessageId || undefined,
+            channelAccountId
+          );
+        } catch (persistErr) {
+          console.warn(
+            "[webhook:wa] Bubble persist failed (send already delivered):",
+            persistErr
+          );
+        }
+      };
+
       let replyAccount: ChannelAccount | undefined;
       if (convBinding?.channelAccountId != null) {
         const { resolveChannelAccountById } = await import("./accounts");
@@ -1395,24 +1425,18 @@ export async function handleNormalizedEvent(
           stopWhen: stepCountIs(10),
         });
         const reply = result.text || "Disculpá, no pude procesar eso.";
-        await insertMessage(conversationId, "assistant", reply, undefined, undefined, channelAccountId);
-        const r = await sendWhatsAppBubbles({ to: customerPhone, text: reply, apiKey, from: botNumber, channel: replyChannel, account: replyAccount, providerConversationId: replyThreadId });
-        if (r?.id) {
-          try {
-            const { chatMessages } = await import("@/db/schema");
-            // Buscar el último mensaje del assistant para esta conversación y actualizar su wamid
-            const { desc: descOrder } = await import("drizzle-orm");
-            const [lastMsg] = await db
-              .select({ id: chatMessages.id })
-              .from(chatMessages)
-              .where(eq(chatMessages.conversationId, conversationId))
-              .orderBy(descOrder(chatMessages.createdAt))
-              .limit(1);
-            if (lastMsg) {
-              await db.update(chatMessages).set({ platformMessageId: r.id }).where(eq(chatMessages.id, lastMsg.id));
-            }
-          } catch {}
-        }
+        // A-11 — send first; each delivered bubble is persisted by
+        // onBubbleSent, so a failed send never leaves phantom history.
+        await sendWhatsAppBubbles({
+          to: customerPhone,
+          text: reply,
+          apiKey,
+          from: botNumber,
+          channel: replyChannel,
+          account: replyAccount,
+          providerConversationId: replyThreadId,
+          onBubbleSent: persistSentBubble,
+        });
         console.log(`[seller-agent] Replied to seller ${customerPhone}: ${reply.slice(0, 80)}`);
         return;
       }
@@ -1490,11 +1514,12 @@ export async function handleNormalizedEvent(
       // ORDEN CORRECTO: primero texto, DESPUÉS media
       // ═══════════════════════════════════════════════════════════════════
 
-      // 1a. Guardar texto en DB
-      const { id: msgId } = await insertMessage(conversationId, "assistant", responseText, undefined, undefined, channelAccountId);
-
-      // 1b. Enviar texto (split into bubbles for natural UX)
-      const ycloudResult = await sendWhatsAppBubbles({
+      // A-11 — send first, persist only what was delivered: each bubble is
+      // inserted by onBubbleSent the moment its send resolves (same
+      // send-first ordering as the web-order redirect path). A failed send
+      // throws before any row exists, so history never contains a reply the
+      // customer did not receive.
+      await sendWhatsAppBubbles({
         to: customerPhone,
         text: responseText,
         apiKey,
@@ -1502,21 +1527,8 @@ export async function handleNormalizedEvent(
         channel: replyChannel,
         account: replyAccount,
         providerConversationId: replyThreadId,
+        onBubbleSent: persistSentBubble,
       });
-
-      // 1c. Guardar wamid en el texto de la DB
-      if (ycloudResult?.id) {
-        try {
-          const { chatMessages } = await import("@/db/schema");
-          await db
-            .update(chatMessages)
-            .set({ platformMessageId: ycloudResult.id })
-            .where(eq(chatMessages.id, msgId));
-          console.log(`[webhook:wa] Updated chatMessage ${msgId} with wamid ${ycloudResult.id}`);
-        } catch (updateErr) {
-          console.warn("[webhook:wa] Failed to update wamid on chatMessage:", updateErr);
-        }
-      }
 
       // 2. DESPUÉS del texto, enviar media pendiente en orden
       if (pendingMedia.length > 0) {
