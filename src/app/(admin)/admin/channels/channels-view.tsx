@@ -335,6 +335,11 @@ export function ChannelsView({
             </Button>
           ))}
         </div>
+        <p className="mt-3 text-[11px] text-amber-400/80">
+          Ojo: WhatsApp conectado por Zernio (o Kapso) guarda mensajes pero el
+          agente no responde — el auto-reply hoy solo corre sobre la cuenta
+          WhatsApp de YCloud. Para IG/FB/Reddit no aplica.
+        </p>
       </div>
 
       {/* Webhook endpoints per provider */}
