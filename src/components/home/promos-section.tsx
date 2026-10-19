@@ -157,6 +157,11 @@ export function PromosSection({ promos }: { promos: LandingPromo[] }) {
                         type="button"
                         onClick={() => addPromo(promo)}
                         disabled={atMax}
+                        aria-label={
+                          atMax
+                            ? `${promo.name} ya está en tu pedido`
+                            : `Agregar ${promo.name}`
+                        }
                         className="btn-gold inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-wider disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Plus size={14} aria-hidden="true" />
