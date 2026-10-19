@@ -167,6 +167,8 @@ export default function AgentConfigForm({
   );
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
+  const [sellerNewName, setSellerNewName] = useState("");
+  const [sellerNewPhone, setSellerNewPhone] = useState("");
   const [autoReply24h, setAutoReply24h] = useState(config.autoReply24h);
   const [webOrderRedirectEnabled, setWebOrderRedirectEnabled] = useState(
     config.webOrderRedirectEnabled
@@ -226,6 +228,22 @@ export default function AgentConfigForm({
 
   const removePhoneId = (phone: string) => {
     setAllowedPhoneIds((prev) => prev.filter((e) => e.phone !== phone));
+  };
+
+  const addSeller = () => {
+    const name = sellerNewName.trim();
+    const phone = sellerNewPhone.trim();
+    if (!name || !phone) {
+      toast.error("Completá nombre y teléfono");
+      return;
+    }
+    if (sellerPhoneIds.some((e) => e.phone === phone)) {
+      toast.error("Ese teléfono ya está agregado");
+      return;
+    }
+    setSellerPhoneIds((prev) => [...prev, { name, phone }]);
+    setSellerNewName("");
+    setSellerNewPhone("");
   };
 
   // ─── Image upload helper ─────────────────────────────────────────────────────
@@ -967,11 +985,11 @@ export default function AgentConfigForm({
                   <Input
                     id="sellerNewName"
                     placeholder="Ej: Carla Pérez"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
+                    value={sellerNewName}
+                    onChange={(e) => setSellerNewName(e.target.value)}
                     onKeyDown={(e) =>
                       e.key === "Enter" &&
-                      (e.preventDefault(), addPhoneId())
+                      (e.preventDefault(), addSeller())
                     }
                   />
                 </div>
@@ -982,11 +1000,11 @@ export default function AgentConfigForm({
                   <Input
                     id="sellerNewPhone"
                     placeholder="5493700000000"
-                    value={newPhone}
-                    onChange={(e) => setNewPhone(e.target.value)}
+                    value={sellerNewPhone}
+                    onChange={(e) => setSellerNewPhone(e.target.value)}
                     onKeyDown={(e) =>
                       e.key === "Enter" &&
-                      (e.preventDefault(), addPhoneId())
+                      (e.preventDefault(), addSeller())
                     }
                   />
                 </div>
@@ -994,21 +1012,7 @@ export default function AgentConfigForm({
                   type="button"
                   variant="outline"
                   size="icon"
-                  onClick={() => {
-                    const name = newName.trim();
-                    const phone = newPhone.trim();
-                    if (!name || !phone) {
-                      toast.error("Completá nombre y teléfono");
-                      return;
-                    }
-                    if (sellerPhoneIds.some((e) => e.phone === phone)) {
-                      toast.error("Ese teléfono ya está agregado");
-                      return;
-                    }
-                    setSellerPhoneIds((prev) => [...prev, { name, phone }]);
-                    setNewName("");
-                    setNewPhone("");
-                  }}
+                  onClick={addSeller}
                   className="shrink-0"
                   aria-label="Agregar vendedor"
                 >
