@@ -115,7 +115,7 @@ export function Navbar() {
             </Link>
             <button
               onClick={() => setCartOpen(true)}
-              className="relative p-2 text-foreground/80 hover:text-primary transition-colors bg-transparent border-none cursor-pointer"
+              className="relative p-3 text-foreground/80 hover:text-primary transition-colors bg-transparent border-none cursor-pointer"
               aria-label="Abrir carrito"
             >
               <ShoppingBag className="h-5 w-5" />
@@ -139,7 +139,7 @@ export function Navbar() {
           <div className="xl:hidden">
             <Sheet open={open} onOpenChange={setOpen}>
               <SheetTrigger
-                className="p-2 text-foreground/80 hover:text-primary transition-colors bg-transparent border-none cursor-pointer"
+                className="p-3 text-foreground/80 hover:text-primary transition-colors bg-transparent border-none cursor-pointer"
                 aria-label="Abrir menú"
               >
                 {open ? (
