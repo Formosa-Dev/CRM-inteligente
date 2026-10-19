@@ -110,6 +110,23 @@ export async function checkRateLimit(key: string): Promise<RateLimitResult> {
   return checkWindow(globalMap, "global", GLOBAL_LIMIT);
 }
 
+/**
+ * Client IP for rate limiting. Only the RIGHT-MOST x-forwarded-for hop is
+ * trusted: earlier entries are client-supplied and freely rotatable; the last
+ * one was appended by the edge proxy (Render's router) that actually saw the
+ * peer. With no trusted proxy in front there is no reliable client IP — a
+ * fixed "unknown" bucket beats a spoofable key.
+ */
+export function clientIpFromRequest(request: { headers: Headers }): string {
+  const forwarded = request.headers.get("x-forwarded-for");
+  const last = forwarded
+    ?.split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .at(-1);
+  return last ?? request.headers.get("x-real-ip")?.trim() ?? "unknown";
+}
+
 export function getRateLimitHeaders(
   success: boolean,
   remaining: number,

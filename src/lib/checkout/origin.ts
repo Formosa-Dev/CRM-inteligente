@@ -1,11 +1,10 @@
-function firstHeaderValue(value: string | null): string | null {
-  return value?.split(",")[0]?.trim() || null;
-}
-
 function addConfiguredOrigin(origins: Set<string>, value: string | undefined) {
   if (!value) return;
   try {
-    origins.add(new URL(value).origin);
+    // Deployment URLs may arrive with or without a scheme
+    // (RENDER_EXTERNAL_URL is a bare host on some setups).
+    const url = value.includes("://") ? value : `https://${value}`;
+    origins.add(new URL(url).origin);
   } catch {
     // A malformed optional deployment URL must not disable the checkout.
   }
@@ -14,7 +13,14 @@ function addConfiguredOrigin(origins: Set<string>, value: string | undefined) {
 /**
  * Render terminates TLS before forwarding requests to the Next server. In that
  * setup request.url points at the internal container, while Origin keeps the
- * public domain. Accept only the proxy's reconstructed public origin.
+ * public domain — so the allowlist is built from the CONFIGURED public
+ * origins: NEXT_PUBLIC_APP_URL / NEXTAUTH_URL, plus RENDER_EXTERNAL_URL which
+ * Render injects on every web service.
+ *
+ * x-forwarded-host/proto are client-supplied unless a trusted proxy sits in
+ * front; they are deliberately NOT consulted. An unconfigured deployment
+ * behind a proxy fails closed rather than trusting attacker-controlled
+ * forwarded headers.
  */
 export function isAllowedCheckoutOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
@@ -23,18 +29,7 @@ export function isAllowedCheckoutOrigin(request: Request): boolean {
   const allowed = new Set<string>([new URL(request.url).origin]);
   addConfiguredOrigin(allowed, process.env.NEXT_PUBLIC_APP_URL);
   addConfiguredOrigin(allowed, process.env.NEXTAUTH_URL);
-
-  const forwardedHost = firstHeaderValue(request.headers.get("x-forwarded-host"));
-  const forwardedProto = firstHeaderValue(request.headers.get("x-forwarded-proto"));
-  if (forwardedHost && (forwardedProto === "https" || forwardedProto === "http")) {
-    // x-forwarded-* is client-supplied unless a trusted proxy (Render) is in
-    // front. When explicit origins are configured, the forwarded host must
-    // match one of them; with none configured we accept it (Render case).
-    const forwardedOrigin = `${forwardedProto}://${forwardedHost}`;
-    if (allowed.size > 1 ? [...allowed].includes(forwardedOrigin) : true) {
-      allowed.add(forwardedOrigin);
-    }
-  }
+  addConfiguredOrigin(allowed, process.env.RENDER_EXTERNAL_URL);
 
   return allowed.has(origin);
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { checkRateLimit } from "@/lib/infra/rate-limit";
+import { checkRateLimit, clientIpFromRequest } from "@/lib/infra/rate-limit";
 import { eq, and, gte, lte, desc, or, ilike } from "drizzle-orm";
 import { db } from "@/db";
 import { leads } from "@/db/schema";
@@ -40,12 +40,10 @@ export function isUniqueViolation(err: unknown): boolean {
 
 export async function POST(req: NextRequest) {
   try {
-    // Public lead-capture endpoint — rate limited to prevent spam floods
-    const ip =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-      req.headers.get("x-real-ip") ??
-      "unknown";
-    const rate = await checkRateLimit(`leads:${ip}`);
+    // Public lead-capture endpoint — rate limited to prevent spam floods.
+    // The key uses the proxy-appended hop, not the client-controlled left
+    // side of x-forwarded-for (rotatable spoof vector).
+    const rate = await checkRateLimit(`leads:${clientIpFromRequest(req)}`);
     if (!rate.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
