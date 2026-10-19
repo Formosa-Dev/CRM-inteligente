@@ -188,7 +188,9 @@ export async function POST(
       String(chatId);
 
     // ── Idempotency check ──
-    const idempotencyKey = createIdempotencyKey(message.chat.id, message.date);
+    // update_id es único por update; date está en segundos y colapsaba
+    // mensajes distintos enviados dentro del mismo segundo.
+    const idempotencyKey = createIdempotencyKey(update.update_id);
     if (checkIdempotency(idempotencyKey)) {
       return NextResponse.json({ ok: true, duplicate: true });
     }

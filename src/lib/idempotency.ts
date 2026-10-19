@@ -34,6 +34,12 @@ function cleanupExpired(): void {
   }
 }
 
-export function createIdempotencyKey(chatId: number, date: number): string {
-  return `telegram-${chatId}-${date}`;
+/**
+ * Clave de dedup por update de Telegram. `update_id` es único por bot para
+ * cada update entregado — antes se usaba `message.date` (Unix en SEGUNDOS):
+ * dos mensajes distintos del mismo operador dentro del mismo segundo
+ * colisionaban y el segundo se acusaba `duplicate:true` y se perdía.
+ */
+export function createIdempotencyKey(updateId: number | string): string {
+  return `tg_update_${updateId}`;
 }
