@@ -160,26 +160,34 @@ describe("social lead identities (phone-less channels)", () => {
 });
 
 describe("lead identity race (concurrent first-contact inbounds)", () => {
-  const input = (conversationId: number) => ({
+  const input = (
+    conversationId: number,
+    externalUserId: string,
+    normalizedExternalUserId = "ig-race-1",
+    customerPhone: string | null = null
+  ) => ({
     channel: "instagram" as const,
-    externalUserId: "ig-race-1",
-    externalUserIdNormalized: "ig-race-1",
+    externalUserId,
+    externalUserIdNormalized: normalizedExternalUserId,
     customerName: "Race User",
-    customerPhone: null,
+    customerPhone,
     channelAccountId: ACCOUNT_ID,
     conversationId,
   });
 
-  it("the losing lead shell is deleted — one lead owns the identity", async () => {
+  it("raw-id variants converging on one identity drop the phone-less loser shell", async () => {
     fake.seed(leads, []);
     fake.seed(leadIdentities, []);
 
-    // FakeDb runs side effects synchronously inside then(), so Promise.all
-    // interleaves deterministically: both see no identity, both create a
-    // lead, the second insert hits 23505 and its shell must be dropped.
+    // Distinct raw ids (trimmed variants) both pass the raw
+    // leads(channel, externalUserId) unique index, while the normalized
+    // lead_identities key resolves to one winner. FakeDb runs side effects
+    // synchronously inside then(), so Promise.all interleaves
+    // deterministically: both see no identity, both create a lead, the
+    // second identity insert hits 23505 and its phone-less shell is dropped.
     await Promise.all([
-      ensureLeadIdentity(input(9001)),
-      ensureLeadIdentity(input(9002)),
+      ensureLeadIdentity(input(9001, "ig-race-1")),
+      ensureLeadIdentity(input(9002, " \tig-race-1\n")),
     ]);
 
     const leadRows = fake.rows("leads");
@@ -187,6 +195,7 @@ describe("lead identity race (concurrent first-contact inbounds)", () => {
     const ids = fake.rows("lead_identities");
     assert.equal(ids.length, 1, "one identity row");
     assert.equal(ids[0].leadId, leadRows[0].id, "identity owned by the surviving lead");
+    assert.equal(ids[0].externalId, "ig-race-1", "identity key is the normalized id");
   });
 
   it("a phone-matched pre-existing lead is never deleted on race", async () => {
@@ -195,15 +204,12 @@ describe("lead identity race (concurrent first-contact inbounds)", () => {
     ]);
     fake.seed(leadIdentities, []);
 
-    const withPhone = (conversationId: number) => ({
-      ...input(conversationId),
-      externalUserId: "ig-race-2",
-      externalUserIdNormalized: "ig-race-2",
-      customerPhone: "+54 9 3704 11-1111",
+    const withPhone = (conversationId: number, externalUserId: string) => ({
+      ...input(conversationId, externalUserId, "ig-race-2", "+54 9 3704 11-1111"),
     });
     await Promise.all([
-      ensureLeadIdentity(withPhone(9003)),
-      ensureLeadIdentity(withPhone(9004)),
+      ensureLeadIdentity(withPhone(9003, "ig-race-2")),
+      ensureLeadIdentity(withPhone(9004, " \tig-race-2\n")),
     ]);
 
     const leadRows = fake.rows("leads");
@@ -212,5 +218,68 @@ describe("lead identity race (concurrent first-contact inbounds)", () => {
     const ids = fake.rows("lead_identities").filter((r) => r.externalId === "ig-race-2");
     assert.equal(ids.length, 1);
     assert.equal(ids[0].leadId, 30);
+  });
+
+  it("a phone-bearing loser shell keeps its phone and loses the duplicate conversation stamp", async () => {
+    fake.seed(leads, []);
+    fake.seed(leadIdentities, []);
+
+    await Promise.all([
+      ensureLeadIdentity(input(9005, "ig-race-phone", "ig-race-phone", "+54 9 3704 11-1111")),
+      ensureLeadIdentity(input(9006, " \tig-race-phone\n", "ig-race-phone", "+54 9 3704 22-2222")),
+    ]);
+
+    const leadRows = fake.rows("leads");
+    assert.equal(leadRows.length, 2, "both phone-bearing leads are preserved");
+    assert.deepEqual(
+      leadRows.map((row) => String(row.phone)).sort(),
+      ["5493704111111", "5493704222222"],
+      "neither phone is discarded"
+    );
+
+    const ids = fake.rows("lead_identities");
+    assert.equal(ids.length, 1, "one identity row");
+    const owner = leadRows.find((row) => row.id === ids[0].leadId);
+    assert.ok(owner, "identity points at a surviving lead");
+    assert.ok(
+      owner!.conversationId === 9005 || owner!.conversationId === 9006,
+      "winning lead keeps a conversation stamp"
+    );
+    const detached = leadRows.find((row) => row.id !== ids[0].leadId);
+    assert.equal(
+      detached!.conversationId,
+      null,
+      "losing phone-bearing lead is detached instead of deleted"
+    );
+  });
+
+  it("FakeDb rejects identical raw channel/externalUserId like Postgres", () => {
+    fake.seed(leads, []);
+    const base = {
+      name: null,
+      phone: null,
+      channel: "instagram",
+      status: "new",
+      conversationId: null,
+    };
+
+    fake.insert("leads", { ...base, externalUserId: "ig-raw-dup" });
+    assert.throws(
+      () => fake.insert("leads", { ...base, externalUserId: "ig-raw-dup" }),
+      (error: unknown) => (error as { code?: string }).code === "23505",
+      "same raw id must violate leads_channel_external_user_uq"
+    );
+    // Distinct raw variants are allowed by the raw index even though they
+    // normalize to the same lead_identities key.
+    fake.insert("leads", { ...base, externalUserId: " ig-raw-dup " });
+    assert.equal(fake.rows("leads").length, 2);
+
+    // The pre-existing phone unique index is still enforced.
+    fake.insert("leads", { ...base, phone: "5493704999999" });
+    assert.throws(
+      () => fake.insert("leads", { ...base, phone: "5493704999999" }),
+      (error: unknown) => (error as { code?: string }).code === "23505",
+      "same phone must still violate leads.phone unique"
+    );
   });
 });

@@ -152,8 +152,16 @@ function uniqueKeys(table: string, row: Row): string[] {
       `leadid:${String(row.channel)}|${String(row.externalId)}`
     );
   }
-  if (table === "leads" && row.phone) {
-    keys.push(`leadphone:${String(row.phone)}`);
+  if (table === "leads") {
+    if (row.phone) keys.push(`leadphone:${String(row.phone)}`);
+    // Mirrors leads_channel_external_user_uq: the partial unique index is
+    // (channel, external_user_id) over rows where external_user_id is not
+    // null. Postgres keeps NULL channel values distinct, so mirror that too.
+    if (row.channel != null && row.externalUserId != null) {
+      keys.push(
+        `leadchan:${String(row.channel)}|${String(row.externalUserId)}`
+      );
+    }
   }
   if (table === "channel_events" && row.deliveryId) {
     // Mirrors channel_events_provider_delivery_uq (migration 0019):

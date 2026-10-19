@@ -336,9 +336,11 @@ export function ChannelsView({
           ))}
         </div>
         <p className="mt-3 text-[11px] text-amber-400/80">
-          Ojo: WhatsApp conectado por Zernio (o Kapso) guarda mensajes pero el
-          agente no responde — el auto-reply hoy solo corre sobre la cuenta
-          WhatsApp de YCloud. Para IG/FB/Reddit no aplica.
+          Ojo: las cuentas de WhatsApp conectadas por Zernio o Kapso guardan
+          los mensajes, pero el agente no responde automáticamente; hoy el
+          auto-reply solo funciona con la cuenta WhatsApp de YCloud. Instagram,
+          Facebook y Reddit también guardan mensajes, pero todavía no tienen
+          auto-reply del agente.
         </p>
       </div>
 

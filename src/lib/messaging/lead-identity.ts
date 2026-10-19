@@ -110,7 +110,7 @@ export async function ensureLeadIdentity(
       leadId = created.id;
       createdLeadId = created.id;
       console.log(
-        `[leads] Created phone-less lead #${leadId} for ${channel}:${externalId}`
+        `[leads] Created lead #${leadId} for ${channel}:${externalId}`
       );
     } else {
       await linkConversationToLead(leadId, input);
@@ -137,11 +137,21 @@ export async function ensureLeadIdentity(
       if (winner && winner.leadId !== leadId) {
         await linkConversationToLead(winner.leadId, input);
         if (createdLeadId != null) {
-          // We created this shell milliseconds ago and lost the race: it
-          // can hold no identities/orders/attachments yet, so drop it
-          // instead of leaving a second lead stamped on one conversation.
-          // A pre-existing lead (phone fallback) is never deleted.
-          await db.delete(leads).where(eq(leads.id, createdLeadId));
+          if (phone) {
+            // The losing shell carries a phone identifier: deleting it would
+            // discard a matchable lead. Keep it and clear the duplicate
+            // conversation stamp so only the identity winner points here.
+            await db
+              .update(leads)
+              .set({ conversationId: null })
+              .where(eq(leads.id, createdLeadId));
+          } else {
+            // Phone-less shell created milliseconds ago: it can hold no
+            // identities/orders/attachments yet, so drop it instead of
+            // leaving a second lead stamped on one conversation. A
+            // pre-existing lead (phone fallback) is never deleted.
+            await db.delete(leads).where(eq(leads.id, createdLeadId));
+          }
         }
       }
     }

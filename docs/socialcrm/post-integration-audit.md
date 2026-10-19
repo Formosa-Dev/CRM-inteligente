@@ -95,16 +95,27 @@ Severity: `bug` = wrong behavior today · `edge` = real but narrow ·
   collision would false-positive dedup. Would need a schema change to scope;
   documented, not urgent.
 
-### F8 — Orphaned lead rows on identity race — `edge` — **FIXED** (`ab6840b`)
+### F8 — Orphaned lead rows on identity race — `edge` — **FIXED** (`ab6840b`, refined in review follow-up)
 - `src/lib/messaging/lead-identity.ts` — concurrent first-contact inbounds can
-  both create phone-less leads; the `lead_identities` unique resolves to one
-  winner, and `linkConversationToLead` only fills `conversationId` when null —
-  the loser lead kept its own `conversationId` stamp, so two leads referenced
-  the same conversation.
-- **Closed**: the losing path now tracks `createdLeadId` and deletes only the
-  just-created loser shell (pre-existing phone-matched leads are never
-  deleted); FakeDb gained a `delete` op and race coverage
-  (`socialcrm-lead-race-cleanup`).
+  both create leads. The race is explicit when the raw provider ids differ but
+  normalize to one canonical identity (for example whitespace variants):
+  `leads_channel_external_user_uq` keys on the raw
+  `(channel, external_user_id)`, so both inserts succeed, while
+  `lead_identities_channel_external_uq` keys on the normalized
+  `(channel, external_id)` and only one identity insert wins. The loser then
+  carried its own `conversationId` stamp, so two leads could reference the same
+  conversation.
+- **Closed**: the losing path tracks `createdLeadId` and re-reads the winning
+  identity owner. A just-created **phone-less** loser shell is deleted. A
+  just-created loser shell that **carries a phone** is preserved (deleting it
+  would discard a matchable identifier) with its duplicate `conversationId`
+  cleared, so only the identity winner stays linked to the conversation.
+  Pre-existing phone-matched leads are never deleted.
+- Coverage: `lead-identity.test.ts` — "raw-id variants converging on one
+  identity drop the phone-less loser shell", "a phone-bearing loser shell keeps
+  its phone and loses the duplicate conversation stamp", and "FakeDb rejects
+  identical raw channel/externalUserId like Postgres". FakeDb now mirrors both
+  `leads.phone` and the partial raw `leads(channel, externalUserId)` indexes.
 
 ## Fixed before integration
 
