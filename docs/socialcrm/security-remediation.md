@@ -298,7 +298,7 @@ idempotency gap on the passive delivery read.
 
 | Finding | Fix |
 | --- | --- |
-| **HIGH** a confirmed real owner phone number committed in `security-round4.test.ts` and `security-round5.test.ts` | Replaced every representation with the synthetic NANP `+1 555 01xx` range (`+15550001234` / `15550001234`; `+1 (555) 000-1234` where normalization is exercised). Added `src/lib/privacy-fixtures.test.ts`, which scans every tracked file under `src/` and `tests/`, normalizes phone-like runs, and fails if either removed number reappears in any separator variant. |
+| **HIGH** a confirmed real owner phone number committed in `security-round4.test.ts` and `security-round5.test.ts` | Replaced every representation with the synthetic NANP `+1 555 01xx` range (`+15550001234` / `15550001234`; `+1 (555) 000-1234` where normalization is exercised). Added `src/lib/privacy-fixtures.test.ts`, which stores forbidden values only as SHA-256 digests, scans every git-tracked text file (binary-safe), normalizes across separators and source-string concatenation, and reports only path/line plus a digest prefix. |
 | **LOW** an unverified AR-looking fixture in `filters.test.ts` with no provenance | Replaced with `+15550001234` and included its national part in the privacy guard rather than documenting it as real/business data. |
 | **MEDIUM** `isChannelDeliveryRecorded` read `(provider, deliveryId)` provider-wide while persistence/migration `0019` partitions by `coalesce(channel_account_id, -1)` | The read now takes `channelAccountId` and applies the same `coalesce` partition. Account A's marker can no longer suppress account B's identical delivery id; NULL/legacy markers keep their dedicated `-1` partition. All callers (the passive ingress) pass the context account id. |
 
