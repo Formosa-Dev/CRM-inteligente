@@ -102,7 +102,15 @@ export class MissingScopedCredentialError extends Error {
 async function credentialsFromAgentConfig(
   row: ChannelAccountRow
 ): Promise<ChannelAccount["credentials"]> {
-  if (row.provider !== "ycloud") return { apiKey: "", webhookSecret: "" };
+  if (row.provider !== "ycloud") {
+    // agent_config only carries ycloud keys — materializing empty credentials
+    // binds the account fine but breaks every send far from the cause. Fail
+    // closed at resolution so the row surfaces as a strict mismatch instead.
+    throw new MissingScopedCredentialError(
+      row.id,
+      `provider '${row.provider}' cannot resolve credentialsRef 'agent_config' (ycloud keys only)`
+    );
+  }
 
   const resolution = await resolveAgentConfigStrict({
     channel: row.channel,
