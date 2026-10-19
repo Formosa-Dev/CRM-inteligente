@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { lookupUserRole } from "@/lib/auth/session-users";
 import { findProvisionedUser } from "./oauth-allowlist";
 
 const loginSchema = z.object({
@@ -31,8 +32,10 @@ function isLoginRateLimited(email: string): boolean {
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  // 7-day sessions — a stolen JWT expires in a week, not a month.
-  session: { strategy: "jwt", maxAge: 7 * 24 * 60 * 60 },
+  // F9: 24h sessions — a stolen JWT is dead within a day, not a week.
+  // (JWT logout remains client-side: there is no server denylist. The role
+  // revalidation below is the revocation path for demoted/deleted users.)
+  session: { strategy: "jwt", maxAge: 24 * 60 * 60 },
   pages: {
     signIn: "/login",
   },
@@ -106,7 +109,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (user) {
         token.id = user.id;
         token.role = (user as { role?: string }).role;
+        return token;
       }
+
+      // F9: the jwt callback runs on every auth() call — re-read the user's
+      // row (60s TTL cache) so role changes propagate within a minute and a
+      // deleted user loses the session entirely. Returning null makes
+      // @auth/core clean the session cookie and auth() resolve to null, so
+      // every gate (requireAdmin, layouts, proxy) fails closed without
+      // per-site changes. On a DB error the minted claims stand: a blip must
+      // not log everyone out.
+      if (token.id === undefined || token.id === null) return null;
+      const check = await lookupUserRole(token.id as string);
+      if (check.status === "error") return token;
+      if (check.role === null) return null;
+      token.role = check.role;
       return token;
     },
     async session({ session, token }) {
