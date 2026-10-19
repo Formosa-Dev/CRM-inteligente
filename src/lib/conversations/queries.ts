@@ -5,6 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import {
+  getConversation,
   getConversations,
   getCustomerOrders,
   getCustomerProfile,
@@ -71,6 +72,25 @@ export function useConversations(params: GetConversationsParams) {
     },
     staleTime: 3000,
     refetchIntervalInBackground: false,
+  });
+}
+
+// ─── Single Conversation ──────────────────────────────────────────────────────
+
+/**
+ * Fetches one conversation by id — used when ?sel=<id> points to a row that
+ * isn't on the current list page (older page, or filtered out by channel).
+ */
+export function useConversation(conversationId: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["conversation", conversationId],
+    queryFn: async () => {
+      if (!conversationId) return null;
+      const row = await getConversation(conversationId);
+      return row ? mapToSummary(row as unknown as Record<string, unknown>) : null;
+    },
+    enabled: enabled && !!conversationId,
+    staleTime: 10000,
   });
 }
 

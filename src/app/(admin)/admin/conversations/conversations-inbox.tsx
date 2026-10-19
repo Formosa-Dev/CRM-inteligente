@@ -9,6 +9,7 @@ import { CustomerContextPanel } from "@/components/messages/customer-context-pan
 import { CreateOrderModal } from "@/components/orders/create-order-modal";
 import { ChevronLeft } from "lucide-react";
 import {
+  useConversation,
   useConversations,
   useMessages,
   useSendReply,
@@ -34,12 +35,19 @@ interface Props {
 }
 
 function ConversationsInboxInner({ initialConversations, sellerPhones, channelAccounts }: Props) {
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [currentView, setCurrentView] = useState<"list" | "chat" | "context">("list");
-  const [orderModal, setOrderModal] = useState<{ phone: string; name: string } | null>(null);
-
   const router = useRouter();
   const searchParams = useSearchParams();
+
+  // Deep link: /admin/conversations?sel=<id> opens that conversation
+  // directly (redirección desde la ruta legacy /admin/conversations/[id]).
+  const selFromUrl = Number.parseInt(searchParams.get("sel") ?? "", 10);
+  const initialSel = Number.isFinite(selFromUrl) ? selFromUrl : null;
+
+  const [selectedId, setSelectedId] = useState<number | null>(initialSel);
+  const [currentView, setCurrentView] = useState<"list" | "chat" | "context">(
+    initialSel !== null ? "chat" : "list"
+  );
+  const [orderModal, setOrderModal] = useState<{ phone: string; name: string } | null>(null);
 
   // Channel/account filters live in the URL so a filtered inbox is shareable.
   const channelFilter = normalizeChannelParam(searchParams.get("channel"));
@@ -96,7 +104,11 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
   const handleSelect = useCallback((id: number) => {
     setSelectedId(id);
     setCurrentView("chat");
-  }, []);
+    // Sync ?sel= so the open chat survives refresh/share — preserves filters.
+    const next = new URLSearchParams(searchParams.toString());
+    next.set("sel", String(id));
+    router.replace(`/admin/conversations?${next.toString()}`);
+  }, [router, searchParams]);
 
   const handleSend = useCallback(
     (content: string) => sendMutation.mutate(content),
@@ -107,7 +119,13 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
   const handleBackToList = useCallback(() => setCurrentView("list"), []);
   const handleBackToChat = useCallback(() => setCurrentView("chat"), []);
 
-  const selectedConversation = conversations.find((c) => c.id === selectedId);
+  // The selected row may not be on the current page/filter — fetch it by id.
+  const listedConversation = conversations.find((c) => c.id === selectedId);
+  const { data: fetchedConversation } = useConversation(
+    selectedId,
+    !!selectedId && !listedConversation
+  );
+  const selectedConversation = listedConversation ?? fetchedConversation ?? undefined;
   const isHumanOverride = selectedConversation?.humanOverrideUntil
     ? new Date(selectedConversation.humanOverrideUntil) > new Date()
     : false;
