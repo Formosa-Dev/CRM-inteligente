@@ -287,10 +287,14 @@ one specific customer's data.
   → `"Te paso con el dueño…"`.
 - `whatsapp/seller-prompt.ts` — few-shot `"<customer> <real-phone>"` →
   synthetic `"pedro 5493704111111"`.
+- `telegram/system-prompt.ts` — `createDeliveredOrder` walkthrough name+phone
+  and `broadcastWhatsApp` preview recipient names → fictional
+  (`juli`/`Juli`, `Marcos, Ana, Pedro`, `5493704111111`).
 - `telegram/toolsWhatsApp.ts`, `telegram/toolsManagement.ts`,
   `phone-utils.ts` — docstring/example name+phone → synthetic.
 - `admin/agent/agent-config-form.tsx` — chat-id placeholder → `123456789`,
-  personal-alias example → `TU..ALIAS`.
+  personal-alias example → `TU..ALIAS`, visible-phone placeholder →
+  `3705-123456`.
 - `*.test.ts` (agent-consistency, conversation-identity, sales-coach,
   web-order-guard, clients/actions) — real-name/real-phone fixtures →
   synthetic. The PII-absence assertions are kept — they now enforce this
@@ -310,6 +314,16 @@ one specific customer's data.
 - `sdd/resolucion-consistencia/{specs, fase-a-normalizacion/{design,specs},
   fase-e-frontend-sync/design}.md` — real phone in code examples →
   `5493704111111` family.
+- `sdd/resolucion-consistencia/referencia-clinicforge/explore-tools.md` —
+  real lead name + phone in `updateClient` description examples →
+  `Cliente A` + `+5493704111111` (×2).
+- `sdd/mrs-muzzarella-marketplace/specs.md` — hardcoded business wa.me number
+  → `5493704111111` (specs should not pin a real number anyway).
+- `.atl/skill-registry.md` — generated registry embedding a stale copy of the
+  `clear-chat` compact rules (entry source path points at an old absolute
+  checkout, so `skill-registry refresh` would rescan the unscrubbed file);
+  applied the minimal phone replacement `5493704123456` in place rather than
+  a full regeneration. `.atl` modification allowed for this fix only.
 
 ### 5.3 Kept — legit ops tools / no identity
 
@@ -329,7 +343,31 @@ Kept-because-referenced deletions: **0** — every candidate was unreferenced.
 
 ### 5.5 Verification
 
-`git grep` over tracked files finds no real customer name, personal payment
-alias, real phone number, customer address, or location coordinate. Gates
-run: `npm run lint`, `npm run typecheck`, `npm run test:agents` (executable
-files were touched), `npm run build`.
+Two passes. The first-pass `git grep` sweep (owner names, ~35 customer first
+names, aliases, real phones, addresses, coords) cleared `docs/`, `src/`,
+`scripts/`, `skills/` and most of `sdd/` — remaining hits were the allowed
+classes below. A **fresh review then flagged four residuals the first pass
+missed**, all since fixed:
+
+- `.atl/skill-registry.md` — generated copy of `clear-chat` rules with the
+  real phone (entry points at a stale absolute source path; fixed in place).
+- `sdd/resolucion-consistencia/referencia-clinicforge/explore-tools.md` —
+  real lead name + phone in suggested tool descriptions.
+- `src/lib/telegram/system-prompt.ts` — real lead names in the
+  broadcast-preview and delivered-order examples.
+- `sdd/mrs-muzzarella-marketplace/specs.md` +
+  `agent-config-form.tsx` — the store's own number hardcoded as example;
+  replaced with synthetic for consistency (business numbers are allowed, but
+  hardcoding them in specs/placeholders is unnecessary).
+
+Post-fix audit over tracked files (`5493704`, `5493705`, `5492966…`,
+owner/customer name list, `Neriza`, `Electro`, `Nahir`, `Hector`, aliases,
+addresses, coordinates) returns **zero real-PII hits**. Remaining matches
+are exactly: (a) synthetic fixtures `5493704111111`, `5493704123456`,
+`549370400000x`, `5491100000000`, `+5491100000000`; (b) `Cliente A`-style
+labels and `[alias]`/`[dirección]` placeholders; (c) `docs/socialcrm/`
+citations of deleted filenames (audit provenance); (d) the
+`agent-consistency.test.ts` `doesNotMatch` regexes that enforce the ban;
+(e) `package-lock` hashes and drizzle journal timestamps (digit-shaped, not
+phones). Gates run: `npm run lint`, `npm run typecheck`,
+`npm run test:agents` (executables touched), `npm run build` — all green.
