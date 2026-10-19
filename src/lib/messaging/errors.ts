@@ -104,9 +104,3 @@ export function classifyError(error: unknown): ErrorClass {
   if (error instanceof TypeError) return "permanent";
   return "unknown";
 }
-
-/** True when a webhook/provider should redeliver instead of being acked. */
-export function shouldRetryError(error: unknown): boolean {
-  const kind = classifyError(error);
-  return kind === "retryable-db";
-}

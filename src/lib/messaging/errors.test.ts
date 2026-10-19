@@ -6,7 +6,6 @@ import {
   errorCode,
   isRetryableDbError,
   isSchemaNotReady,
-  shouldRetryError,
 } from "./errors";
 
 describe("schema-not-ready is positively identified only", () => {
@@ -37,8 +36,7 @@ describe("retryable database failures", () => {
   it("classifies and only retries the retryable class", () => {
     assert.equal(classifyError({ code: "42P01" }), "schema-not-ready");
     assert.equal(classifyError({ code: "57P01" }), "retryable-db");
-    assert.equal(shouldRetryError({ code: "57P01" }), true);
-    assert.equal(shouldRetryError({ code: "23505" }), false);
+    assert.equal(classifyError({ code: "23505" }), "unknown");
   });
 
   it("reads nested cause codes", () => {
@@ -47,7 +45,6 @@ describe("retryable database failures", () => {
 
   it("honors an explicit retryable marker without a SQLSTATE", () => {
     assert.equal(classifyError({ retryable: true }), "retryable-db");
-    assert.equal(shouldRetryError({ retryable: true }), true);
     assert.equal(classifyError({ retryable: false }), "unknown");
   });
 });

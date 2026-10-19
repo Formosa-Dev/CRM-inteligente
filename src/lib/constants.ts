@@ -34,11 +34,6 @@ export const CAMPAIGNS: Campaign[] = [
   },
 ];
 
-export const WHATSAPP_MESSAGES = {
-  hamburguesas: "Hola! Me gustaría hacer un pedido de hamburguesas 🍔",
-  mayorista: "Hola! Me interesa información sobre pan mayorista 🍞",
-};
-
 export interface Product {
   id: string;
   name: string;
@@ -105,30 +100,3 @@ export const BG_IMAGES = [
   "/assets/images/background/b4.png",
 ];
 
-
-export const BREAD_PRODUCTS = [
-  {
-    id: "pan-brioche",
-    name: "Pan Brioche",
-    description: "Suave, esponjoso, ideal para hamburguesas premium",
-    emoji: "🍞",
-  },
-  {
-    id: "pan-semillas",
-    name: "Pan con Semillas",
-    description: "Multicereal con semillas de sésamo y girasol",
-    emoji: "🌾",
-  },
-  {
-    id: "pan-integral",
-    name: "Pan Integral",
-    description: "Harina integral, opción saludable y deliciosa",
-    emoji: "🌿",
-  },
-  {
-    id: "pan-papa",
-    name: "Pan de Papa",
-    description: "Textura húmeda y sabor único, el favorito del barrio",
-    emoji: "🥔",
-  },
-];

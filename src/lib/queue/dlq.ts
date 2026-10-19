@@ -1,7 +1,6 @@
 import { Redis } from "@upstash/redis";
 
 const DLQ_KEY = "queue:dlq";
-const QUEUE_KEY = "queue:messages";
 
 const redisUrl = process.env.UPSTASH_REDIS_REST_URL;
 const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -56,41 +55,6 @@ export async function getDLQMessages(): Promise<DLQEntry[]> {
   } catch (err) {
     console.error("[queue] getDLQMessages error:", err);
     return [];
-  }
-}
-
-export async function replayDLQMessage(index: number): Promise<boolean> {
-  if (!redis) {
-    return false;
-  }
-
-  try {
-    const messages = await redis.lrange(DLQ_KEY, 0, -1);
-    if (!messages || !Array.isArray(messages) || index >= messages.length) {
-      console.log("[queue] replayDLQMessage — index out of range", { index });
-      return false;
-    }
-
-    const raw = messages[index] as string;
-
-    let payload: Record<string, unknown>;
-    try {
-      payload = JSON.parse(raw) as Record<string, unknown>;
-    } catch {
-      console.log("[queue] replayDLQMessage — cannot parse payload", { index });
-      return false;
-    }
-
-    payload.retryCount = 0;
-
-    await redis.lrem(DLQ_KEY, 1, raw);
-    await redis.lpush(QUEUE_KEY, JSON.stringify(payload));
-
-    console.log("[queue] replayed DLQ message", { index, chatId: payload.chatId });
-    return true;
-  } catch (err) {
-    console.error("[queue] replayDLQMessage error:", err);
-    return false;
   }
 }
 

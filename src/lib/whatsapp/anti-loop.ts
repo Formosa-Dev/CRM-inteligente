@@ -154,17 +154,3 @@ Intentá ser más directo: si es un pedido → ejecutalo. Si es una pregunta →
 
   return { isLooping, repromptCount: newMeta.repromptCount, directive, metadata: newMeta };
 }
-
-// ─── Build anti-loop directive from raw metadata ────────────────────────────
-
-export function buildAntiLoopDirective(metadata: ConversationMetadata): string {
-  if (metadata.repromptCount >= 2) {
-    return `⚠️ DETECTÉ QUE ESTAMOS EN UN CICLO. Ya preguntaste/viste esto antes.
-ACCIÓN REQUERIDA:
-1. NO preguntes lo mismo de nuevo.
-2. Si el cliente quiere hacer un pedido → ejecutá la acción.
-3. Si no sabés qué hacer → "¿Qué más necesitás amigo?".
-4. BAJO NINGÚN CONCEPTO sigas preguntando lo mismo.`;
-  }
-  return "";
-}

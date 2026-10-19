@@ -129,12 +129,6 @@ export async function getAIProvider(): Promise<OpenAIProvider> {
   });
 }
 
-/** Main conversational model (WhatsApp sales agent). */
-export async function getMainModel() {
-  const [provider, cfg] = await Promise.all([getAIProvider(), getAIConfig()]);
-  return provider(cfg.model);
-}
-
 /** Main model via Chat Completions API (WhatsApp agent uses openai.chat()). */
 export async function getMainChatModel() {
   const [provider, cfg] = await Promise.all([getAIProvider(), getAIConfig()]);

@@ -8,17 +8,6 @@ export interface RefCodeData {
 }
 
 /**
- * Encodes attribution data into a URL-safe ref code string.
- * Format: ref:{campaignId}_{adsetId}_{adId}_{timestamp_base36}
- * Legacy unsigned format — new links should use signed codes from
- * POST /api/admin/ref-code (this module must stay Node-crypto free).
- */
-export function encodeRefCode(data: RefCodeData): string {
-  const timestampBase36 = data.timestamp.toString(36);
-  return `ref:${data.campaignId}_${data.adsetId}_${data.adId}_${timestampBase36}`;
-}
-
-/**
  * Decodes a ref code string back into RefCodeData.
  * Accepts codes with or without the "ref:" prefix.
  * Accepts 4-part legacy codes and 5-part signed codes (signature is NOT

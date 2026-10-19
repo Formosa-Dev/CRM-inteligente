@@ -35,12 +35,8 @@ function functionBody(source: string, signature: string): string {
   return source.slice(open, close);
 }
 
-test("getMainChatModel usa .chat() y getMainModel no (proveedores tipo DeepSeek)", () => {
+test("getMainChatModel usa .chat() (proveedores tipo DeepSeek)", () => {
   const config = readFileSync("src/lib/ai/config.ts", "utf8");
   const chatBody = functionBody(config, "export async function getMainChatModel");
   assert.match(chatBody, /provider\.chat\(cfg\.model\)/);
-
-  const mainBody = functionBody(config, "export async function getMainModel");
-  assert.doesNotMatch(mainBody, /\.chat\(/);
-  assert.match(mainBody, /provider\(cfg\.model\)/);
 });

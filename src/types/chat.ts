@@ -74,17 +74,3 @@ export interface OrderSummary {
   createdAt: string;
 }
 
-export interface TagVariant {
-  label: string;
-  color: "default" | "purple" | "blue" | "amber" | "orange" | "red" | "green";
-}
-
-export type ContextPanelSection =
-  | "header"
-  | "tags"
-  | "identity"
-  | "leadStatus"
-  | "stats"
-  | "orders"
-  | "notes"
-  | "attribution";

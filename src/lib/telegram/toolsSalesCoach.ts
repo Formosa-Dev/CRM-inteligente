@@ -7,7 +7,6 @@ import {
   analyzeTone,
   argentinaDayWindow,
   buildGuidanceProposal,
-  classifyOrder,
   normalizeGuidanceKey,
   redactPII,
   summarizeOutcomes,
@@ -171,20 +170,6 @@ function formatEvidenceReport(ev: SalesEvidence): { report: string; findings: To
   lines.push("ALCANCE: análisis read-only. No entrené ni modifiqué ningún prompt, memoria ni dato de producción.");
 
   return { report: lines.join("\n"), findings };
-}
-
-export interface SalesEvidenceLike {
-  conversations: ConversationEvidence[];
-  messages: MessageEvidence[];
-  orders: OrderEvidence[];
-}
-
-/** Expuesto para tests: clasifica sin tocar la DB. */
-export function classifyOrdersForWindows(ev: SalesEvidenceLike) {
-  return ev.orders.map((o) => {
-    const conv = ev.conversations.find((c) => String(c.phone ?? "").replace(/\D/g, "") === String(o.phoneNumber).replace(/\D/g, ""));
-    return classifyOrder(o, conv);
-  });
 }
 
 // ─── analyzeSalesChats ───────────────────────────────────────────────────────

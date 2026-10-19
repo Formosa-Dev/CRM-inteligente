@@ -35,17 +35,6 @@ const STATUS_MESSAGE_TYPES = new Set([
   "played",
 ]);
 
-export const ELIGIBLE_INBOUND_TYPES = [
-  "text",
-  "image",
-  "audio",
-  "document",
-  "video",
-  "location",
-] as const;
-
-export type EligibleInboundType = (typeof ELIGIBLE_INBOUND_TYPES)[number];
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -110,31 +99,6 @@ export function isProtocolArtifact(payload: unknown): boolean {
   if (typeof message.id !== "string" || message.id.length === 0) return true;
   if (typeof message.from !== "string" || message.from.length === 0) return true;
   return false;
-}
-
-/**
- * Returns true only for customer inbound content that may reach durable
- * persistence: a supported type with a platform id, a sender, and real
- * content (non-blank text, media reference, or location).
- */
-export function isEligibleInboundMessage(message: unknown): boolean {
-  if (!isRecord(message)) return false;
-  const msgType = typeof message.type === "string" ? message.type : undefined;
-  if (!msgType || !(ELIGIBLE_INBOUND_TYPES as readonly string[]).includes(msgType)) return false;
-  if (typeof message.id !== "string" || message.id.length === 0) return false;
-  if (typeof message.from !== "string" || message.from.length === 0) return false;
-
-  if (msgType === "text") {
-    const body = isRecord(message.text) ? message.text.body : undefined;
-    return typeof body === "string" && body.trim().length > 0;
-  }
-  if (msgType === "location") {
-    return isRecord(message.location) && echoMessageHasContent({ type: "location", location: message.location });
-  }
-  const media = message[msgType];
-  if (!isRecord(media)) return false;
-  if (typeof media.id === "string" && media.id.length > 0) return true;
-  return typeof media.caption === "string" && media.caption.trim().length > 0;
 }
 
 export type DedupOutcome = "new" | "duplicate" | "failed";

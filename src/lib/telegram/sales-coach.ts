@@ -331,7 +331,3 @@ export function normalizeGuidanceKey(label: string): string {
     .slice(0, 80);
   return `${GUIDANCE_KEY_PREFIX}${slug || "regla"}`;
 }
-
-export function isGuidanceMemory(key: string | null | undefined): boolean {
-  return typeof key === "string" && key.startsWith(GUIDANCE_KEY_PREFIX);
-}
