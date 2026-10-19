@@ -599,7 +599,10 @@ export const queryDataTool = tool({
         }).filter(Boolean).join(" | ");
       }).join("\n");
     } catch (e: unknown) {
-      return `Error al consultar: ${(e as Error).message || "desconocido"}`;
+      // F13: el detalle del error queda en logs del servidor; al modelo solo
+      // le va un código estable — nunca texto interno de DB/driver.
+      console.error("[queryData] query failed:", e);
+      return "Error al consultar (ERR_QUERY_FAILED). Probá con otros filtros o una tool específica.";
     }
   },
 });
