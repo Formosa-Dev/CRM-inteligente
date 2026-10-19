@@ -159,7 +159,10 @@ export async function restoreOrderStockBestEffort(orderId: number): Promise<void
           sql`(${orders.notes} IS NULL OR ${orders.notes} NOT LIKE '%STOCK_DEVUELTO%')`,
         ),
       );
-    const claimedRows = (claimed as unknown as { rowCount?: number }).rowCount ?? 0;
+    // neon-http returns {rowCount}; test fakes return the updated rows array.
+    const claimedRows = Array.isArray(claimed)
+      ? claimed.length
+      : ((claimed as unknown as { rowCount?: number }).rowCount ?? 0);
     if (claimedRows === 0) return; // not cancelled, or stock already restored
 
     const [row] = await db

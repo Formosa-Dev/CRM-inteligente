@@ -16,6 +16,7 @@ import { db } from "@/db";
 import { conversations, leads, orders } from "@/db/schema";
 import { logger } from "@/lib/logger";
 import { restoreOrderStockBestEffort } from "@/lib/order-utils";
+import { updateConversationMetadataCAS } from "./conversation-metadata";
 import {
   ACTIVE_ORDER_STATUSES,
   ageInHours,
@@ -88,7 +89,9 @@ export class DrizzleOrderLifecycleRepository implements OrderLifecycleRepository
         updatedAt: at,
       })
       .where(and(eq(orders.id, orderId), inArray(orders.status, ACTIVE_STATUS_LIST)));
-    const rowCount = (updated as unknown as { rowCount?: number }).rowCount ?? 0;
+    const rowCount = Array.isArray(updated)
+      ? updated.length
+      : ((updated as unknown as { rowCount?: number }).rowCount ?? 0);
     if (rowCount > 0) {
       // A-26: creation decremented stock — the auto-cancel gives it back.
       // Marker-claimed in restoreOrderStockBestEffort so it cannot run twice.
@@ -147,8 +150,6 @@ export interface KeepActiveConfirmation {
   askedAt: string;
 }
 
-type ConversationMetadataShape = (typeof conversations.$inferSelect)["conversationMetadata"];
-
 async function readConversationMetadata(conversationId: number): Promise<Record<string, unknown>> {
   const [row] = await db
     .select({ metadata: conversations.conversationMetadata })
@@ -173,27 +174,22 @@ export async function readKeepActiveConfirmation(conversationId: number): Promis
 
 /** Marks that the same/new question was asked for a given active order. */
 export async function setKeepActiveConfirmation(conversationId: number, activeOrderId: number): Promise<void> {
-  const metadata = await readConversationMetadata(conversationId);
-  const next = {
+  // A-48: optimistic CAS — the marker merges over the freshest metadata, and
+  // a lost race retries instead of clobbering another writer's fields.
+  await updateConversationMetadataCAS(conversationId, (metadata) => ({
     ...metadata,
     keepActiveConfirmation: { activeOrderId, askedAt: new Date().toISOString() } satisfies KeepActiveConfirmation,
-  };
-  await db
-    .update(conversations)
-    .set({ conversationMetadata: next as ConversationMetadataShape })
-    .where(eq(conversations.id, conversationId));
+  }));
 }
 
 /** Clears the marker once the clarification no longer applies. */
 export async function clearKeepActiveConfirmation(conversationId: number): Promise<void> {
-  const metadata = await readConversationMetadata(conversationId);
-  if (!("keepActiveConfirmation" in metadata)) return;
-  const { keepActiveConfirmation: _drop, ...rest } = metadata;
-  void _drop;
-  await db
-    .update(conversations)
-    .set({ conversationMetadata: rest as ConversationMetadataShape })
-    .where(eq(conversations.id, conversationId));
+  await updateConversationMetadataCAS(conversationId, (metadata) => {
+    if (!("keepActiveConfirmation" in metadata)) return metadata;
+    const { keepActiveConfirmation: _drop, ...rest } = metadata;
+    void _drop;
+    return rest;
+  });
 }
 
 // ─── Privacy-safe structured audit ──────────────────────────────────────────

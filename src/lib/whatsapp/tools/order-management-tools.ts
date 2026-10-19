@@ -311,7 +311,10 @@ export const cancelOrderTool = tool({
         updatedAt: new Date(),
       })
       .where(and(eq(orders.id, orderId), inArray(orders.status, ["pending", "preparing", "ready"])));
-    const cancelledRows = (updated as unknown as { rowCount?: number }).rowCount ?? 0;
+    // neon-http returns {rowCount}; test fakes return the updated rows array.
+    const cancelledRows = Array.isArray(updated)
+      ? updated.length
+      : ((updated as unknown as { rowCount?: number }).rowCount ?? 0);
     if (cancelledRows === 0) {
       return `No se puede cancelar — el pedido #${orderId} ya no está activo.`;
     }
