@@ -233,6 +233,25 @@ test("checkout form remounts on line-set changes only, not quantity edits", () =
   }
 });
 
+test("checkout submits only after revalidating the cart against the live catalog", () => {
+  // A stale price snapshot must never reach /api/checkout unreviewed: both
+  // surfaces re-fetch the catalog when the cart opens and the form re-checks
+  // the reviewed signature right before posting.
+  assert.match(formSource, /revalidateCart\?: \(\) => Promise<boolean>/);
+  const call = formSource.indexOf("await revalidateCart()");
+  const post = formSource.indexOf('fetch("/api/checkout"');
+  assert.ok(call !== -1 && post !== -1 && call < post, "revalidate must run before the POST");
+  for (const file of [
+    "src/components/cart/cart-drawer.tsx",
+    "src/app/carta-digital/menu-digital-client.tsx",
+  ]) {
+    const src = readFileSync(file, "utf8");
+    assert.match(src, /fetchPublicCatalog/, `${file} must re-fetch the catalog`);
+    assert.match(src, /orderReviewSignature/, `${file} must compare the reviewed signature`);
+    assert.match(src, /revalidateCart=\{revalidateCart\}/, `${file} must gate the form`);
+  }
+});
+
 test("checkout form keeps one stable attempt id per signature", () => {
   assert.match(formSource, /normalizeAttemptSignature\(/);
   assert.match(formSource, /resolveAttempt\(/);

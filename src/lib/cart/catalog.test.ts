@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CartItem } from "./cart-context";
-import { buildCatalogIndex, reconcileCart } from "./catalog";
+import { buildCatalogIndex, orderReviewSignature, reconcileCart } from "./catalog";
 
 const PRODUCTS = [
   { id: 1, name: "Genesis", price: "7500.00", stock: 4 },
@@ -98,6 +98,30 @@ test("reconcileCart never dead-ends when the catalog refresh failed", () => {
   const result = reconcileCart([line(), line({ product: { id: "99", name: "X", price: 1 } })], null);
   assert.equal(result.hasBlocked, false);
   assert.equal(result.lines.every((l) => l.orderable), true);
+});
+
+test("orderReviewSignature changes when live prices or availability drift", () => {
+  const items = [line()];
+  const before = orderReviewSignature(
+    items,
+    buildCatalogIndex({ products: PRODUCTS, promos: PROMOS }),
+  );
+  const pricedMoved = orderReviewSignature(
+    items,
+    buildCatalogIndex({ products: [{ ...PRODUCTS[0], price: "8200.00" }], promos: [] }),
+  );
+  assert.notEqual(before, pricedMoved);
+  const gone = orderReviewSignature(
+    items,
+    buildCatalogIndex({ products: [], promos: [] }),
+  );
+  assert.notEqual(before, gone);
+  // Same catalog → same signature: no false-positive drift blocks a submit.
+  const same = orderReviewSignature(
+    items,
+    buildCatalogIndex({ products: PRODUCTS, promos: PROMOS }),
+  );
+  assert.equal(before, same);
 });
 
 test("reconcileCart marks non-catalog ids as unorderable", () => {

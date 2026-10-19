@@ -55,6 +55,9 @@ export const OFFLINE_MESSAGE =
 export const NO_DESTINATION_MESSAGE =
   "No pudimos iniciar el pedido desde el sitio. Consultanos por WhatsApp y lo armamos juntos.";
 
+export const CART_DRIFT_MESSAGE =
+  "Actualizamos tu pedido: cambiaron precios o disponibilidad. Revisá el total antes de confirmar.";
+
 const REUSED_CONFIRMATION = /ya fue usada/i;
 
 export function checkoutFailureMessage(

@@ -12,7 +12,7 @@ import { CheckoutForm } from "@/components/cart/checkout-form";
 import { CheckoutConfirmation } from "@/components/cart/checkout-confirmation";
 import { getCatalogProductImage } from "@/lib/catalog-images";
 import { cartKey, useCart } from "@/lib/cart/cart-context";
-import { buildCatalogIndex, reconcileCart } from "@/lib/cart/catalog";
+import { buildCatalogIndex, fetchPublicCatalog, orderReviewSignature, reconcileCart, type CatalogIndex } from "@/lib/cart/catalog";
 import { useBusiness } from "@/lib/hooks/use-business";
 
 type Product = { id: number; name: string; price: string | null; promoPrice?: string | null; isPromo?: boolean; imageUrl: string | null; category: string; description: string | null; comingSoon?: boolean; stock?: number | null };
@@ -96,7 +96,20 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
   }, [requestedCategory]);
   const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   const visible = selections.filter(item => query.trim() ? normalize(`${item.data.name} ${item.data.description ?? ""}`).includes(normalize(query.trim())) : item.type === "promo" ? activeCategory === "promos" : item.data.category === activeCategory);
-  const catalogIndex = useMemo(() => buildCatalogIndex({ products, promos }), [products, promos]);
+  // The SSR catalog can go stale while the page is open; opening the cart
+  // re-fetches it and that fresher index wins over the props-derived one.
+  const [liveCatalog, setLiveCatalog] = useState<CatalogIndex | null>(null);
+  useEffect(() => {
+    if (!cartOpen) return;
+    let cancelled = false;
+    fetchPublicCatalog()
+      .then((data) => {
+        if (!cancelled) setLiveCatalog(buildCatalogIndex(data));
+      })
+      .catch(() => { /* keep the SSR catalog — a failed refresh never locks the cart */ });
+    return () => { cancelled = true; };
+  }, [cartOpen]);
+  const catalogIndex = useMemo(() => liveCatalog ?? buildCatalogIndex({ products, promos }), [liveCatalog, products, promos]);
   // Reconcile persisted lines against the live catalog: anything archived,
   // deactivated or over-stock stays listed as a removable row instead of
   // silently dead-ending the cart (F1 — the cart must never soft-lock).
@@ -155,6 +168,19 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
       const key = cartKey(line.item.type, line.item.product.id);
       if (line.status === "out_of_range" && line.entry) updateQuantity(key, line.entry.maxQuantity);
       else removeItem(key);
+    }
+  }
+  // Before the POST, verify the cart on screen is still what the live catalog
+  // allows — a drift aborts the submit so the updated prices get reviewed.
+  async function revalidateCart() {
+    try {
+      const fresh = buildCatalogIndex(await fetchPublicCatalog());
+      const drift = orderReviewSignature(cartItems, catalogIndex) !== orderReviewSignature(cartItems, fresh);
+      setLiveCatalog(fresh);
+      return !drift;
+    } catch {
+      // Can't verify — don't block; the server re-prices and rejects conflicts.
+      return true;
     }
   }
 
@@ -218,13 +244,14 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
             const selected = line.orderable ? selections.find(s => s.type === line.item.type && String(s.data.id) === line.item.product.id) : undefined;
             return <motion.div layout={!reduced} key={key} className="menu-cart-line" exit={{ opacity: 0, height: 0, margin: 0, paddingTop: 0, paddingBottom: 0 }} transition={{ duration: reduced ? 0 : .2 }}>
               <div className="menu-cart-thumb"><CatalogImage src={selected ? imageOf(selected) : (line.item.imageUrl ?? null)} alt={line.item.product.name} sizes="64px" /></div>
-              <div className="menu-cart-line-copy"><h3>{line.item.product.name}</h3>{line.orderable ? <p>{money(line.effectivePrice * line.item.quantity)}</p> : <p>{line.status === "out_of_range" ? `Quedan ${line.entry?.maxQuantity ?? 0} disponibles` : "Ya no está disponible"}</p>}</div>
+              <div className="menu-cart-line-copy"><h3>{line.item.product.name}</h3>{line.orderable ? <p>{money(line.effectivePrice * line.item.quantity)}{line.status === "price_changed" && <span> · antes {money(line.item.product.price * line.item.quantity)}</span>}</p> : <p>{line.status === "out_of_range" ? `Quedan ${line.entry?.maxQuantity ?? 0} disponibles` : "Ya no está disponible"}</p>}</div>
               {line.orderable && selected ? <QuantityControl quantity={line.item.quantity} onAdd={() => updateItem(selected, 1)} onRemove={() => updateItem(selected, -1)} max={maxOf(selected)} /> : <button type="button" style={{ flexShrink: 0, fontSize: ".68rem", letterSpacing: ".14em", textTransform: "uppercase", color: "#c8b899", borderBottom: "1px solid #8b806d", paddingBottom: ".15rem" }} onClick={() => line.status === "out_of_range" && line.entry ? updateQuantity(key, line.entry.maxQuantity) : removeItem(key)}>{line.status === "out_of_range" ? "Ajustar" : "Quitar"}</button>}
             </motion.div>;
           })}</AnimatePresence></div>
           {hasBlocked && <p role="alert" className="checkout-error">Hay productos que ya no están disponibles. <button type="button" onClick={fixBlocked}>Quitarlos del pedido</button></p>}
+          {reconciled.pricesChanged && <p role="status" style={{ fontSize: ".72rem", lineHeight: 1.6, color: "#e7d8bd", margin: ".9rem 0 0", padding: ".8rem", border: "1px solid #e7d8bd38", borderRadius: 4 }}>Actualizamos los precios con la carta actual. Revisá el total antes de confirmar.</p>}
           <div className="menu-cart-total"><div><span>Subtotal</span><small>Envío a coordinar</small></div><motion.strong key={total} initial={reduced ? false : { opacity: .3, y: 8 }} animate={{ opacity: 1, y: 0 }}>{money(total)}</motion.strong></div>
-          {!hasBlocked && <CheckoutForm key={checkoutLines.map(line => `${line.type}:${line.id}`).join(",")} items={checkoutLines} />}
+          {!hasBlocked && <CheckoutForm key={checkoutLines.map(line => `${line.type}:${line.id}`).join(",")} items={checkoutLines} revalidateCart={revalidateCart} />}
           <button type="button" className="menu-text-link" onClick={() => { clearCart(); setCartOpen(false); }}>Vaciar carrito</button>
         </>}
       </div>

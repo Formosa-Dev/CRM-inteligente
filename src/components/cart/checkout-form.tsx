@@ -23,6 +23,7 @@ import {
   type CheckoutAttempt,
 } from "./checkout-attempt";
 import {
+  CART_DRIFT_MESSAGE,
   checkoutFailureMessage,
   interpretCheckoutOutcome,
   OFFLINE_MESSAGE,
@@ -34,7 +35,20 @@ function attemptStorage(): AttemptStorage | null {
   return typeof window === "undefined" ? null : window.sessionStorage;
 }
 
-export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
+export function CheckoutForm({
+  items,
+  revalidateCart,
+}: {
+  items: CheckoutLine[];
+  /**
+   * Re-reconciles the cart against a freshly fetched catalog right before the
+   * POST. Returning false means the cart being submitted drifted from what the
+   * customer last reviewed (price or availability changed) — the submit is
+   * aborted so the updated cart gets seen instead of a stale snapshot reaching
+   * /api/checkout unreviewed.
+   */
+  revalidateCart?: () => Promise<boolean>;
+}) {
   const { completeOrder } = useCart();
   const business = useBusiness();
   const [name, setName] = useState("");
@@ -97,6 +111,17 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
     inFlight.current = true;
     setBusy(true);
     try {
+      if (revalidateCart) {
+        try {
+          if (!(await revalidateCart())) {
+            setError(CART_DRIFT_MESSAGE);
+            return;
+          }
+        } catch {
+          // The catalog could not be re-fetched — proceed anyway: the server
+          // still re-prices and rejects catalog conflicts before persisting.
+        }
+      }
       const response = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
