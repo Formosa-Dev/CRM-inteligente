@@ -16,20 +16,31 @@ export async function scheduleBufferProcessing(
   userId: string,
   processCallback: (messages: BufferedMessage[]) => Promise<void>
 ): Promise<void> {
-  // Try to acquire lock — if someone else is processing, bail
-  const locked = await BufferManager.acquireLock(channel, userId);
-  if (!locked) {
-    console.log(`[buffer:lock] Lock already held for ${channel}:${userId}, skipping`);
-    return; // another processor is handling this user
-  }
+  // A-50 tail race: a message enqueued between the drain's final
+  // hasNewMessages check and the lock release is orphaned — its own
+  // scheduleBufferProcessing call bailed on our held lock. Re-check AFTER
+  // releasing and re-enter the drain while anything remains queued.
+  for (;;) {
+    // Try to acquire lock — if someone else is processing, bail
+    const locked = await BufferManager.acquireLock(channel, userId);
+    if (!locked) {
+      console.log(`[buffer:lock] Lock already held for ${channel}:${userId}, skipping`);
+      return; // another processor is handling this user
+    }
 
-  console.log(`[buffer:lock] Acquired lock for ${channel}:${userId}`);
+    console.log(`[buffer:lock] Acquired lock for ${channel}:${userId}`);
 
-  try {
-    await processBufferLoop(channel, userId, processCallback, 0);
-  } finally {
-    await BufferManager.releaseLock(channel, userId);
-    console.log(`[buffer:lock] Released lock for ${channel}:${userId}`);
+    try {
+      await processBufferLoop(channel, userId, processCallback, 0);
+    } finally {
+      await BufferManager.releaseLock(channel, userId);
+      console.log(`[buffer:lock] Released lock for ${channel}:${userId}`);
+    }
+
+    if (!(await BufferManager.hasNewMessages(channel, userId))) return;
+    console.log(
+      `[buffer:tail] Messages arrived during lock release for ${channel}:${userId} — re-entering drain`
+    );
   }
 }
 
