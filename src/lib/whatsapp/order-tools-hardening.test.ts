@@ -16,6 +16,10 @@ const promptSource = readFileSync(
   new URL("./prompt-builder.ts", import.meta.url),
   "utf8",
 );
+const lifecycleSource = readFileSync(
+  new URL("./order-lifecycle.ts", import.meta.url),
+  "utf8",
+);
 
 function section(source: string, startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
@@ -122,5 +126,21 @@ describe("A-19 createOrder records payment intent, never settles", () => {
     assert.doesNotMatch(createOrderSource, /paymentStatus: z\.enum/, "no paymentStatus tool param");
     assert.match(createOrderSource, /resolveDeliveryFee\(address\)/);
     assert.match(createOrderSource, /PAGO DECLARADO/, "a claimed payment lands in notes as intent");
+  });
+});
+
+// A-20: a stale open order auto-closes as CANCELLED — never delivered+paid,
+// since an abandoned order has no delivery/payment evidence and a phantom
+// paid row inflates cash session totals.
+describe("A-20 auto-close never fabricates a paid delivery", () => {
+  test("the drizzle repository closes stale orders as cancelled only", () => {
+    const closeSection = section(lifecycleSource, "async closeStaleOrder", "return rowCount");
+    assert.match(closeSection, /status: "cancelled"/);
+    assert.doesNotMatch(closeSection, /paymentStatus|deliveredAt|delivered/, "auto-close must not mark paid/delivered");
+  });
+
+  test("no delivered+paid write survives in the lifecycle module", () => {
+    assert.doesNotMatch(lifecycleSource, /paymentStatus:\s*"paid"/);
+    assert.doesNotMatch(lifecycleSource, /status:\s*"delivered"/);
   });
 });

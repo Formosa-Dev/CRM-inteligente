@@ -349,7 +349,7 @@ describe("4-hour active-order lifecycle", () => {
       async findActiveOrder() {
         return { id: 251, status: "pending", createdAt: new Date(now.getTime() - 5 * HOUR) };
       },
-      async closeOrderAsDeliveredPaid(orderId: number, at: Date) {
+      async closeStaleOrder(orderId: number, at: Date) {
         void orderId;
         void at;
         return true; // first caller transitioned the row
@@ -358,7 +358,7 @@ describe("4-hour active-order lifecycle", () => {
     let closeCalls = 0;
     const counting: OrderLifecycleRepository = {
       ...lifecycleRepository,
-      async closeOrderAsDeliveredPaid(orderId, at) {
+      async closeStaleOrder(orderId, at) {
         closeCalls += 1;
         void orderId;
         void at;
