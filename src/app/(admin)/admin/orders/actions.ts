@@ -6,6 +6,7 @@ import { orders } from "@/db/schema";
 import { eq, desc, and, count, ilike, or } from "drizzle-orm";
 import { auth } from "@/auth";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { reportInternalError } from "@/lib/errors";
 import { resolveClientNamesBatch } from "@/lib/lead-utils";
 import { getBusinessInfo } from "@/lib/business";
 import { getStatusNotificationMessage } from "@/lib/whatsapp/status-utils";
@@ -241,11 +242,11 @@ export async function updateOrderStatus(
         );
       } catch (e) {
         revalidatePath("/admin/orders");
+        // F13: internals stay in the server log under a correlation id.
+        const ref = reportInternalError("orders.updateStatus.notify", e);
         return {
           success: false,
-          message: `Estado actualizado, pero no se pudo notificar: ${
-            e instanceof Error ? e.message : "error desconocido"
-          }`,
+          message: `Estado actualizado, pero no se pudo notificar al cliente (ref: ${ref})`,
         };
       }
     }
@@ -333,7 +334,8 @@ export async function notifyCustomer(
 
     return { success: true, message: "Notificación enviada" };
   } catch (e) {
-    return { success: false, message: `Error: ${e instanceof Error ? e.message : "desconocido"}` };
+    const ref = reportInternalError("orders.notifyCustomer", e);
+    return { success: false, message: `Error al enviar la notificación (ref: ${ref})` };
   }
 }
 
