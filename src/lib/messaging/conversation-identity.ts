@@ -61,7 +61,9 @@ export interface ConversationIdentityRepository {
   find(
     channel: ChannelKind,
     channelAccountId: number | null,
-    normalizedExternalUserId: string
+    normalizedExternalUserId: string,
+    /** Raw identity, used only for a legacy null-account fallback. */
+    externalUserId?: string
   ): Promise<ConversationIdentityRecord | null>;
   insert(input: ConversationIdentityInsert): Promise<IdentityInsertResult>;
 }
@@ -106,8 +108,14 @@ export async function resolveConversationIdentity(
   );
   const accountId = input.channelAccountId ?? null;
 
-  const existing = await repo.find(input.channel, accountId, normalized);
+  const existing = await repo.find(
+    input.channel,
+    accountId,
+    normalized,
+    input.externalUserId
+  );
   if (existing) {
+    assertConversationAccount(existing, accountId);
     return { record: existing, isNew: false, normalizedExternalUserId: normalized };
   }
 
@@ -128,8 +136,14 @@ export async function resolveConversationIdentity(
   }
 
   // Unique-index race: another request inserted the same identity first.
-  const raced = await repo.find(input.channel, accountId, normalized);
+  const raced = await repo.find(
+    input.channel,
+    accountId,
+    normalized,
+    input.externalUserId
+  );
   if (raced) {
+    assertConversationAccount(raced, accountId);
     return { record: raced, isNew: false, normalizedExternalUserId: normalized };
   }
   throw new ConversationIdentityError(

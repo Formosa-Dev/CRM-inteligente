@@ -19,6 +19,7 @@ import { ycloudProvider } from "./providers/ycloud";
 import {
   channelAccountRowId,
   eventConversationExternalUserId,
+  eventSelfAddresses,
   logAckedWithoutPersistence,
   resolveEventChannel,
   resolveIngressContext,
@@ -153,6 +154,37 @@ describe("resolveIngressContext (no DB)", () => {
         makeEvent({ raw: { channel: "instagram" }, providerAccountId: "acc-9" })
       )
     );
+  });
+});
+
+describe("business self-address candidates", () => {
+  it("uses only the business side of an echo/status envelope", () => {
+    const echo = makeEvent({
+      kind: "message.echo",
+      direction: "outbound",
+      sender: { phone: "+15550009999" },
+      raw: {
+        whatsappMessage: { from: "+15550009999", to: "+15550001234" },
+      },
+    });
+    assert.deepEqual(eventSelfAddresses(echo), ["+15550009999"]);
+
+    const status = makeEvent({
+      kind: "message.status",
+      direction: "outbound",
+      sender: {},
+      raw: {
+        whatsappMessageUpdated: { from: "+15550009999", to: "+15550001234" },
+      },
+    });
+    assert.deepEqual(eventSelfAddresses(status), ["+15550009999"]);
+  });
+
+  it("uses the business `to` for inbound messages", () => {
+    const inbound = makeEvent({
+      raw: { whatsappInboundMessage: { from: "+15550001234", to: "+15550009999" } },
+    });
+    assert.deepEqual(eventSelfAddresses(inbound), ["+15550009999"]);
   });
 });
 

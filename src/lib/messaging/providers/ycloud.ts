@@ -180,27 +180,54 @@ function mapStatus(status: unknown): NormalizedInboundEvent["status"] {
   return undefined;
 }
 
+/** Stable JSON (sorted object keys) so redelivery order can't change the hash. */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  if (isRecord(value)) {
+    const keys = Object.keys(value).sort();
+    return `{${keys
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** Envelope keys the normalizers read, in a fixed order. */
+const ENVELOPE_KEYS = [
+  "whatsappInboundMessage",
+  "whatsappMessage",
+  "whatsappMessageUpdated",
+  "whatsappSmbMessageEcho",
+  "whatsappSmbMessageEchoes",
+  "smbMessage",
+  "whatsappMessageEcho",
+  "message",
+  "status",
+] as const;
+
 /**
  * Deterministic fallback when the envelope carries no event id: a stable
- * hash over fields that survive provider redelivery. Keeps id-less events
- * dedupable instead of collapsing onto an empty key (contract §deliveryId).
+ * hash over every normalized envelope candidate (including the key name and
+ * every field) so id-less status/lifecycle transitions with the same wamid
+ * and timestamp never collapse onto one provider+delivery_id key.
  */
 function syntheticDeliveryId(payload: Record<string, unknown>): string {
-  const message =
-    ["whatsappInboundMessage", "whatsappMessage", "whatsappSmbMessageEcho", "message"]
-      .map((key) => payload[key])
-      .find(isRecord) ?? {};
-  const basis = JSON.stringify([
-    asString(payload.type),
-    asString(payload.sendTime) ?? asString(payload.createTime),
-    asString(message.wamid) ?? asString(message.id),
-    asString(message.from),
-    asString(message.to),
-    // Status/lifecycle transitions can share the message id and timestamp;
-    // include the status so distinct transitions never collapse into one
-    // provider+delivery_id key.
-    asString(message.status) ?? asString(message.event),
-  ]);
+  const envelopes: [string, Record<string, unknown>][] = [];
+  for (const key of ENVELOPE_KEYS) {
+    const value = payload[key];
+    if (isRecord(value)) envelopes.push([key, value]);
+  }
+  const basis = stableStringify({
+    type: asString(payload.type) ?? null,
+    time:
+      asString(payload.sendTime) ??
+      asString(payload.createTime) ??
+      asString(payload.updateTime) ??
+      null,
+    envelopes,
+  });
   return `ycloud:synth:${createHash("sha256").update(basis).digest("hex").slice(0, 16)}`;
 }
 
@@ -414,6 +441,7 @@ function sendTextWithAccount(
     to: msg.to,
     type: "text",
     text: { body: msg.text },
+    ...(msg.idempotencyKey ? { externalId: msg.idempotencyKey } : {}),
   });
 }
 
@@ -425,6 +453,7 @@ function sendImageWithAccount(
     to: msg.to,
     type: "image",
     image: { link: msg.mediaUrl, caption: msg.text || "" },
+    ...(msg.idempotencyKey ? { externalId: msg.idempotencyKey } : {}),
   });
 }
 
@@ -440,6 +469,7 @@ function sendDocumentWithAccount(
       caption: msg.text || "",
       filename: "documento.pdf",
     },
+    ...(msg.idempotencyKey ? { externalId: msg.idempotencyKey } : {}),
   });
 }
 

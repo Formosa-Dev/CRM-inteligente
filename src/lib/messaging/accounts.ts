@@ -66,37 +66,55 @@ function credentialsFromEnv(ref: string): ChannelAccount["credentials"] {
   };
 }
 
+/** A scoped account exists but has no usable ycloud key. Fail closed. */
+export class MissingScopedCredentialError extends Error {
+  readonly accountId: number;
+
+  constructor(accountId: number, detail: string) {
+    super(`channel_accounts #${accountId} has no usable ycloudApiKey (${detail})`);
+    this.name = "MissingScopedCredentialError";
+    this.accountId = accountId;
+  }
+}
+
 /**
  * `agent_config`/unset credentials resolve through the account's own scope so
- * a per-account API key is actually used. Schema-not-ready is the only path
- * that falls back to the install-global agent_config/env pair.
+ * a per-account API key is actually used. A blank key on an account/channel
+ * row is an explicit failure: only `schema-not-ready` (un-migrated install) or
+ * a resolved `global` source row may fall back to the install-wide key/env.
  */
 async function credentialsFromAgentConfig(
   row: ChannelAccountRow
 ): Promise<ChannelAccount["credentials"]> {
   if (row.provider !== "ycloud") return { apiKey: "", webhookSecret: "" };
 
-  let scopedKey = "";
   const resolution = await resolveAgentConfigStrict({
     channel: row.channel,
     channelAccountId: row.id,
   });
+
+  let apiKey = "";
   if (resolution.kind === "resolved") {
-    scopedKey = decryptIfEncrypted(resolution.row.ycloudApiKey);
-  } else if (
-    resolution.kind !== "schema-not-ready" &&
-    resolution.kind !== "not-found"
-  ) {
+    apiKey = decryptIfEncrypted(resolution.row.ycloudApiKey);
+    if (!apiKey && resolution.source !== "global") {
+      throw new MissingScopedCredentialError(row.id, `${resolution.source} row #${resolution.id} is blank`);
+    }
+  } else if (resolution.kind === "not-found") {
+    throw new MissingScopedCredentialError(row.id, "no scoped/global agent_config row");
+  } else if (resolution.kind === "db-error") {
     // A transient DB error must not be silently replaced by global creds.
     throw resolution.error;
   }
 
+  const envAllowed =
+    resolution.kind === "schema-not-ready" ||
+    (resolution.kind === "resolved" && resolution.source === "global");
   const [globalKey, secrets] = await Promise.all([
-    scopedKey ? Promise.resolve("") : getYCloudApiKey(),
+    apiKey || !envAllowed ? Promise.resolve("") : getYCloudApiKey(),
     getIntegrationSecrets(),
   ]);
   return {
-    apiKey: scopedKey || globalKey,
+    apiKey: apiKey || globalKey,
     webhookSecret: secrets.ycloudWebhookSecret,
   };
 }
@@ -234,7 +252,15 @@ export async function resolveChannelAccountStrict(
     return { kind: "mismatch", reason: `unregistered provider '${row.provider}'` };
   }
 
-  const account = await rowToAccount(row);
+  let account: ChannelAccount | undefined;
+  try {
+    account = await rowToAccount(row);
+  } catch (error) {
+    if (error instanceof MissingScopedCredentialError) {
+      return { kind: "mismatch", reason: error.message };
+    }
+    throw error;
+  }
   if (!account) {
     return { kind: "mismatch", reason: `account #${row.id} cannot be materialized` };
   }
@@ -276,7 +302,15 @@ export async function resolveChannelAccountByIdStrict(
       reason: `account #${accountId} provider '${row.provider}' != expected '${expectedProvider}'`,
     };
   }
-  const account = await rowToAccount(row);
+  let account: ChannelAccount | undefined;
+  try {
+    account = await rowToAccount(row);
+  } catch (error) {
+    if (error instanceof MissingScopedCredentialError) {
+      return { kind: "mismatch", reason: error.message };
+    }
+    throw error;
+  }
   return account
     ? {
         kind: "resolved",

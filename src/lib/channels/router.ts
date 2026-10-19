@@ -52,14 +52,22 @@ export async function findOrCreateConversation(
   channelAccountId: number | null;
 }> {
   const repo: ConversationIdentityRepository = {
-    async find(scopeChannel, scopeAccountId, normalizedExternalUserId) {
-      const [row] = await db
-        .select({
-          id: conversations.id,
-          channel: conversations.channel,
-          channelAccountId: conversations.channelAccountId,
-        })
-        .from(conversations)
+    async find(
+      scopeChannel,
+      scopeAccountId,
+      normalizedExternalUserId,
+      externalUserId
+    ) {
+      const select = () =>
+        db
+          .select({
+            id: conversations.id,
+            channel: conversations.channel,
+            channelAccountId: conversations.channelAccountId,
+          })
+          .from(conversations);
+
+      const [row] = await select()
         .where(
           and(
             eq(conversations.channel, scopeChannel),
@@ -73,11 +81,48 @@ export async function findOrCreateConversation(
           )
         )
         .limit(1);
-      return row
+      if (row) {
+        return {
+          id: row.id,
+          channel: row.channel as ChannelKind,
+          channelAccountId: row.channelAccountId ?? null,
+        };
+      }
+
+      // Legacy rows created before `external_user_id` existed have only
+      // `whatsapp_id` (whatsapp/telegram). Only the unbound/null-account
+      // identity may adopt them — a bound account must never pick one up.
+      if (scopeAccountId != null) return null;
+      const legacyKeys =
+        scopeChannel === "telegram"
+          ? [
+              `tg_${externalUserId ?? ""}`,
+              `tg_${normalizedExternalUserId}`,
+            ]
+          : scopeChannel === "whatsapp" || scopeChannel === "sms"
+            ? [externalUserId ?? "", normalizedExternalUserId]
+            : [];
+      const legacyWhere = legacyKeys
+        .filter((key) => key.length > 0)
+        .map((key) => eq(conversations.whatsappId, key));
+      if (legacyWhere.length === 0) return null;
+
+      const [legacy] = await select()
+        .where(
+          and(
+            eq(conversations.channel, scopeChannel),
+            isNull(conversations.channelAccountId),
+            legacyWhere.length === 1
+              ? legacyWhere[0]
+              : or(...legacyWhere)
+          )
+        )
+        .limit(1);
+      return legacy
         ? {
-            id: row.id,
-            channel: row.channel as ChannelKind,
-            channelAccountId: row.channelAccountId ?? null,
+            id: legacy.id,
+            channel: legacy.channel as ChannelKind,
+            channelAccountId: legacy.channelAccountId ?? null,
           }
         : null;
     },
@@ -491,6 +536,130 @@ export async function resolveDefaultWhatsAppAccount(): Promise<DefaultAccountRes
   }
 }
 
+export type LegacyWhatsAppCredentialsResolution =
+  | {
+      kind: "resolved";
+      credentials: { apiKey: string; senderAddress: string };
+    }
+  | { kind: "missing"; reason: string }
+  | { kind: "error"; error: unknown; retryable: boolean };
+
+export interface UnboundWhatsAppSendDeps {
+  resolveBinding(phone: string): Promise<BoundAccountResolution>;
+  resolveDefaultAccount(): Promise<DefaultAccountResolution>;
+  resolveLegacyCredentials(): Promise<LegacyWhatsAppCredentialsResolution>;
+}
+
+export type UnboundWhatsAppSendResolution =
+  | { kind: "account"; account: ChannelAccount }
+  | {
+      kind: "legacy";
+      credentials: { apiKey: string; senderAddress: string };
+    }
+  | { kind: "fail"; reason: string; retryable: boolean };
+
+/**
+ * Sender decision for a WhatsApp conversation with no account binding.
+ *
+ * The binding by phone wins, then the single active account. Only a genuinely
+ * unprovisioned channel may use the legacy config/env credentials; ambiguous,
+ * not-found, or transient lookup failures never fall back to them.
+ */
+export async function resolveUnboundWhatsAppSend(
+  phone: string,
+  deps: UnboundWhatsAppSendDeps
+): Promise<UnboundWhatsAppSendResolution> {
+  const { decideSendAccount } = await import("@/lib/messaging/send-account");
+  const decision = await decideSendAccount(phone, {
+    resolveBinding: deps.resolveBinding,
+    resolveDefaultAccount: deps.resolveDefaultAccount,
+  });
+  if (decision.kind === "retry") {
+    return { kind: "fail", reason: decision.reason, retryable: true };
+  }
+  if (decision.kind === "drop") {
+    return { kind: "fail", reason: decision.reason, retryable: false };
+  }
+  if (decision.account) return { kind: "account", account: decision.account };
+
+  const legacy = await deps.resolveLegacyCredentials();
+  switch (legacy.kind) {
+    case "resolved":
+      return { kind: "legacy", credentials: legacy.credentials };
+    case "missing":
+      return { kind: "fail", reason: legacy.reason, retryable: false };
+    case "error":
+      return {
+        kind: "fail",
+        reason: "legacy credential lookup failed",
+        retryable: legacy.retryable,
+      };
+  }
+}
+
+/**
+ * Legacy credential path used ONLY when `channel_accounts` is unprovisioned.
+ * A scoped row with a blank key is an explicit failure; only a global row or
+ * a positively identified un-migrated schema may use the env install values.
+ */
+async function resolveLegacyWhatsAppCredentials(): Promise<LegacyWhatsAppCredentialsResolution> {
+  const { resolveAgentConfig, resolveAgentConfigStrict } = await import(
+    "@/lib/agent-config-scope"
+  );
+  const { decryptIfEncrypted } = await import("@/lib/encryption");
+  const scope = { channel: "whatsapp" as const, channelAccountId: null };
+
+  let resolution: Awaited<ReturnType<typeof resolveAgentConfigStrict>>;
+  try {
+    resolution = await resolveAgentConfigStrict(scope);
+  } catch (error) {
+    return { kind: "error", error, retryable: true };
+  }
+  if (resolution.kind === "db-error") {
+    return { kind: "error", error: resolution.error, retryable: true };
+  }
+
+  const schemaNotReady = resolution.kind === "schema-not-ready";
+  const row =
+    resolution.kind === "resolved"
+      ? resolution.row
+      : schemaNotReady
+        ? await resolveAgentConfig(scope)
+        : undefined;
+  if (!row && resolution.kind === "not-found") {
+    return {
+      kind: "missing",
+      reason: "no scoped/global WhatsApp config for an unprovisioned channel",
+    };
+  }
+
+  const envAllowed =
+    schemaNotReady ||
+    (resolution.kind === "resolved" && resolution.source === "global");
+  const apiKey =
+    decryptIfEncrypted(row?.ycloudApiKey) ||
+    (envAllowed ? process.env.YCLOUD_API_KEY ?? "" : "");
+  const senderAddress =
+    row?.phoneNumber || (envAllowed ? process.env.WHATSAPP_PHONE_NUMBER ?? "" : "");
+
+  if (!apiKey) {
+    return {
+      kind: "missing",
+      reason:
+        resolution.kind === "resolved"
+          ? `agent_config #${resolution.id} (${resolution.source}) has a blank ycloudApiKey`
+          : "no ycloudApiKey for the WhatsApp config",
+    };
+  }
+  if (!senderAddress) {
+    return {
+      kind: "missing",
+      reason: "no WhatsApp sender phone for the config",
+    };
+  }
+  return { kind: "resolved", credentials: { apiKey, senderAddress } };
+}
+
 // Send outbound message via the correct channel
 export async function sendOutboundMessage(
   conversationId: number,
@@ -535,44 +704,51 @@ export async function sendOutboundMessage(
     );
   } else if (channel === "whatsapp" && conv.channelAccountId == null) {
     const { messenger } = await import("@/lib/messaging");
-    const { resolveAgentConfig } = await import("@/lib/agent-config-scope");
-    // S13: the conversation's own channel_account_id/channel picks the scoped
-    // config row (creds + sender). Legacy rows (both null) → global, unchanged.
-    const cfg = await resolveAgentConfig({
-      channel: conv.channel,
-      channelAccountId: conv.channelAccountId,
-    });
-    const { decryptIfEncrypted } = await import("@/lib/encryption");
-    const apiKey = decryptIfEncrypted(cfg?.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
-    const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
     const to = conv.customerPhone ?? conv.externalUserId ?? "";
-
-    if (!apiKey || !from) {
+    if (!to) {
       throw new Error(
-        `Conversation ${conversationId} has no resolvable WhatsApp credentials/sender`
+        `Conversation ${conversationId} has no recipient address for WhatsApp`
       );
     }
-    {
-      const credentials = { apiKey, senderAddress: from };
-      if (mediaUrl && mediaType === "image") {
-        const res = await messenger.send(
-          { to, type: "image", mediaUrl, text: content || undefined },
-          { credentials }
-        );
-        if (!res.ok) throw new Error(res.error);
-      } else if (mediaUrl && mediaType === "document") {
-        const res = await messenger.send(
-          { to, type: "document", mediaUrl, text: content || undefined },
-          { credentials }
-        );
-        if (!res.ok) throw new Error(res.error);
-      } else {
-        const res = await messenger.send(
-          { to, type: "text", text: content || " " },
-          { credentials }
-        );
-        if (!res.ok) throw new Error(res.error);
-      }
+
+    // Unbound conversation: resolve the sender by phone/active account first.
+    // The install-global/env pair is allowed only when the channel is truly
+    // unprovisioned — never as a way around an ambiguous/failed account lookup.
+    const decision = await resolveUnboundWhatsAppSend(to, {
+      resolveBinding: resolveConversationAccountForPhone,
+      resolveDefaultAccount: resolveDefaultWhatsAppAccount,
+      resolveLegacyCredentials: resolveLegacyWhatsAppCredentials,
+    });
+    if (decision.kind === "fail") {
+      const error = new Error(
+        `Conversation ${conversationId} has no safe WhatsApp sender: ${decision.reason}`
+      ) as Error & { retryable?: boolean };
+      error.retryable = decision.retryable;
+      throw error;
+    }
+
+    const sendWithAccount = decision.kind === "account";
+    const options = sendWithAccount
+      ? { channel: "whatsapp" as const, account: decision.account }
+      : { credentials: decision.credentials };
+    if (mediaUrl && mediaType === "image") {
+      const res = await messenger.send(
+        { to, type: "image", mediaUrl, text: content || undefined },
+        options
+      );
+      if (!res.ok) throw new Error(res.error);
+    } else if (mediaUrl && mediaType === "document") {
+      const res = await messenger.send(
+        { to, type: "document", mediaUrl, text: content || undefined },
+        options
+      );
+      if (!res.ok) throw new Error(res.error);
+    } else {
+      const res = await messenger.send(
+        { to, type: "text", text: content || " " },
+        options
+      );
+      if (!res.ok) throw new Error(res.error);
     }
   } else {
     const { messenger } = await import("@/lib/messaging");
@@ -649,17 +825,38 @@ export async function notifyCustomerDeliveryArrived(
       ? ctx.account
       : undefined;
 
+  const accountId =
+    ctx.channelAccountId ??
+    (ctx.account && Number(ctx.account.id) > 0 ? Number(ctx.account.id) : null);
+
   return notifyDeliveryArrived(deliveryPhone, {
     async findPendingOrder() {
-      const [order] = await db
-        .select({
-          phoneNumber: orders.phoneNumber,
-          customerName: orders.customerName,
-        })
-        .from(orders)
-        .where(and(inArray(orders.status, ["pending", "preparing"])))
-        .orderBy(desc(orders.createdAt))
-        .limit(1);
+      // Account-scoped notifications only consider orders whose lead belongs
+      // to the same channel account. The unbound/legacy context keeps the
+      // historical install-wide lookup.
+      const selection = {
+        phoneNumber: orders.phoneNumber,
+        customerName: orders.customerName,
+      };
+      const status = inArray(orders.status, ["pending", "preparing"]);
+
+      const [order] =
+        accountId != null
+          ? await db
+              .select(selection)
+              .from(orders)
+              .innerJoin(leads, eq(orders.leadId, leads.id))
+              .where(
+                and(status, eq(leads.channelAccountId, accountId))
+              )
+              .orderBy(desc(orders.createdAt))
+              .limit(1)
+          : await db
+              .select(selection)
+              .from(orders)
+              .where(status)
+              .orderBy(desc(orders.createdAt))
+              .limit(1);
       return order?.phoneNumber
         ? { phoneNumber: order.phoneNumber, customerName: order.customerName }
         : null;
@@ -685,47 +882,4 @@ export async function notifyCustomerDeliveryArrived(
       );
     },
   });
-}
-
-/**
- * Reenvía la ubicación del cliente al número de delivery.
- */
-export async function forwardLocationToDelivery(
-  customerName: string | null,
-  customerPhone: string,
-  address: string,
-  lat: number,
-  lng: number,
-  deliveryPhone: string
-): Promise<boolean> {
-  try {
-    const { messenger } = await import("@/lib/messaging");
-    const { agentConfig } = await import("@/db/schema");
-    const [cfg] = await db.select().from(agentConfig).where(eq(agentConfig.id, 1)).limit(1);
-    const { decryptIfEncrypted } = await import("@/lib/encryption");
-    const apiKey = decryptIfEncrypted(cfg?.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
-    const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
-
-    if (!apiKey || !from || !deliveryPhone) return false;
-
-    const mapsLink = `https://www.google.com/maps?q=${lat},${lng}`;
-    const message = [
-      `📍 Cliente: ${customerName || "Sin nombre"}`,
-      `Dirección: ${address}`,
-      `Ubicación: ${mapsLink}`,
-      `Tel: ${customerPhone}`,
-    ].join("\n");
-
-    const res = await messenger.send(
-      { to: deliveryPhone, type: "text", text: message },
-      { credentials: { apiKey, senderAddress: from } },
-    );
-    if (!res.ok) throw new Error(res.error);
-
-    console.log(`[delivery] Location forwarded to ${deliveryPhone} for customer ${customerPhone}`);
-    return true;
-  } catch (error) {
-    console.error("[delivery] Error forwarding location:", error);
-    return false;
-  }
 }

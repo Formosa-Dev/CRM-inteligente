@@ -83,6 +83,26 @@ import { checkRateLimit } from "@/lib/infra/rate-limit";
 import { buildWebOrderRedirectMessage } from "@/lib/whatsapp/web-order-redirect";
 
 /**
+ * First-contact auto-reply gate. `isNew` is the fast path; the message-count
+ * check makes a retry after a retryable send failure send again (the
+ * conversation row committed, but no inbound/auto-reply message did).
+ * `alreadyReplied` is the durable marker that stops a replay once the reply
+ * was sent and recorded.
+ */
+export function shouldSendAutoReply(input: {
+  isNew: boolean;
+  alreadyReplied: boolean;
+  conversationHasMessages: boolean;
+}): boolean {
+  if (input.alreadyReplied) return false;
+  return input.isNew || !input.conversationHasMessages;
+}
+
+export function autoReplyMarkerKey(messageId: string): string {
+  return `auto-reply:${messageId}`;
+}
+
+/**
  * Per-event context handed to the pipeline by the unified ingress route.
  * All fields optional — the legacy /api/whatsapp/webhook route passes none.
  */
@@ -805,20 +825,47 @@ export async function handleNormalizedEvent(
       }
     }
 
-    // 8. Auto-reply for new conversations (solo si la AI está habilitada)
+    // 8. Auto-reply for new conversations (solo si la AI está habilitada).
+    //    The marker + idempotency key make retries safe: a first-contact send
+    //    that failed retryably is retried, while a sent reply is never
+    //    duplicated (provider dedups on the same external id).
     if (
       actor === "customer" &&
       isAiEnabled &&
       autoReplyEnabled &&
       autoReplyMessage &&
-      isNew &&
       !webOrderRedirectEnabled
     ) {
-      if (convAccountBroken) {
+      const marker = autoReplyMarkerKey(messageId);
+      const alreadyReplied = await isMessageDuplicate(marker);
+      let conversationHasMessages = false;
+      if (!alreadyReplied) {
+        try {
+          const existing = await getConversationMessages(conversationId, 1);
+          conversationHasMessages = existing.length > 0;
+        } catch (lookupError) {
+          console.error(
+            "[webhook:wa] Auto-reply history lookup failed — retryable",
+            lookupError
+          );
+          return NextResponse.json(
+            { error: "auto-reply-history-unavailable" },
+            { status: 503 }
+          );
+        }
+      }
+      if (!shouldSendAutoReply({ isNew, alreadyReplied, conversationHasMessages })) {
+        // no-op: duplicate/replay or an established conversation
+      } else if (convAccountBroken) {
         console.warn("[webhook:wa] Auto-reply suppressed — channel account unresolvable");
       } else {
         const autoReplyResult = await messenger.send(
-          { to: customerPhone, type: "text", text: autoReplyMessage },
+          {
+            to: customerPhone,
+            type: "text",
+            text: autoReplyMessage,
+            idempotencyKey: marker,
+          },
           convAccount
             ? { channel: convChannel, account: convAccount }
             : {
@@ -830,14 +877,22 @@ export async function handleNormalizedEvent(
         );
         if (!autoReplyResult.ok) {
           console.error(
-            "[webhook:wa] Auto-reply send failed — retryable, inbound not acked",
-            autoReplyResult.error
+            "[webhook:wa] Auto-reply send failed — inbound not acked",
+            { retryable: autoReplyResult.retryable, error: autoReplyResult.error }
           );
           return NextResponse.json(
             { error: "auto-reply-send-failed" },
-            { status: 503 }
+            { status: autoReplyResult.retryable ? 503 : 502 }
           );
         }
+        await insertMessage(
+          conversationId,
+          "assistant",
+          autoReplyMessage,
+          undefined,
+          marker,
+          channelAccountId
+        );
       }
     }
 

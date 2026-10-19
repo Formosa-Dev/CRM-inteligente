@@ -319,6 +319,26 @@ describe("ycloud parseWebhook — NormalizedInboundEvent fixtures", () => {
     assert.match(read.deliveryId, /^ycloud:synth:/);
   });
 
+  test("id-less whatsappMessageUpdated status hashes the normalized envelope", () => {
+    const make = (status: string, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        type: "whatsapp.message.updated",
+        createTime: "2026-01-01T00:00:00.000Z",
+        whatsappMessageUpdated: {
+          wamid: "wamid.updated.same",
+          status,
+          updateTime: "2026-01-01T00:00:00.000Z",
+          ...extra,
+        },
+      });
+    const [delivered] = provider.parseWebhook({ headers: {}, rawBody: make("delivered") });
+    const [read] = provider.parseWebhook({ headers: {}, rawBody: make("read") });
+    const [readAgain] = provider.parseWebhook({ headers: {}, rawBody: make("read") });
+    assert.notEqual(delivered.deliveryId, read.deliveryId);
+    assert.equal(read.deliveryId, readAgain.deliveryId);
+    assert.match(read.deliveryId, /^ycloud:synth:/);
+  });
+
   test("envelope without any id gets a deterministic ycloud:synth deliveryId", () => {
     const idLess = JSON.stringify({
       type: "whatsapp.inbound_message.received",

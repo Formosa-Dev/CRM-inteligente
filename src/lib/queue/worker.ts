@@ -29,7 +29,7 @@ function getDelay(retryCount: number): number {
   return Math.pow(2, retryCount) * 1000;
 }
 
-interface QueuePayload {
+export interface QueuePayload {
   chatId: string | number;
   type: string;
   timestamp: number;
@@ -110,20 +110,88 @@ async function processMessage(payload: QueuePayload): Promise<ProcessOutcome> {
   }
 }
 
+export interface QueueOutcomeDeps {
+  process(payload: QueuePayload): Promise<ProcessOutcome>;
+  requeue(payload: QueuePayload): Promise<void>;
+  deadLetter(payload: QueuePayload): Promise<void>;
+  sleep(ms: number): Promise<void>;
+}
+
+/**
+ * Applies the retry/DLQ policy to an already-popped payload. Exported so the
+ * "unexpected throw must not lose the payload" behavior is testable without
+ * Redis. An unexpected throw is treated as a retryable failure.
+ */
+export async function handlePoppedPayload(
+  payload: QueuePayload,
+  deps: QueueOutcomeDeps
+): Promise<ProcessOutcome> {
+  let outcome: ProcessOutcome;
+  try {
+    outcome = await deps.process(payload);
+  } catch (error) {
+    console.error("[queue] processing threw — retrying payload", error, {
+      chatId: payload.chatId,
+      retryCount: payload.retryCount,
+    });
+    outcome = "retry";
+  }
+
+  if (outcome === "ok") {
+    console.log("[queue] processed successfully", { chatId: payload.chatId });
+    return "ok";
+  }
+
+  if (outcome === "dlq") {
+    await deps.deadLetter(payload);
+    console.log("[queue] moved to DLQ (non-retryable)", {
+      chatId: payload.chatId,
+    });
+    return "dlq";
+  }
+
+  payload.retryCount = (payload.retryCount ?? 0) + 1;
+  if (payload.retryCount < 3) {
+    const delay = getDelay(payload.retryCount);
+    console.log("[queue] will retry in %dms (attempt %d)", delay, payload.retryCount, {
+      chatId: payload.chatId,
+    });
+    await deps.sleep(delay);
+    try {
+      await deps.requeue(payload);
+    } catch (requeueError) {
+      console.error("[queue] re-enqueue failed — moving payload to DLQ", requeueError, {
+        chatId: payload.chatId,
+      });
+      await deps.deadLetter(payload);
+      return "dlq";
+    }
+    console.log("[queue] re-enqueued for retry", {
+      chatId: payload.chatId,
+      retryCount: payload.retryCount,
+    });
+    return "retry";
+  }
+
+  await deps.deadLetter(payload);
+  console.log("[queue] moved to DLQ (max retries)", { chatId: payload.chatId });
+  return "dlq";
+}
+
 export async function processNextMessage(): Promise<boolean> {
   if (!redis) {
     return false;
   }
 
+  let parsed: QueuePayload | undefined;
   try {
     const raw = await redis.rpop(QUEUE_KEY);
     if (!raw) {
       return false;
     }
 
-    let payload: QueuePayload;
     try {
-      payload = JSON.parse(raw as string) as QueuePayload;
+      parsed = JSON.parse(raw as string) as QueuePayload;
     } catch {
       console.log("[queue] failed to parse message — moving to DLQ", {
         raw: (raw as string).substring(0, 200),
@@ -132,48 +200,39 @@ export async function processNextMessage(): Promise<boolean> {
       return true;
     }
 
+    const payload = parsed;
+
     console.log("[queue] processing", {
       type: payload.type,
       chatId: payload.chatId,
       retryCount: payload.retryCount,
     });
 
-    const outcome = await processMessage(payload);
-
-    if (outcome === "ok") {
-      console.log("[queue] processed successfully", { chatId: payload.chatId });
-      return true;
-    }
-
-    if (outcome === "dlq") {
-      await redis.lpush(DLQ_KEY, JSON.stringify(payload));
-      console.log("[queue] moved to DLQ (non-retryable)", {
-        chatId: payload.chatId,
-      });
-      return true;
-    }
-
-    payload.retryCount = (payload.retryCount ?? 0) + 1;
-
-    if (payload.retryCount < 3) {
-      const delay = getDelay(payload.retryCount);
-      console.log("[queue] will retry in %dms (attempt %d)", delay, payload.retryCount, {
-        chatId: payload.chatId,
-      });
-      await sleep(delay);
-      await redis.lpush(QUEUE_KEY, JSON.stringify(payload));
-      console.log("[queue] re-enqueued for retry", {
-        chatId: payload.chatId,
-        retryCount: payload.retryCount,
-      });
-    } else {
-      await redis.lpush(DLQ_KEY, JSON.stringify(payload));
-      console.log("[queue] moved to DLQ (max retries)", { chatId: payload.chatId });
-    }
-
+    await handlePoppedPayload(payload, {
+      process: processMessage,
+      requeue: (item) => redis!.lpush(QUEUE_KEY, JSON.stringify(item)).then(() => undefined),
+      deadLetter: (item) => redis!.lpush(DLQ_KEY, JSON.stringify(item)).then(() => undefined),
+      sleep,
+    });
     return true;
   } catch (err) {
     console.error("[queue] processNextMessage error:", err);
+    // Never drop an already-popped message because of an unexpected failure
+    // outside the retry handler: put it back with its (advanced) retry count.
+    if (parsed) {
+      parsed.retryCount = (parsed.retryCount ?? 0) + 1;
+      try {
+        if (parsed.retryCount < 3) {
+          await redis.lpush(QUEUE_KEY, JSON.stringify(parsed));
+        } else {
+          await redis.lpush(DLQ_KEY, JSON.stringify(parsed));
+        }
+      } catch (requeueError) {
+        console.error("[queue] recovery re-enqueue failed:", requeueError, {
+          chatId: parsed.chatId,
+        });
+      }
+    }
     return false;
   }
 }

@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { findOrCreateConversation, insertMessage } from "@/lib/channels/router";
 import {
   ChannelAccountResolutionError,
+  providerForChannel,
   resolveChannelAccountStrict,
 } from "@/lib/messaging";
 
@@ -71,9 +72,22 @@ export async function POST(req: NextRequest) {
             (candidate: unknown): candidate is string =>
               typeof candidate === "string" && candidate.length > 0
           );
+          // Fail closed when Meta does not identify the receiving business:
+          // never attribute an event to the sole active account by default.
+          const metaProvider = providerForChannel("whatsapp");
+          if (!metaProvider || candidates.length === 0) {
+            console.warn(
+              "[meta/webhook] missing Meta routing key/provider — skipping message",
+              from
+            );
+            continue;
+          }
+          // Only an account provisioned for the configured Meta/WhatsApp
+          // provider may receive this event; a provider mismatch is a skip.
           const resolution = await resolveChannelAccountStrict(
             "whatsapp",
-            candidates
+            candidates,
+            metaProvider.id
           );
           if (resolution.kind === "db-error") {
             throw new ChannelAccountResolutionError(resolution);

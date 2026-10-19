@@ -149,7 +149,13 @@ carry no `channel_account_id` and are unaffected.
 - `channel-events.test.ts` — idempotency, status keys, schema classification,
   additive migration.
 - `ingress.test.ts` — passive echo identity uses `providerConversationId`,
-  no placeholder on DB failure.
+  no placeholder on DB failure, and business-only self-address candidates.
+- `auto-reply.test.ts` — first-contact retry gate and deterministic marker.
+- `security-round3.test.ts` — mocked-DB legacy `whatsapp_id` fallback,
+  two-account passive pipeline, two-event signed webhook, blank scoped key,
+  and Meta fail-closed routing.
+- `src/lib/queue/worker.test.ts` — popped-payload retry/DLQ on unexpected
+  throws and re-enqueue failures.
 - `src/app/api/whatsapp/webhook/route.test.ts` — raw-body HMAC plus `401`/`503`
   HTTP statuses.
 
@@ -164,9 +170,17 @@ carry no `channel_account_id` and are unaffected.
 - A retryable redirect/fixed-reply send returns `503`, but inbound dedup means
   a provider replay will not resend that deterministic reply; the failure is
   surfaced rather than silently acked.
-- Meta direct webhook resolves `metadata.phone_number_id` /
-  `display_phone_number`; installs that have not provisioned matching rows
-  continue with legacy null-account conversations by design.
+- Meta direct webhook only resolves accounts for the registered WhatsApp
+  provider and only when `metadata.phone_number_id` / display number is
+  present. In v1 that provider is YCloud; a Meta-direct-only install with no
+  matching provisioned row is skipped (fail closed).
+- `0018` re-normalizes existing identities. Like `0015` it aborts before any
+  update when the new canonical identities collide; an operator must resolve
+  the listed duplicates first.
+- The auto-reply idempotency marker is stored as an assistant message with a
+  deterministic `platform_message_id`; it is real outbound history, but on a
+  first contact it can appear before the inbound message row until that row is
+  persisted later in the same request.
 
 ## 10. Corrective review (post-`db3659c`)
 
@@ -186,3 +200,23 @@ The independent review findings were addressed in the corrective commit(s):
 | Legacy row chosen over bound row | `selectBoundConversationId` returns only the bound row. |
 | Meta webhook created null-account rows | resolves `metadata.phone_number_id`/display number; fail-closed skip or `503`. |
 | Provider IDs matched by digit suffix | `looksLikePhone` requires phone punctuation and >=7 digits; `phoneMatches` rejects `waba-2`/`acc-123`. |
+
+
+## 11. Corrective review round 3 (`280a6d0..778ec30`)
+
+The fresh review of the remediation range returned CHANGES_REQUIRED. The
+findings below are fixed on top of `778ec30`:
+
+| Finding | Fix |
+| --- | --- |
+| Unbound admin WhatsApp reply bypassed account resolution and used global/env credentials | `sendOutboundMessage` now calls the shared `decideSendAccount` (phone binding first, then the single active account). Ambiguous/not-found/db-error are hard failures; the legacy config/env pair is reachable only for a genuinely unprovisioned channel. |
+| Legacy NULL `external_user_id` rows lost the `whatsapp_id` fallback | Null-account lookups fall back to `whatsapp_id` (including the `tg_` form). Migration `0018` backfills `external_user_id` from `whatsapp_id` and re-canonicalizes, preflighting collisions first so it cannot raise `23505` mid-update. |
+| Blank scoped `ycloudApiKey` silently fell back to global/env | Account/channel rows with a blank key now materialize as a `mismatch` (explicit fail). Only a resolved `global` source or `schema-not-ready` may use the install key/env. |
+| Auto-reply ignored `retryable` and was not retry-idempotent | Permanent failures return `502`, retryable ones `503`. Sends carry a deterministic idempotency key and record a marker; the gate resends only when the first contact never produced a message, and never after the marker exists. |
+| Meta webhook could auto-pick the sole account | Resolution requires Meta routing candidates and the registered WhatsApp provider; missing routing key/provider or a provider mismatch skips the message. |
+| Echo/status resolution accepted the customer `to` as a self address | Direction-aware `eventSelfAddresses`: inbound uses `to`; outbound/status uses `sender.phone`/`from` only. |
+| Unexpected queue throw lost the popped payload | The retry policy is extracted and applied to the popped payload; unexpected throws retry with `retryCount`, then DLQ, and a failed re-enqueue falls back to the DLQ. |
+| Synthetic status ids could collide across envelope keys | The synthetic id hashes a stable, sorted representation of every normalized envelope candidate, including `whatsappMessageUpdated`. |
+| Missing two-account/route behavior coverage | Added a mocked-DB two-account passive-pipeline test, a two-event signed webhook route test, and a Meta fail-closed test; `assertConversationAccount` is now wired into identity resolution. |
+| Delivery notification used the install-wide latest pending order | Account-scoped contexts join `orders → leads` and filter by `leads.channel_account_id`; the unbound/legacy context keeps the historical lookup. |
+| Dead `id=1`-based location forwarding helper; SQL/JS trim drift | Removed `forwardLocationToDelivery`; `0018` re-normalizes with whitespace trimming that includes tabs/newlines, matching the runtime canonicalizer. |

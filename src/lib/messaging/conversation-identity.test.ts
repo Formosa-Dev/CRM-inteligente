@@ -38,7 +38,8 @@ class MemoryIdentityRepository implements ConversationIdentityRepository {
   async find(
     channel: ConversationIdentityRecord["channel"],
     channelAccountId: number | null,
-    normalizedExternalUserId: string
+    normalizedExternalUserId: string,
+    _externalUserId?: string
   ): Promise<ConversationIdentityRecord | null> {
     const exact = this.rows.get(
       keyOf(channel, channelAccountId, normalizedExternalUserId)
@@ -94,6 +95,11 @@ describe("canonicalExternalUserId", () => {
     assert.equal(canonicalExternalUserId("instagram", "@Some.Handle "), "@Some.Handle");
     assert.equal(canonicalExternalUserId("facebook", "page-123"), "page-123");
     assert.equal(canonicalExternalUserId("telegram", "@handle"), "@handle");
+  });
+
+  it("trims every JS whitespace character (tabs/newlines), matching 0018", () => {
+    assert.equal(canonicalExternalUserId("instagram", "\t@Some.Handle\n"), "@Some.Handle");
+    assert.equal(canonicalExternalUserId("telegram", " \t12345678\n "), "12345678");
   });
 });
 

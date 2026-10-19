@@ -110,25 +110,35 @@ export function resolveEventChannel(
 
 /**
  * Candidate business-side routing keys for account resolution, after the
- * event's own `providerAccountId`. YCloud echoes expose the sender as the
- * business (`sender.phone`); inbound envelopes carry the business number at
- * `<payload>.whatsappInboundMessage.to`. Kept generic — new providers add
- * their extraction here.
+ * event's own `providerAccountId`.
+ *
+ * Direction is load-bearing: on inbound events `to` is the business number;
+ * on echoes/status events `to` is the CUSTOMER and only `from` (plus the
+ * normalized `sender.phone`) may identify the business. A customer address
+ * must never become an account-resolution candidate.
  */
-function eventSelfAddresses(event: NormalizedInboundEvent): string[] {
+export function eventSelfAddresses(event: NormalizedInboundEvent): string[] {
   const out: string[] = [];
   if (event.direction === "outbound" && event.sender.phone) {
     out.push(event.sender.phone);
   }
   const raw = isRecord(event.raw) ? event.raw : undefined;
-  for (const key of ["whatsappInboundMessage", "whatsappMessage", "message"]) {
+  const outbound = event.direction === "outbound";
+  for (const key of [
+    "whatsappInboundMessage",
+    "whatsappMessage",
+    "whatsappMessageUpdated",
+    "message",
+    "status",
+  ]) {
     const node = raw?.[key];
     if (!isRecord(node)) continue;
-    const to = asNonEmptyString(node.to);
-    if (to) out.push(to);
-    if (event.direction === "outbound") {
+    if (outbound) {
       const from = asNonEmptyString(node.from);
       if (from) out.push(from);
+    } else {
+      const to = asNonEmptyString(node.to);
+      if (to) out.push(to);
     }
   }
   return [...new Set(out)];
