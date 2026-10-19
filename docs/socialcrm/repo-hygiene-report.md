@@ -219,3 +219,117 @@ targeting the specific customer are gone. Residual PII is concentrated in
 kept `restore-lead*`/`wipe-*`/`get-chat-by-phone` ops scripts, and one
 few-shot prompt example set in `src/`. Recommend a follow-up slice covering
 §2 above plus de-identification of the prompt examples.
+
+---
+
+## 5. S9 addendum — residual PII scrub (2026-10-18)
+
+Scope: `execution-control.md` §4/S9 (`socialcrm-pii-scrub` branch) — clears
+the residual set flagged in §2/§4. Product decision: **anonymize** documents
+with analytical value, **delete** pure scratch and customer-targeting
+one-offs. Every deletion candidate was re-verified with
+`git grep -n "<basename>" -- . ':!docs/socialcrm'`; the only hits were inside
+the repomix snapshot, itself deleted. `package.json` (including
+`test:agents`) wires none of the removed files.
+
+### 5.1 Deleted files (33)
+
+**Root scratch (4):** `leer.txt` (session transcript), `notas.txt` (empty),
+`error.txt` (build log), `temp-check.txt` (code fragment).
+
+**docs/ scratch + raw exports (10):** `chats.txt`, `mirar.txt`, `prueba.txt`,
+`xxx.txt`, `devolucion.txt`, `ahora.txt`, `notas.txt`, `prompt.txt`,
+`prompt2.txt`, `error.txt` — raw chat exports / prompt scratch containing
+real customer names, phones, street addresses, location coordinates, and the
+personal payment alias.
+
+**Stale repo snapshot (1):** `docs/repomix-output-adriangmrraa-muzapp.md` —
+embeds the PII-bearing content of the files above plus pre-scrub `src/`.
+Deleted rather than regenerated.
+
+**Customer-targeting / PII ops scripts (18):** `restore-lead{,2,3}.mjs`,
+`get-chat-by-phone.ts`, `find-tg-convs.mjs`, `find-leads.mjs`,
+`wipe-customers.mjs`, `wipe-orders-chats.mjs`, `wipe-tg-conv{92,112}.mjs`,
+`del-{last2,dup-product}.mjs`, `_check-chat.mjs`, `analyze-today.mjs`,
+`analyze-db.mjs`, `stats.mjs`, `test-trgm.mjs`,
+`diagnose-checkout-readonly.mjs` — hardcoded customer names, real phone
+numbers, phone-suffix ILIKE filters, or sole purpose of inspecting/mutating
+one specific customer's data.
+
+### 5.2 Anonymized files (33) — analytical value preserved
+
+**docs/ analysis set:**
+- `chat-analysis/estilo.md` — owner name → "el operador"/"el dueño", personal
+  alias → `[alias]`, titular → `[titular]`, customer first names →
+  `Cliente A/B…` (consistent per doc).
+- `chat-analysis/flujo.md` — same + shared-location coordinates →
+  `(-26.••, -58.••)`.
+- `chat-analysis/pagos.md` — aliases/titulars → `[alias]`/`[titular]`/
+  `[nombre]`; delivery-person tag → `[repartidor]`.
+- `chat-analysis/segmentos.md` — ~30 customer names → `Cliente A…` labels;
+  friend/partner names → `[amigo]`/`[nombre]`.
+- `chat-analysis/{objeciones,style-profile}.md` — verified already clean;
+  unchanged.
+- `aprendizaje-chats-dueno.md` — owner name/alias, customer names →
+  placeholders.
+- `manual-operativo-mrs-muzzarella.md`, `presentacion-manual-operativo.html`
+  — customer-name example → "Juan".
+- `agent-ux-inventory.md` — quoted source strings updated (`"Te paso con el
+  dueño…"`), Telegram chat-id example → `123456789`, personal-alias
+  example → `TU..ALIAS`. `agent-runtime-inventory.md` verified clean;
+  unchanged.
+- `system-prompt-analysis.md` (root) — owner name → `[Nombre]`, real phone →
+  masked, street address → `[dirección]`, customer → `Cliente A`, aliases →
+  `[alias]`.
+
+**src/ literals (shipped prompts, descriptions, fixtures):**
+- `whatsapp/tools/transfer-to-human.ts` — `"Te paso con <owner>, el dueño…"`
+  → `"Te paso con el dueño…"`.
+- `whatsapp/seller-prompt.ts` — few-shot `"<customer> <real-phone>"` →
+  synthetic `"pedro 5493704111111"`.
+- `telegram/toolsWhatsApp.ts`, `telegram/toolsManagement.ts`,
+  `phone-utils.ts` — docstring/example name+phone → synthetic.
+- `admin/agent/agent-config-form.tsx` — chat-id placeholder → `123456789`,
+  personal-alias example → `TU..ALIAS`.
+- `*.test.ts` (agent-consistency, conversation-identity, sales-coach,
+  web-order-guard, clients/actions) — real-name/real-phone fixtures →
+  synthetic. The PII-absence assertions are kept — they now enforce this
+  scrub (note: those regexes intentionally contain the identity patterns they
+  forbid, and are the only allowed hits for them).
+
+**skills/ + sdd/ specs:**
+- `skills/clear-chat/SKILL.md` — dropped hardcoded personal name+phone pair;
+  the skill now always asks. Format example → synthetic.
+- `sdd/contexto-persistente-estados/proposal.md` — customer name + phone →
+  `Cliente A (+54 3704 ••••••)`.
+- `sdd/deteccion-no-comercial/{explore,specs,tasks}.md` — `"…paso con
+  <owner>…"` → `"…con el dueño…"`.
+- `sdd/diferenciacion-b2b-b2c/{specs,tasks}.md`,
+  `sdd/rediseno-bot-ventas/{design,specs}.md` — personal alias → `[alias]`;
+  owner persona → `[nombre del dueño]`.
+- `sdd/resolucion-consistencia/{specs, fase-a-normalizacion/{design,specs},
+  fase-e-frontend-sync/design}.md` — real phone in code examples →
+  `5493704111111` family.
+
+### 5.3 Kept — legit ops tools / no identity
+
+`scripts/audit-sales-today.mjs` (PII-redacting audit tool),
+`telegram-diagnose.mjs`, `migrate-promos.mjs`, `debug-hours.ts`,
+`add-prepizza-docena.mjs`, `inspect-config.mjs`, `learn-style.ts`.
+Kept-because-referenced deletions: **0** — every candidate was unreferenced.
+
+### 5.4 Kept by rule — not customer PII
+
+- Business-owned numbers: store WhatsApp (`SYSTEM-PROMPT-V2.md`), `wa.me/…`
+  CTA in `sdd/mrs-muzzarella-marketplace/specs.md`, store street address.
+- Synthetic fixtures `5493704111111`, `5493704123456`, `5491100000000`,
+  `+5491100000000` — the only `549…` literals left in tracked files.
+- `docs/socialcrm/*` citations of deleted filenames — audit provenance.
+- Drizzle journal `when` timestamps and npm integrity hashes — not phones.
+
+### 5.5 Verification
+
+`git grep` over tracked files finds no real customer name, personal payment
+alias, real phone number, customer address, or location coordinate. Gates
+run: `npm run lint`, `npm run typecheck`, `npm run test:agents` (executable
+files were touched), `npm run build`.
