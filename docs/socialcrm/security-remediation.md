@@ -290,3 +290,18 @@ Residual boundary (unchanged, intentional): the legacy NULL-account plane is
 shared — a customer-bound scope there still only sees its own customer's
 objects (the phone gate does not require an account), but it may reach
 legacy rows of the SAME phone regardless of lead ownership.
+
+## 14. Post-push remediation (privacy + delivery read partition)
+
+A fresh audit after round 5 found two test-fixture privacy leaks and one
+idempotency gap on the passive delivery read.
+
+| Finding | Fix |
+| --- | --- |
+| **HIGH** a confirmed real owner phone number committed in `security-round4.test.ts` and `security-round5.test.ts` | Replaced every representation with the synthetic NANP `+1 555 01xx` range (`+15550001234` / `15550001234`; `+1 (555) 000-1234` where normalization is exercised). Added `src/lib/privacy-fixtures.test.ts`, which scans every tracked file under `src/` and `tests/`, normalizes phone-like runs, and fails if either removed number reappears in any separator variant. |
+| **LOW** an unverified AR-looking fixture in `filters.test.ts` with no provenance | Replaced with `+15550001234` and included its national part in the privacy guard rather than documenting it as real/business data. |
+| **MEDIUM** `isChannelDeliveryRecorded` read `(provider, deliveryId)` provider-wide while persistence/migration `0019` partitions by `coalesce(channel_account_id, -1)` | The read now takes `channelAccountId` and applies the same `coalesce` partition. Account A's marker can no longer suppress account B's identical delivery id; NULL/legacy markers keep their dedicated `-1` partition. All callers (the passive ingress) pass the context account id. |
+
+Safe fixture convention: use the reserved NANP `+1 555 01xx` range (for
+example `+15550001234`) for customer, owner, and business numbers in tests.
+The guard intentionally has no allowlist for real numbers.

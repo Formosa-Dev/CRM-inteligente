@@ -7,7 +7,7 @@
  * persistence"; any other failure is surfaced (retryable) by the caller.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { channelEvents } from "@/db/schema";
@@ -101,10 +101,17 @@ export async function persistChannelEventWithRepo(
  * durable store keyed on (provider, deliveryId) — this check plus a marker
  * write after persistence closes that gap. Positively identified missing
  * schema degrades to "not recorded" (platformMessageId stays the only key).
+ *
+ * The read MUST mirror migration 0019's uniqueness partition:
+ * `(provider, coalesce(channel_account_id, -1), delivery_id)`. A marker is
+ * only authoritative inside its own account; a NULL/legacy marker stays in
+ * the dedicated `-1` partition. Reading provider-wide would let account A's
+ * marker suppress account B's identical provider delivery id.
  */
 export async function isChannelDeliveryRecorded(
   provider: string,
-  deliveryId: string
+  deliveryId: string,
+  channelAccountId: number | null = null
 ): Promise<boolean> {
   try {
     const rows = await db
@@ -113,6 +120,7 @@ export async function isChannelDeliveryRecorded(
       .where(
         and(
           eq(channelEvents.provider, provider),
+          sql`coalesce(${channelEvents.channelAccountId}, -1) = coalesce(${sql.param(channelAccountId)}, -1)`,
           eq(channelEvents.deliveryId, deliveryId)
         )
       )

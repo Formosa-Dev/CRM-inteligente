@@ -86,13 +86,13 @@ describe("HIGH — scope carries the server-side customer phone", () => {
       id: 900,
       channel: "whatsapp",
       channelAccountId: 44,
-      customerPhone: "+54 9 3704 868421",
+      customerPhone: "+1 (555) 000-1234",
       status: "active",
     });
     const scope = await resolveScopeForConversation(900);
     assert.equal(scope.channel, "whatsapp");
     assert.equal(scope.channelAccountId, 44);
-    assert.equal(scope.customerPhone, "5493704868421");
+    assert.equal(scope.customerPhone, "15550001234");
   });
 });
 

@@ -147,17 +147,17 @@ describe("formatChannelAccountLabel", () => {
   const base = {
     provider: "ycloud",
     channel: "whatsapp",
-    providerAccountId: "+5493704819234",
-    senderAddress: "+5493704819234",
+    providerAccountId: "+15550001234",
+    senderAddress: "+15550001234",
     displayName: null,
   };
 
   it("labels senderAddress + channel/provider so identical senders differ by provider", () => {
     const label = formatChannelAccountLabel(base);
-    assert.ok(label.includes("+5493704819234"));
+    assert.ok(label.includes("+15550001234"));
     assert.ok(label.includes("whatsapp/ycloud"));
     // providerAccountId === senderAddress is not repeated
-    assert.equal(label.indexOf("+5493704819234"), label.lastIndexOf("+5493704819234"));
+    assert.equal(label.indexOf("+15550001234"), label.lastIndexOf("+15550001234"));
   });
 
   it("keeps providerAccountId when it differs from senderAddress", () => {
@@ -171,7 +171,7 @@ describe("formatChannelAccountLabel", () => {
   it("prepends displayName without dropping senderAddress", () => {
     const label = formatChannelAccountLabel({ ...base, displayName: "Ventas" });
     assert.ok(label.startsWith("Ventas"));
-    assert.ok(label.includes("+5493704819234"));
+    assert.ok(label.includes("+15550001234"));
   });
 });
 

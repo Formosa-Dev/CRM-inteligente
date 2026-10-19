@@ -96,6 +96,12 @@ function evaluate(expr: unknown, row: Row): boolean {
   const column = firstColumn(expr);
   const columns = collect(expr, isColumn);
   const params = paramsOf(expr);
+  if (/\bcoalesce\s*\(/i.test(text)) {
+    if (!column) return true;
+    const left = valueOf(row, column) ?? -1;
+    const right = params.length > 0 ? params[0] ?? -1 : -1;
+    return left === right;
+  }
   if (/\bis\s+not\s+null\b/.test(text)) {
     return column ? valueOf(row, column) != null : true;
   }

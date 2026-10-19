@@ -94,7 +94,7 @@ const { createCreateOrderTool } = require("@/lib/whatsapp/tools/create-order") a
 const { DrizzleOrderLifecycleRepository } = require("@/lib/whatsapp/order-lifecycle") as typeof import("@/lib/whatsapp/order-lifecycle");
 const { accountScopedInboundKey } = require("./inbound-keys") as typeof import("./inbound-keys");
 const { BufferManager } = require("@/lib/buffer/manager") as typeof import("@/lib/buffer/manager");
-const { persistChannelEvent } = require("@/lib/messaging/channel-events") as typeof import("@/lib/messaging/channel-events");
+const { persistChannelEvent, isChannelDeliveryRecorded } = require("@/lib/messaging/channel-events") as typeof import("@/lib/messaging/channel-events");
 const { runWithAgentConfigScope } = require("@/lib/agent-config-scope") as typeof import("@/lib/agent-config-scope");
 const { getOrderStatusTool, cancelOrderTool } = require("@/lib/whatsapp/tools/order-management-tools") as typeof import("@/lib/whatsapp/tools/order-management-tools");
 const { getClientHistoryTool } = require("@/lib/whatsapp/tools/client-tools") as typeof import("@/lib/whatsapp/tools/client-tools");
@@ -215,9 +215,9 @@ async function runCreateOrder(conversationId: number, phone: string): Promise<st
 
 describe("H2 — account-scoped inbound keys", () => {
   it("keeps the exact legacy shape for a NULL account", () => {
-    assert.equal(accountScopedInboundKey(null, "5493704868421"), "5493704868421");
-    assert.equal(accountScopedInboundKey(undefined, "5493704868421"), "5493704868421");
-    const phone = "5493704868421";
+    assert.equal(accountScopedInboundKey(null, "15550001234"), "15550001234");
+    assert.equal(accountScopedInboundKey(undefined, "15550001234"), "15550001234");
+    const phone = "15550001234";
     assert.equal(
       `wa-inbound:${accountScopedInboundKey(null, phone)}`,
       `wa-inbound:${phone}`
@@ -225,12 +225,12 @@ describe("H2 — account-scoped inbound keys", () => {
   });
 
   it("namespaces keys per channel account", () => {
-    const first = accountScopedInboundKey(1, "5493704868421");
-    const second = accountScopedInboundKey(2, "5493704868421");
-    assert.equal(first, "acct1:5493704868421");
-    assert.equal(second, "acct2:5493704868421");
+    const first = accountScopedInboundKey(1, "15550001234");
+    const second = accountScopedInboundKey(2, "15550001234");
+    assert.equal(first, "acct1:15550001234");
+    assert.equal(second, "acct2:15550001234");
     assert.notEqual(first, second);
-    assert.notEqual(first, "5493704868421");
+    assert.notEqual(first, "15550001234");
   });
 
   it("keeps buffered/debounced state isolated per account", async () => {
@@ -524,6 +524,63 @@ describe("L3 — channel_events delivery dedup is account-scoped", () => {
     assert.equal(duplicate.kind, "duplicate", "same account must still dedup");
     assert.equal(legacy.kind, "persisted", "legacy NULL lives in its own partition");
     assert.equal(legacyDuplicate.kind, "duplicate", "legacy NULL partition still dedups");
+  });
+
+  it("the delivery read is scoped to the same partition as persistence", async () => {
+    const provider = "ycloud";
+    const deliveryId = "evt-read-shared-1";
+    const otherId = "evt-read-shared-2";
+    const absent = { channel: "whatsapp" as const };
+
+    // No marker anywhere yet.
+    assert.equal(await isChannelDeliveryRecorded(provider, deliveryId, 20), false);
+    assert.equal(await isChannelDeliveryRecorded(provider, deliveryId, 21), false);
+    assert.equal(await isChannelDeliveryRecorded(provider, deliveryId), false);
+
+    const forA = await persistChannelEvent(statusEvent(deliveryId), {
+      channel: "whatsapp",
+      channelAccountId: 20,
+    });
+    const forB = await persistChannelEvent(statusEvent(deliveryId), {
+      channel: "whatsapp",
+      channelAccountId: 21,
+    });
+    const legacy = await persistChannelEvent(statusEvent(deliveryId), absent);
+    assert.equal(forA.kind, "persisted");
+    assert.equal(forB.kind, "persisted");
+    assert.equal(legacy.kind, "persisted");
+
+    // Each partition sees its own marker — and only its own.
+    assert.equal(await isChannelDeliveryRecorded(provider, deliveryId, 20), true);
+    assert.equal(await isChannelDeliveryRecorded(provider, deliveryId, 21), true);
+    assert.equal(await isChannelDeliveryRecorded(provider, deliveryId, null), true);
+    assert.equal(await isChannelDeliveryRecorded(provider, deliveryId), true);
+
+    // Account 20's marker for a second id must not suppress 21 or legacy.
+    await persistChannelEvent(statusEvent(otherId), {
+      channel: "whatsapp",
+      channelAccountId: 20,
+    });
+    assert.equal(await isChannelDeliveryRecorded(provider, otherId, 20), true);
+    assert.equal(await isChannelDeliveryRecorded(provider, otherId, 21), false);
+    assert.equal(await isChannelDeliveryRecorded(provider, otherId, null), false);
+    assert.equal(await isChannelDeliveryRecorded(provider, otherId), false);
+
+    // Duplicates inside one account (and inside the legacy partition) still
+    // resolve to the same marker rather than persisting a second row.
+    assert.equal(
+      (
+        await persistChannelEvent(statusEvent(deliveryId), {
+          channel: "whatsapp",
+          channelAccountId: 20,
+        })
+      ).kind,
+      "duplicate"
+    );
+    assert.equal(
+      (await persistChannelEvent(statusEvent(deliveryId), absent)).kind,
+      "duplicate"
+    );
   });
 
   it("the additive migration scopes the index by account", () => {

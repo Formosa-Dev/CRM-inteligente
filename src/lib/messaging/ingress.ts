@@ -353,7 +353,13 @@ export async function handlePassiveChannelEvent(
 
     // Delivery-level dedup first: the same X-Idempotency-Key redelivery is
     // already fully handled even when the message carried no wamid.
-    if (await isChannelDeliveryRecorded(event.provider, event.deliveryId)) {
+    if (
+      await isChannelDeliveryRecorded(
+        event.provider,
+        event.deliveryId,
+        ctx.channelAccountId ?? null
+      )
+    ) {
       console.log(
         `[ingress] Duplicate delivery ${event.provider}:${event.deliveryId} on ${ctx.channel} — skipping`
       );

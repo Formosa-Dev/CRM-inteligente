@@ -195,6 +195,76 @@ describe("two-account pipeline", () => {
     assert.equal(messages.length, 2);
     assert.deepEqual(messages.map((row) => row.channelAccountId).sort(), [2, 3]);
   });
+
+  it("processes one provider delivery id once per account and once in the NULL partition", async () => {
+    const deliveryId = "del-shared-account-partition";
+    const makeEvent = (providerMessageId: string, externalId: string) => ({
+      provider: "zernio" as const,
+      deliveryId,
+      kind: "message.received" as const,
+      direction: "inbound" as const,
+      providerAccountId: "acc-shared",
+      platformMessageId: providerMessageId,
+      sender: { socialId: externalId, name: "Customer" },
+      text: "hola",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      raw: {},
+    });
+    const process = (
+      channelAccountId: number | null,
+      providerMessageId: string,
+      externalId: string
+    ) =>
+      handlePassiveChannelEvent(
+        makeEvent(providerMessageId, externalId),
+        {
+          channel: "instagram",
+          account: account(channelAccountId ?? 9, "instagram", "zernio"),
+          ...(channelAccountId == null ? {} : { channelAccountId }),
+        }
+      );
+
+    const before = fake.rows("chat_messages").length;
+
+    // Same provider+deliveryId, different accounts: both must process.
+    assert.equal(
+      (await process(2, "msg-shared-a2", "shared-customer-a2")).status,
+      200
+    );
+    assert.equal(
+      (await process(3, "msg-shared-a3", "shared-customer-a3")).status,
+      200
+    );
+    // Replay inside account 2: suppressed even with a fresh platform id.
+    assert.equal(
+      (await process(2, "msg-shared-a2-replay", "shared-customer-a2-replay")).status,
+      200
+    );
+    // Legacy NULL partition owns the same delivery id independently.
+    assert.equal(
+      (await process(null, "msg-shared-null", "shared-customer-null")).status,
+      200
+    );
+    // ...and dedups inside its own partition.
+    assert.equal(
+      (await process(null, "msg-shared-null-replay", "shared-customer-null-replay")).status,
+      200
+    );
+
+    const added = fake.rows("chat_messages").slice(before);
+    assert.deepEqual(
+      added.map((row) => row.platformMessageId),
+      ["msg-shared-a2", "msg-shared-a3", "msg-shared-null"]
+    );
+    const replayConversations = fake
+      .rows("conversations")
+      .filter((row) =>
+        ["shared-customer-a2-replay", "shared-customer-null-replay"].includes(
+          String(row.externalUserIdNormalized)
+        )
+      );
+    assert.equal(replayConversations.length, 0);
+  });
 });
 
 describe("two-event webhook route", () => {
