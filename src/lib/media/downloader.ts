@@ -7,7 +7,19 @@ const ALLOWED_DOMAINS = [
   "api.telegram.org",
 ];
 
-const UPLOADS_DIR = path.join(process.cwd(), "public", "uploads");
+/**
+ * Inbound customer media lives OUTSIDE `public/` — anything under public/ is
+ * served statically without auth, and these are customer files. Default
+ * `<cwd>/data/uploads`; overridable via MEDIA_UPLOADS_DIR for deploys that
+ * mount persistent storage elsewhere. The /api/media/[...path] route is the
+ * only read path (session-gated).
+ */
+export function mediaUploadsDir(): string {
+  const configured = process.env.MEDIA_UPLOADS_DIR;
+  return configured
+    ? path.resolve(configured)
+    : path.join(process.cwd(), "data", "uploads");
+}
 
 function isAllowedDomain(url: string, extraAllowedDomains: readonly string[] = []): boolean {
   try {
@@ -56,7 +68,7 @@ export async function saveMediaLocally(
   filename: string,
   mimeType?: string
 ): Promise<string> {
-  const dir = path.join(UPLOADS_DIR, String(conversationId));
+  const dir = path.join(mediaUploadsDir(), String(conversationId));
   await fs.mkdir(dir, { recursive: true });
 
   const ext = mimeType ? mimeTypeToExt(mimeType) : path.extname(filename) || ".bin";
@@ -66,7 +78,7 @@ export async function saveMediaLocally(
   const filePath = path.join(dir, finalName);
   await fs.writeFile(filePath, buffer);
 
-  return `/uploads/${conversationId}/${finalName}`;
+  return `/api/media/${conversationId}/${finalName}`;
 }
 
 function mimeTypeToExt(mime: string): string {

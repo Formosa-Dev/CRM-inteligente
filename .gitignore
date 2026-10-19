@@ -42,3 +42,7 @@ next-env.d.ts
 
 # product videos (renders + HyperFrames work dirs)
 /video-renders/
+
+# inbound customer media — private storage, served via /api/media (session-gated)
+/public/uploads/
+/data/uploads/

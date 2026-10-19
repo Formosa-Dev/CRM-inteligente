@@ -5,10 +5,11 @@ import { NextRequest } from "next/server";
 import { GET } from "./route";
 
 /**
- * /api/media/[...path] serves files under public/uploads — inbound customer
- * conversation media only (product images live in Cloudinary). It must reject
- * unauthenticated callers; outside a request scope auth() throws, which is
- * exactly the unauthenticated path here.
+ * /api/media/[...path] serves inbound customer conversation media from
+ * private storage (MEDIA_UPLOADS_DIR / <cwd>/data/uploads — product images
+ * live in Cloudinary). It must reject unauthenticated callers; outside a
+ * request scope auth() throws, which is exactly the unauthenticated path
+ * here.
  */
 test("rejects unauthenticated requests with 401", async () => {
   const req = new NextRequest("https://example.test/api/media/1/voice.ogg");
