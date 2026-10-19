@@ -86,10 +86,15 @@ export async function triggerAgentForConversation(
 
     // 8. Media pendiente
     if (pendingMedia.length > 0) {
-      const { sendImage } = await import("@/lib/ycloud");
+      const { messenger } = await import("@/lib/messaging");
       for (const media of pendingMedia) {
         if (media.type === "image" || media.type === "sticker") {
-          await sendImage(customerPhone, media.url, media.caption);
+          await messenger.send({
+            to: customerPhone,
+            type: "image",
+            mediaUrl: media.url,
+            text: media.caption,
+          });
           await insertMessage(conversationId, "assistant", media.dbContent);
         }
       }

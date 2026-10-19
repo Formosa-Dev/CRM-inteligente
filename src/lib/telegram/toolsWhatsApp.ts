@@ -31,8 +31,8 @@ export const sendWhatsAppMessage = tool({
     const phone = `+${normalized}`;
 
     // Enviar WhatsApp
-    const { sendText } = await import("@/lib/ycloud");
-    const result = await sendText(phone, message);
+    const { messenger } = await import("@/lib/messaging");
+    const result = await messenger.send({ to: phone, type: "text", text: message });
 
     if (!result.ok) {
       return `Error al enviar WhatsApp a ${to}: ${result.error}`;
@@ -42,7 +42,7 @@ export const sendWhatsAppMessage = tool({
     try {
       const { findOrCreateConversation, insertMessage } = await import("@/lib/channels/router");
       const conv = await findOrCreateConversation("whatsapp", phone, undefined, to);
-      await insertMessage(conv.id, "assistant", message, undefined, result.wamid);
+      await insertMessage(conv.id, "assistant", message, undefined, result.providerMessageId || undefined);
     } catch (err) {
       console.warn("[sendWhatsAppMessage] No se pudo guardar en DB:", err);
     }

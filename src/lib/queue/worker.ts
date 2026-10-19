@@ -1,5 +1,5 @@
 import { Redis } from "@upstash/redis";
-import { sendText } from "@/lib/ycloud";
+import { messenger } from "@/lib/messaging";
 
 const QUEUE_KEY = "queue:messages";
 const DLQ_KEY = "queue:dlq";
@@ -46,11 +46,11 @@ async function processWhatsApp(payload: QueuePayload): Promise<boolean> {
     return false;
   }
 
-  const result = await sendText(to, text);
+  const result = await messenger.send({ to, type: "text", text });
   if (!result.ok) {
     console.log("[queue] sendText failed", {
       chatId: payload.chatId,
-      error: (result as { error: string }).error,
+      error: result.error,
     });
     return false;
   }

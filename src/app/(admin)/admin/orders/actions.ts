@@ -186,8 +186,12 @@ export async function updateOrderStatus(
     const message = await buildWhatsAppMessage(newStatus, order as OrderRow);
     if (message && order.phoneNumber) {
       try {
-        const { sendText } = await import("@/lib/ycloud");
-        const result = await sendText(order.phoneNumber, message);
+        const { messenger } = await import("@/lib/messaging");
+        const result = await messenger.send({
+          to: order.phoneNumber,
+          type: "text",
+          text: message,
+        });
         console.log(`[orders] WhatsApp sent to ${order.phoneNumber} for order #${orderId}: ${newStatus}`);
 
         // Save the outgoing message in chat_messages so AI has context
@@ -200,8 +204,8 @@ export async function updateOrderStatus(
           .where(eq(conversations.whatsappId, phone))
           .limit(1);
         if (conv[0]) {
-          await insertMessage(conv[0].id, "system", message, undefined, result.ok ? result.wamid : undefined);
-          console.log(`[orders] Status message saved to conversation #${conv[0].id} (role=system, wamid=${result.ok ? result.wamid : "none"})`);
+          await insertMessage(conv[0].id, "system", message, undefined, result.ok ? result.providerMessageId || undefined : undefined);
+          console.log(`[orders] Status message saved to conversation #${conv[0].id} (role=system, wamid=${result.ok ? result.providerMessageId : "none"})`);
         }
       } catch (e) {
         console.warn(`[orders] Failed to send WhatsApp for order #${orderId}:`, e);
@@ -236,8 +240,12 @@ export async function notifyCustomer(
     const msg = await buildWhatsAppMessage(order.status, order as OrderRow);
     if (!msg) return { success: false, message: "No hay mensaje para este estado" };
 
-    const { sendText } = await import("@/lib/ycloud");
-    const result = await sendText(order.phoneNumber, msg);
+    const { messenger } = await import("@/lib/messaging");
+    const result = await messenger.send({
+      to: order.phoneNumber,
+      type: "text",
+      text: msg,
+    });
     if (!result.ok) return { success: false, message: `Error al enviar: ${result.error}` };
 
     // Save notification in conversation history so AI has context (role "system")
@@ -249,7 +257,7 @@ export async function notifyCustomer(
       .where(eq(conversations.whatsappId, phone))
       .limit(1);
     if (conv[0]) {
-      await insertMessage(conv[0].id, "system", msg, undefined, result.wamid);
+      await insertMessage(conv[0].id, "system", msg, undefined, result.providerMessageId || undefined);
     }
 
     return { success: true, message: "Notificación enviada" };

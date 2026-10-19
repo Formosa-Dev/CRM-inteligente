@@ -76,8 +76,12 @@ export async function GET(request: Request) {
       const followupText = `Holaa, ¿todo bien con el pedido? No te olvides de etiquetarnos en ig porfa 🙌`;
 
       try {
-        const { sendText } = await import("@/lib/ycloud");
-        const result = await sendText(order.phoneNumber, followupText);
+        const { messenger } = await import("@/lib/messaging");
+        const result = await messenger.send({
+          to: order.phoneNumber,
+          type: "text",
+          text: followupText,
+        });
 
         if (result.ok) {
           processed++;
@@ -93,8 +97,8 @@ export async function GET(request: Request) {
               .where(eq(conversations.whatsappId, phone))
               .limit(1);
             if (conv[0]) {
-              await insertMessage(conv[0].id, "system", followupText, undefined, result.wamid);
-              console.log(`[followup] Follow-up saved to conversation #${conv[0].id} (role=system, wamid=${result.wamid})`);
+              await insertMessage(conv[0].id, "system", followupText, undefined, result.providerMessageId || undefined);
+              console.log(`[followup] Follow-up saved to conversation #${conv[0].id} (role=system, wamid=${result.providerMessageId})`);
             }
           } catch (historyError) {
             console.warn(`[followup] Sent order #${order.id}, but could not save conversation history:`, historyError);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyYCloudSignature } from "@/lib/whatsapp/signature";
-import { sendWhatsAppMessage } from "@/lib/whatsapp/ycloud-client";
+import { messenger } from "@/lib/messaging";
 import { sendWhatsAppBubbles } from "@/lib/buffer/response-sender";
 import {
   findOrCreateConversation,
@@ -15,7 +15,6 @@ import { runWhatsAppAgent, resolveAgentRouting } from "@/lib/whatsapp/agent";
 import { toSessionContext, type RoutingDecision } from "@/lib/whatsapp/session-policy";
 import { resolveHandoffTransport } from "@/lib/whatsapp/human-handoff";
 import { sendEscalationEmail } from "@/lib/whatsapp/tools/escalation-email";
-import { sendImage } from "@/lib/ycloud";
 import { db } from "@/db";
 import { agentConfig, conversations, leads, addresses } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -624,12 +623,16 @@ async function deliverWebhookHandoff(input: {
       isNew &&
       !webOrderRedirectEnabled
     ) {
-      await sendWhatsAppMessage({
-        to: customerPhone,
-        body: autoReplyMessage,
-        apiKey: config.ycloudApiKey || "",
-        from: config.phoneNumber || "",
-      });
+      const autoReplyResult = await messenger.send(
+        { to: customerPhone, type: "text", text: autoReplyMessage },
+        {
+          credentials: {
+            apiKey: config.ycloudApiKey || "",
+            senderAddress: config.phoneNumber || "",
+          },
+        },
+      );
+      if (!autoReplyResult.ok) throw new Error(autoReplyResult.error);
     }
 
     // -------------------------------------------------------------------------
@@ -1156,7 +1159,12 @@ async function deliverWebhookHandoff(input: {
           await new Promise((r) => setTimeout(r, 2000));
 
           if (media.type === "image" || media.type === "sticker") {
-            const imgResult = await sendImage(customerPhone, media.url, media.caption);
+            const imgResult = await messenger.send({
+              to: customerPhone,
+              type: "image",
+              mediaUrl: media.url,
+              text: media.caption,
+            });
             if (imgResult.ok) {
               // Guardar en DB con contenido descriptivo para contexto del AI
               await insertMessage(conversationId, "assistant", media.dbContent);

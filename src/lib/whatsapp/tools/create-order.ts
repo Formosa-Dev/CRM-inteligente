@@ -46,7 +46,7 @@ async function notifyDeliveryOrder(
     const deliveryPhone = cfg?.deliveryPhoneNumber?.trim();
     if (!deliveryPhone) return;
 
-    const { sendWhatsAppMessage } = await import("@/lib/whatsapp/ycloud-client");
+    const { messenger } = await import("@/lib/messaging");
     const { decryptIfEncrypted } = await import("@/lib/encryption");
     const apiKey = decryptIfEncrypted(cfg?.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
     const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
@@ -75,7 +75,11 @@ async function notifyDeliveryOrder(
       `💰 Total: $${total.toLocaleString("es-AR")}`,
     ].filter(Boolean).join("\n");
 
-    await sendWhatsAppMessage({ to: deliveryPhone, body: message, apiKey, from });
+    const res = await messenger.send(
+      { to: deliveryPhone, type: "text", text: message },
+      { credentials: { apiKey, senderAddress: from } },
+    );
+    if (!res.ok) throw new Error(res.error);
     console.log(`[delivery] Order #${orderId} notified to ${deliveryPhone}`);
   } catch (err) {
     console.warn("[delivery] Failed to notify delivery:", err);

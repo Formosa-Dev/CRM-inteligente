@@ -316,10 +316,7 @@ export async function sendOutboundMessage(
   const channel = conv.channel || "whatsapp";
 
   if (channel === "whatsapp") {
-    const { sendWhatsAppMessage } = await import(
-      "@/lib/whatsapp/ycloud-client"
-    );
-    const { sendImage, sendDocument } = await import("@/lib/ycloud");
+    const { messenger } = await import("@/lib/messaging");
     const { agentConfig } = await import("@/db/schema");
     const config = await db.select().from(agentConfig).limit(1);
     const cfg = config[0];
@@ -330,11 +327,15 @@ export async function sendOutboundMessage(
 
     if (apiKey && from) {
       if (mediaUrl && mediaType === "image") {
-        await sendImage(to, mediaUrl, content || undefined);
+        await messenger.send({ to, type: "image", mediaUrl, text: content || undefined });
       } else if (mediaUrl && mediaType === "document") {
-        await sendDocument(to, mediaUrl, content || undefined);
+        await messenger.send({ to, type: "document", mediaUrl, text: content || undefined });
       } else {
-        await sendWhatsAppMessage({ to, body: content || " ", apiKey, from });
+        const res = await messenger.send(
+          { to, type: "text", text: content || " " },
+          { credentials: { apiKey, senderAddress: from } }
+        );
+        if (!res.ok) throw new Error(res.error);
       }
     }
   } else if (channel === "telegram") {
@@ -399,33 +400,36 @@ export async function notifyCustomerDeliveryArrived(
 
     if (!order?.phoneNumber) {
       // No hay pedidos pendientes — avisar al delivery
-      const { sendWhatsAppMessage } = await import("@/lib/whatsapp/ycloud-client");
+      const { messenger } = await import("@/lib/messaging");
       const [cfg] = await db.select().from(agentConfig).where(eq(agentConfig.id, 1)).limit(1);
       const { decryptIfEncrypted } = await import("@/lib/encryption");
       const apiKey = decryptIfEncrypted(cfg?.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
       const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
       if (apiKey && from) {
-        await sendWhatsAppMessage({ to: deliveryPhone, body: "Gracias, no hay pedidos pendientes.", apiKey, from });
+        const res = await messenger.send(
+          { to: deliveryPhone, type: "text", text: "Gracias, no hay pedidos pendientes." },
+          { credentials: { apiKey, senderAddress: from } },
+        );
+        if (!res.ok) throw new Error(res.error);
       }
       return null;
     }
 
     // Enviar WhatsApp al cliente
-    const { sendWhatsAppMessage } = await import("@/lib/whatsapp/ycloud-client");
+    const { messenger } = await import("@/lib/messaging");
     const [cfg] = await db.select().from(agentConfig).where(eq(agentConfig.id, 1)).limit(1);
     const { decryptIfEncrypted } = await import("@/lib/encryption");
     const apiKey = decryptIfEncrypted(cfg?.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
     const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
-    
+
     const customerMsg = `¡Hola ${order.customerName || ""}! El delivery ya está afuera con tu pedido. Que lo disfrutes 🍔`.trim();
-    
+
     if (apiKey && from) {
-      await sendWhatsAppMessage({
-        to: order.phoneNumber,
-        body: customerMsg,
-        apiKey,
-        from,
-      });
+      const res = await messenger.send(
+        { to: order.phoneNumber, type: "text", text: customerMsg },
+        { credentials: { apiKey, senderAddress: from } },
+      );
+      if (!res.ok) throw new Error(res.error);
       console.log(`[delivery] Notified customer ${order.phoneNumber} about delivery arrival`);
     }
 
@@ -448,7 +452,7 @@ export async function forwardLocationToDelivery(
   deliveryPhone: string
 ): Promise<boolean> {
   try {
-    const { sendWhatsAppMessage } = await import("@/lib/whatsapp/ycloud-client");
+    const { messenger } = await import("@/lib/messaging");
     const { agentConfig } = await import("@/db/schema");
     const [cfg] = await db.select().from(agentConfig).where(eq(agentConfig.id, 1)).limit(1);
     const { decryptIfEncrypted } = await import("@/lib/encryption");
@@ -465,12 +469,11 @@ export async function forwardLocationToDelivery(
       `Tel: ${customerPhone}`,
     ].join("\n");
 
-    await sendWhatsAppMessage({
-      to: deliveryPhone,
-      body: message,
-      apiKey,
-      from,
-    });
+    const res = await messenger.send(
+      { to: deliveryPhone, type: "text", text: message },
+      { credentials: { apiKey, senderAddress: from } },
+    );
+    if (!res.ok) throw new Error(res.error);
 
     console.log(`[delivery] Location forwarded to ${deliveryPhone} for customer ${customerPhone}`);
     return true;

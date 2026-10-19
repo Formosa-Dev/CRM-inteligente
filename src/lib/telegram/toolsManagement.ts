@@ -1014,8 +1014,8 @@ export const sendMessageAsOperatorTool = tool({
       return `La conversación #${conversationId} no tiene teléfono de cliente.`;
 
     // 2. Enviar el mensaje por WhatsApp
-    const { sendText } = await import("@/lib/ycloud");
-    const result = await sendText(conv.customerPhone, text);
+    const { messenger } = await import("@/lib/messaging");
+    const result = await messenger.send({ to: conv.customerPhone, type: "text", text });
 
     if (!result.ok) {
       return `Error al enviar mensaje: ${result.error}`;

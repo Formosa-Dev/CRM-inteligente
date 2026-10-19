@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { leads, conversations, chatMessages } from "@/db/schema";
 import { eq, and, or, ilike, desc, gte, isNotNull, sql } from "drizzle-orm";
-import { sendText, sendImage } from "@/lib/ycloud";
+import { messenger } from "@/lib/messaging";
 import { findOrCreateConversation } from "@/lib/channels/router";
 import { insertMessage } from "@/lib/channels/router";
 
@@ -252,7 +252,12 @@ export async function broadcastText(
       // 1. Enviar WhatsApp
       let wamid: string | undefined;
       if (imageUrl) {
-        const imgResult = await sendImage(phone, imageUrl, text);
+        const imgResult = await messenger.send({
+          to: phone,
+          type: "image",
+          mediaUrl: imageUrl,
+          text,
+        });
         if (!imgResult.ok) {
           result.error = imgResult.error;
           results.push(result);
@@ -262,7 +267,7 @@ export async function broadcastText(
           continue;
         }
       } else {
-        const txResult = await sendText(phone, text);
+        const txResult = await messenger.send({ to: phone, type: "text", text });
         if (!txResult.ok) {
           result.error = txResult.error;
           results.push(result);
@@ -271,7 +276,7 @@ export async function broadcastText(
           await sleep(DELAY_BETWEEN_MS);
           continue;
         }
-        wamid = txResult.wamid;
+        wamid = txResult.providerMessageId || undefined;
       }
 
       // 2. Encontrar o crear conversación

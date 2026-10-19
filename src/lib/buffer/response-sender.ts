@@ -1,5 +1,11 @@
-import { sendWhatsAppMessage, type YCloudResponse } from "@/lib/whatsapp/ycloud-client";
+import { messenger } from "@/lib/messaging";
 import { sendTelegramMessage } from "@/lib/telegram/bot";
+
+/** Provider send receipt (was `YCloudResponse` in the folded ycloud-client). */
+export interface YCloudResponse {
+  id: string;
+  status: string;
+}
 
 const MAX_BUBBLE_CHARS = 250;
 const DELAY_BETWEEN_BUBBLES_MS = 3_000; // 3s feels natural
@@ -85,12 +91,12 @@ export async function sendWhatsAppBubbles(params: {
       await sleep(DELAY_BETWEEN_BUBBLES_MS);
     }
 
-    lastResult = await sendWhatsAppMessage({
-      to: params.to,
-      body: bubbles[i],
-      apiKey: params.apiKey,
-      from: params.from,
-    });
+    const res = await messenger.send(
+      { to: params.to, type: "text", text: bubbles[i] },
+      { credentials: { apiKey: params.apiKey, senderAddress: params.from } },
+    );
+    if (!res.ok) throw new Error(res.error);
+    lastResult = { id: res.providerMessageId, status: res.status };
   }
 
   return lastResult;

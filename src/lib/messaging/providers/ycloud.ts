@@ -20,12 +20,16 @@ import { sendDocument, sendImage, sendText } from "@/lib/ycloud";
 import { verifyYCloudSignature } from "@/lib/whatsapp/signature";
 import { ECHO_EVENT_TYPES } from "@/lib/whatsapp/webhook-pipeline";
 import type {
+  ChannelAccount,
   MessagingProvider,
   NormalizedInboundEvent,
+  OutboundMessage,
   SendResult,
 } from "../types";
 
 const SIGNATURE_HEADER = "ycloud-signature";
+const YCLOUD_SEND_DIRECTLY_URL =
+  "https://api.ycloud.com/v2/whatsapp/messages/sendDirectly";
 const INBOUND_EVENT_TYPE = "whatsapp.inbound_message.received";
 const STATUS_EVENT_TYPE = "whatsapp.message.updated";
 const MAX_SIGNATURE_AGE_SEC = 300;
@@ -329,6 +333,57 @@ export function toSendResult(
   return { ok: false, error: res.error, retryable };
 }
 
+/**
+ * Folded `src/lib/whatsapp/ycloud-client.ts` sender (evidence §6 — the
+ * duplicate client unified behind this adapter). Used when the caller
+ * already resolved credentials itself: a single sendDirectly POST with the
+ * caller's `from`, no externalId, no internal retry — the wire shape stays
+ * identical to the previous client, including its success log line.
+ */
+async function sendTextWithAccount(
+  account: ChannelAccount,
+  msg: OutboundMessage
+): Promise<SendResult> {
+  let response: Response;
+  try {
+    response = await fetch(YCLOUD_SEND_DIRECTLY_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": account.credentials.apiKey,
+      },
+      body: JSON.stringify({
+        from: account.senderAddress,
+        to: msg.to,
+        type: "text",
+        text: { body: msg.text },
+      }),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: message, retryable: true };
+  }
+
+  if (!response.ok) {
+    const error = await response.text();
+    return {
+      ok: false,
+      error: `YCloud API error (${response.status}): ${error}`,
+      retryable: response.status >= 500,
+    };
+  }
+
+  const result = (await response.json()) as { id?: string; status?: string };
+  console.log(
+    `[ycloud] Message sent to ${msg.to} — id:${result.id} status:${result.status}`
+  );
+  return {
+    ok: true,
+    providerMessageId: result.id ?? "",
+    status: result.status ?? "sent",
+  };
+}
+
 export const ycloudProvider: MessagingProvider = {
   id: "ycloud",
   signatureScheme: "timestamped-hmac",
@@ -359,10 +414,11 @@ export const ycloudProvider: MessagingProvider = {
     return [baseEvent(payload, "other", "na")];
   },
 
-  // `_account` is contract-required but unused in v1: credentials keep
-  // resolving agent_config → env inside the delegated senders until
-  // `channel_accounts` exists (roadmap §2.3 / execution-control §2.3).
-  async sendMessage(_account, msg) {
+  // `account` only steers credential selection in v1: when it carries a
+  // caller-resolved apiKey/sender, text sends go through the folded
+  // direct client above; otherwise the delegated senders keep resolving
+  // agent_config → env until `channel_accounts` exists (§2.3).
+  async sendMessage(account, msg) {
     const externalId = msg.idempotencyKey; // → ycloud externalId
     switch (msg.type) {
       case "text": {
@@ -372,6 +428,12 @@ export const ycloudProvider: MessagingProvider = {
             error: "text message requires msg.text",
             retryable: false,
           };
+        }
+        // Caller-resolved credentials (legacy ycloud-client sites): the
+        // account carries them, so send with exactly those — the delegated
+        // sendText would re-resolve agent_config → env differently.
+        if (account.credentials.apiKey || account.senderAddress) {
+          return sendTextWithAccount(account, msg);
         }
         return toSendResult(
           await sendText(msg.to, msg.text, externalId)
@@ -398,7 +460,13 @@ export const ycloudProvider: MessagingProvider = {
           };
         }
         return toSendResult(
-          await sendDocument(msg.to, msg.mediaUrl, msg.text, externalId)
+          await sendDocument(
+            msg.to,
+            msg.mediaUrl,
+            msg.text,
+            undefined, // fileName — keep the sender's own default
+            externalId
+          )
         );
       }
       default:
