@@ -288,6 +288,23 @@ export function passiveMessageRole(
 }
 
 /**
+ * Thread id worth persisting to `conversations.external_thread_id` — the
+ * send-routing handle for conversation-scoped providers (zernio). The
+ * dedicated `providerThreadId` always wins; `providerConversationId` is only
+ * a fallback on NON-echo events, where it is a true conversation id (kapso
+ * conv.id, zernio conversation.id). Echoes carry the CUSTOMER key there —
+ * stamping it would store a phone number as a thread id and mis-route
+ * future thread-scoped sends.
+ */
+export function eventThreadId(
+  event: NormalizedInboundEvent
+): string | undefined {
+  if (event.providerThreadId) return event.providerThreadId;
+  if (event.kind === "message.echo") return undefined;
+  return event.providerConversationId;
+}
+
+/**
  * Passive persistence for inbound events on channels other than the
  * WhatsApp/YCloud app pipeline: find-or-create the conversation keyed by
  * (channel, externalUserId), dedup on deliveryId (channel_events marker)
@@ -386,7 +403,7 @@ export async function handlePassiveChannelEvent(
     // send-routing handle for conversation-scoped providers (zernio). Echoes
     // key providerConversationId by the customer, so the thread arrives on
     // providerThreadId instead.
-    const threadId = event.providerThreadId ?? event.providerConversationId;
+    const threadId = eventThreadId(event);
     if (threadId) {
       await stampConversationThreadId(conversationId, threadId);
     }
