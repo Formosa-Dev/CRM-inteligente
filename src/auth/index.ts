@@ -6,6 +6,8 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { clientIpFromRequest } from "@/lib/infra/rate-limit";
+import { checkLoginThrottle } from "@/lib/auth/login-throttle";
 import { lookupUserRole } from "@/lib/auth/session-users";
 import { findProvisionedUser } from "./oauth-allowlist";
 
@@ -14,22 +16,11 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-// Strict per-email login limiter — the generic API limiter (20/min) is too
-// permissive for credential brute-forcing. 5 attempts per 10 minutes.
-const LOGIN_WINDOW_MS = 10 * 60 * 1000;
-const LOGIN_MAX_ATTEMPTS = 5;
-const loginAttempts = new Map<string, { count: number; resetAt: number }>();
-
-function isLoginRateLimited(email: string): boolean {
-  const now = Date.now();
-  const entry = loginAttempts.get(email.toLowerCase());
-  if (!entry || now > entry.resetAt) {
-    loginAttempts.set(email.toLowerCase(), { count: 1, resetAt: now + LOGIN_WINDOW_MS });
-    return false;
-  }
-  entry.count++;
-  return entry.count > LOGIN_MAX_ATTEMPTS;
-}
+// F11: cost-12 bcrypt hash compared against whenever the email is unknown, so
+// a nonexistent account costs the same ~100ms as a real one and returns the
+// same generic null — no timing oracle, no distinct error.
+const DUMMY_PASSWORD_HASH =
+  "$2b$12$yJcZC9865qukHD1W2kpLdO7FurNpRDd5DeyH4H7nhdO4xDfoFKABS";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   // F9: 24h sessions — a stolen JWT is dead within a day, not a week.
@@ -45,13 +36,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         const parsed = loginSchema.safeParse(credentials);
         if (!parsed.success) return null;
 
-        const { email, password } = parsed.data;
+        const email = parsed.data.email.toLowerCase().trim();
+        const { password } = parsed.data;
 
-        if (isLoginRateLimited(email)) return null;
+        // F11: per-IP + per-email buckets (Redis when configured, bounded
+        // in-memory otherwise). A single client gets 5 tries per account;
+        // locking the admin out from the outside now requires sustained
+        // multi-IP spend instead of 5 requests.
+        const throttle = await checkLoginThrottle(clientIpFromRequest(request), email);
 
         const [user] = await db
           .select()
@@ -59,10 +55,24 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           .where(eq(users.email, email))
           .limit(1);
 
-        if (!user) return null;
+        // Always pay exactly one bcrypt comparison — known users compare
+        // against their hash, unknown ones against a constant dummy, so the
+        // response timing and shape never reveal account existence.
+        const passwordMatch = await bcrypt.compare(
+          password,
+          user?.hashedPassword ?? DUMMY_PASSWORD_HASH
+        );
 
-        const passwordMatch = await bcrypt.compare(password, user.hashedPassword);
-        if (!passwordMatch) return null;
+        if (!user || !passwordMatch) return null;
+
+        if (!throttle.allowed) {
+          // Correct credentials held back by a limiter = an admin being
+          // locked out or a distributed attack succeeding — worth a signal.
+          console.warn(
+            `[auth] valid login blocked by rate limit (emailLimited=${throttle.emailLimited}, ipLimited=${throttle.ipLimited})`
+          );
+          return null;
+        }
 
         return {
           id: String(user.id),
