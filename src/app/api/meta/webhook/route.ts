@@ -63,7 +63,7 @@ export function metaMessageToInboundEvent(
     timestamp: Number.isFinite(epochSeconds)
       ? new Date(epochSeconds * 1000).toISOString()
       : new Date().toISOString(),
-    raw: { whatsappInboundMessage: msg },
+    raw: { type: "whatsapp.inbound_message.received", whatsappInboundMessage: msg },
   };
 }
 

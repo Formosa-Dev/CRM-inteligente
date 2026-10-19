@@ -75,6 +75,12 @@ describe("metaMessageToInboundEvent", () => {
       (event.raw as Record<string, unknown>).whatsappInboundMessage,
       msg
     );
+    // Without the envelope type the shared pipeline drops the event as a
+    // protocol artifact (isProtocolArtifact requires the inbound type).
+    assert.equal(
+      (event.raw as Record<string, unknown>).type,
+      "whatsapp.inbound_message.received"
+    );
   });
 
   it("synthesizes a deterministic deliveryId when the wamid is absent", () => {
