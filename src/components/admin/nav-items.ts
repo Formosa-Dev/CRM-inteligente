@@ -10,6 +10,7 @@ import {
   MegaphoneIcon,
   UtensilsCrossedIcon,
   WalletIcon,
+  PlugIcon,
 } from "lucide-react";
 
 export const navItems = [
@@ -47,6 +48,12 @@ export const navItems = [
     label: "Meta Ads",
     href: "/admin/meta",
     icon: MegaphoneIcon,
+    disabled: false,
+  },
+  {
+    label: "Canales",
+    href: "/admin/channels",
+    icon: PlugIcon,
     disabled: false,
   },
   {
