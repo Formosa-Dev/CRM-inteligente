@@ -212,22 +212,33 @@ async function runWhatsAppAgentImpl({
     // Cargar contexto del cliente (nombre, historial de pedidos)
     const { db } = await import("@/db");
     const { conversations: convTable, orders } = await import("@/db/schema");
-    const { eq, desc } = await import("drizzle-orm");
+    const { and, eq, desc } = await import("drizzle-orm");
     
     if (conversationId > 0) {
       const [conv] = await db
-        .select({ name: convTable.customerName, phone: convTable.customerPhone })
+        .select({ name: convTable.customerName, phone: convTable.customerPhone, accountId: convTable.channelAccountId })
         .from(convTable)
         .where(eq(convTable.id, conversationId))
         .limit(1);
-      
+
       if (conv?.phone) {
-        // Datos del lead (dirección, notas, tags)
+        // A bound conversation only sees lead/order facts owned by its
+        // account — orders attribute through leads.channelAccountId so a
+        // customer shared across provisioned accounts never gets
+        // cross-account order facts. NULL binding keeps the legacy
+        // phone-global view.
+        const scopeAccountId = conv.accountId ?? null;
         const { leads } = await import("@/db/schema");
+
+        // Datos del lead (dirección, notas, tags)
         const [lead] = await db
           .select({ name: leads.name, address: leads.address, tags: leads.tags, notes: leads.notes })
           .from(leads)
-          .where(eq(leads.phone, conv.phone))
+          .where(
+            scopeAccountId != null
+              ? and(eq(leads.phone, conv.phone), eq(leads.channelAccountId, scopeAccountId))
+              : eq(leads.phone, conv.phone)
+          )
           .limit(1);
 
         // 📍 Direcciones guardadas (pueden ser múltiples)
@@ -243,12 +254,20 @@ async function runWhatsAppAgentImpl({
         }
 
         // Productos que más repite (preferencias)
-        const allOrders = await db
-          .select({ items: orders.items })
-          .from(orders)
-          .where(eq(orders.phoneNumber, conv.phone))
-          .orderBy(desc(orders.createdAt))
-          .limit(20);
+        const allOrders = scopeAccountId != null
+          ? await db
+            .select({ items: orders.items })
+            .from(orders)
+            .innerJoin(leads, eq(orders.leadId, leads.id))
+            .where(and(eq(orders.phoneNumber, conv.phone), eq(leads.channelAccountId, scopeAccountId)))
+            .orderBy(desc(orders.createdAt))
+            .limit(20)
+          : await db
+            .select({ items: orders.items })
+            .from(orders)
+            .where(eq(orders.phoneNumber, conv.phone))
+            .orderBy(desc(orders.createdAt))
+            .limit(20);
         const prefCounter = new Map<string, number>();
         for (const o of allOrders) {
           const items = o.items as { name?: string }[] | null;
@@ -264,12 +283,20 @@ async function runWhatsAppAgentImpl({
           .map(([name]) => name);
 
         // ÚLTIMOS 2 pedidos (suficiente para contexto, no quemar tokens)
-        const recentOrders = await db
-          .select({ items: orders.items, status: orders.status, id: orders.id, orderType: orders.orderType, address: orders.address, paymentStatus: orders.paymentStatus })
-          .from(orders)
-          .where(eq(orders.phoneNumber, conv.phone))
-          .orderBy(desc(orders.createdAt))
-          .limit(2);
+        const recentOrders = scopeAccountId != null
+          ? await db
+            .select({ items: orders.items, status: orders.status, id: orders.id, orderType: orders.orderType, address: orders.address, paymentStatus: orders.paymentStatus })
+            .from(orders)
+            .innerJoin(leads, eq(orders.leadId, leads.id))
+            .where(and(eq(orders.phoneNumber, conv.phone), eq(leads.channelAccountId, scopeAccountId)))
+            .orderBy(desc(orders.createdAt))
+            .limit(2)
+          : await db
+            .select({ items: orders.items, status: orders.status, id: orders.id, orderType: orders.orderType, address: orders.address, paymentStatus: orders.paymentStatus })
+            .from(orders)
+            .where(eq(orders.phoneNumber, conv.phone))
+            .orderBy(desc(orders.createdAt))
+            .limit(2);
         
         // El último pedido (cualquier estado) es el primero de la lista
         const lastOrder = recentOrders[0];
@@ -280,26 +307,42 @@ async function runWhatsAppAgentImpl({
         // debajo de varias órdenes cerradas más recientes.
         let pendingOrder: (typeof recentOrders)[number] | undefined;
         try {
-          const { and, inArray } = await import("drizzle-orm");
-          const [candidate] = await db
-            .select({
-              items: orders.items,
-              status: orders.status,
-              id: orders.id,
-              orderType: orders.orderType,
-              address: orders.address,
-              paymentStatus: orders.paymentStatus,
-              createdAt: orders.createdAt,
-            })
-            .from(orders)
-            .where(
-              and(
-                eq(orders.phoneNumber, conv.phone),
-                inArray(orders.status, ["pending", "preparing", "ready"]),
-              ),
-            )
-            .orderBy(desc(orders.createdAt))
-            .limit(1);
+          const { inArray } = await import("drizzle-orm");
+          const activeStatus = inArray(orders.status, ["pending", "preparing", "ready"]);
+          const selectPending = {
+            items: orders.items,
+            status: orders.status,
+            id: orders.id,
+            orderType: orders.orderType,
+            address: orders.address,
+            paymentStatus: orders.paymentStatus,
+            createdAt: orders.createdAt,
+          };
+          const [candidate] = scopeAccountId != null
+            ? await db
+              .select(selectPending)
+              .from(orders)
+              .innerJoin(leads, eq(orders.leadId, leads.id))
+              .where(
+                and(
+                  eq(orders.phoneNumber, conv.phone),
+                  activeStatus,
+                  eq(leads.channelAccountId, scopeAccountId),
+                ),
+              )
+              .orderBy(desc(orders.createdAt))
+              .limit(1)
+            : await db
+              .select(selectPending)
+              .from(orders)
+              .where(
+                and(
+                  eq(orders.phoneNumber, conv.phone),
+                  activeStatus,
+                ),
+              )
+              .orderBy(desc(orders.createdAt))
+              .limit(1);
           if (candidate) {
             const lifecycle = evaluateOrderLifecycle({
               activeOrder: { id: candidate.id, status: candidate.status, createdAt: candidate.createdAt },

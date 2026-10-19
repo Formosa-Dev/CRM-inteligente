@@ -1,0 +1,2 @@
+DROP INDEX "channel_events_provider_delivery_uq";--> statement-breakpoint
+CREATE UNIQUE INDEX "channel_events_provider_delivery_uq" ON "channel_events" USING btree ("provider",coalesce("channel_account_id", -1),"delivery_id");

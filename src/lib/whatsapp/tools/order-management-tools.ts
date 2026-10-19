@@ -4,6 +4,21 @@ import { db } from "@/db";
 import { orders } from "@/db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { getStatusSemantic, isActiveStatus, getStatusNotificationMessage } from "@/lib/whatsapp/status-utils";
+import { currentAgentConfigScope } from "@/lib/agent-config-scope";
+import { isOrderVisibleToScope } from "@/lib/whatsapp/order-lifecycle";
+
+// The ambient scope carries the conversation's channelAccountId. A bound
+// scope only sees/mutates orders owned by its account's leads; NULL keeps
+// the legacy phone-global behavior. Post-fetch gating keeps the not-found
+// path identical (a foreign order is indistinguishable from a missing one).
+async function visibleOrderOrNull<T extends { id: number }>(
+  order: T | undefined
+): Promise<T | undefined> {
+  if (!order) return undefined;
+  const scopeAccountId = currentAgentConfigScope().channelAccountId ?? null;
+  if (!(await isOrderVisibleToScope(order.id, scopeAccountId))) return undefined;
+  return order;
+}
 
 // ─── getOrderStatus ─────────────────────────────────────────────────────────
 export const getOrderStatusTool = tool({
@@ -39,6 +54,7 @@ export const getOrderStatusTool = tool({
       order = rows[0];
     }
 
+    order = await visibleOrderOrNull(order);
     if (!order) {
       return "No encontré ningún pedido. ¿Podés darme el número de pedido o tu teléfono?";
     }
@@ -106,7 +122,7 @@ export const addToOrderTool = tool({
       .where(eq(orders.id, orderId))
       .limit(1);
 
-    const order = rows[0];
+    const order = await visibleOrderOrNull(rows[0]);
     if (!order) {
       return "No encontré ese pedido.";
     }
@@ -174,7 +190,7 @@ export const updateOrderTool = tool({
       .where(and(eq(orders.id, orderId), eq(orders.status, "pending")))
       .limit(1);
 
-    if (!rows[0]) {
+    if (!(await visibleOrderOrNull(rows[0]))) {
       return "No encontré un pedido pendiente con ese número. Solo puedo modificar pedidos que todavía no se están preparando.";
     }
 
@@ -222,7 +238,7 @@ export const cancelOrderTool = tool({
       .where(eq(orders.id, orderId))
       .limit(1);
 
-    const order = rows[0];
+    const order = await visibleOrderOrNull(rows[0]);
     if (!order) {
       return "No encontré ese pedido.";
     }

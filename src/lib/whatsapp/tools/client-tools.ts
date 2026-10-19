@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { products, orders, leads, agentConfig } from "@/db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { normalizePhone } from "@/lib/phone-utils";
-import { resolveAgentConfigId } from "@/lib/agent-config-scope";
+import { resolveAgentConfigId, currentAgentConfigScope } from "@/lib/agent-config-scope";
 
 // checkProductAvailability - Verificar stock
 export const checkProductAvailabilityTool = tool({
@@ -81,12 +81,23 @@ export const suggestProductsTool = tool({
       conditions.push(eq(orders.orderType, "hamburguesas"));
     }
 
-    const recentOrders = await db
-      .select({ items: orders.items, orderType: orders.orderType })
-      .from(orders)
-      .where(and(...conditions))
-      .orderBy(desc(orders.createdAt))
-      .limit(5);
+    // A bound account only reads orders owned by its own leads — a customer
+    // shared across provisioned accounts never gets cross-account history.
+    const scopeAccountId = currentAgentConfigScope().channelAccountId ?? null;
+    const recentOrders = scopeAccountId != null
+      ? await db
+        .select({ items: orders.items, orderType: orders.orderType })
+        .from(orders)
+        .innerJoin(leads, eq(orders.leadId, leads.id))
+        .where(and(...conditions, eq(leads.channelAccountId, scopeAccountId)))
+        .orderBy(desc(orders.createdAt))
+        .limit(5)
+      : await db
+        .select({ items: orders.items, orderType: orders.orderType })
+        .from(orders)
+        .where(and(...conditions))
+        .orderBy(desc(orders.createdAt))
+        .limit(5);
 
     if (recentOrders.length === 0) {
       if (linea === "b2b") {
@@ -124,6 +135,9 @@ export const getClientHistoryTool = tool({
   }),
   execute: async ({ phone }) => {
     phone = normalizePhone(phone);
+    // Bound account: only the lead row owned by this account is visible, and
+    // orders attribute through it. NULL scope keeps the legacy global reads.
+    const scopeAccountId = currentAgentConfigScope().channelAccountId ?? null;
     // Buscar lead
     const leadRows = await db
       .select({
@@ -136,22 +150,40 @@ export const getClientHistoryTool = tool({
         createdAt: leads.createdAt,
       })
       .from(leads)
-      .where(eq(leads.phone, phone))
+      .where(
+        scopeAccountId != null
+          ? and(eq(leads.phone, phone), eq(leads.channelAccountId, scopeAccountId))
+          : eq(leads.phone, phone)
+      )
       .limit(1);
 
     // Buscar pedidos
-    const orderRows = await db
-      .select({
-        id: orders.id,
-        items: orders.items,
-        status: orders.status,
-        orderType: orders.orderType,
-        createdAt: orders.createdAt,
-      })
-      .from(orders)
-      .where(eq(orders.phoneNumber, phone))
-      .orderBy(desc(orders.createdAt))
-      .limit(10);
+    const orderRows = scopeAccountId != null
+      ? await db
+        .select({
+          id: orders.id,
+          items: orders.items,
+          status: orders.status,
+          orderType: orders.orderType,
+          createdAt: orders.createdAt,
+        })
+        .from(orders)
+        .innerJoin(leads, eq(orders.leadId, leads.id))
+        .where(and(eq(orders.phoneNumber, phone), eq(leads.channelAccountId, scopeAccountId)))
+        .orderBy(desc(orders.createdAt))
+        .limit(10)
+      : await db
+        .select({
+          id: orders.id,
+          items: orders.items,
+          status: orders.status,
+          orderType: orders.orderType,
+          createdAt: orders.createdAt,
+        })
+        .from(orders)
+        .where(eq(orders.phoneNumber, phone))
+        .orderBy(desc(orders.createdAt))
+        .limit(10);
 
     const lead = leadRows[0];
     const parts: string[] = [];

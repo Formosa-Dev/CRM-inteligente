@@ -12,24 +12,36 @@ export function extractRefCode(text: string): string | null {
 }
 
 /**
- * Auto-capture lead on first contact — no duplicates by phone
+ * Auto-capture lead on first contact — no duplicates by phone.
+ * `channelAccountId` attributes the lead to the account that received the
+ * contact (a re-contact through a different account moves the ownership so
+ * scoped order lookups follow the latest account); NULL leaves the column
+ * untouched, preserving the legacy shared-lead behavior.
  */
 export async function captureLeadIfNew(
   phone: string,
   name: string | null,
-  firstMessage: string
+  firstMessage: string,
+  channelAccountId?: number | null
 ): Promise<{ isNew: boolean; leadId?: number }> {
   // Normalizar teléfono antes de cualquier operación
   phone = normalizePhone(phone);
   // Check if lead already exists
   const existing = await db
-    .select({ id: leads.id })
+    .select({ id: leads.id, channelAccountId: leads.channelAccountId })
     .from(leads)
     .where(eq(leads.phone, phone))
     .limit(1);
 
   if (existing.length > 0) {
-    return { isNew: false };
+    const lead = existing[0];
+    if (channelAccountId != null && lead.channelAccountId !== channelAccountId) {
+      await db
+        .update(leads)
+        .set({ channelAccountId })
+        .where(eq(leads.id, lead.id));
+    }
+    return { isNew: false, leadId: lead.id };
   }
 
   const refCode = extractRefCode(firstMessage);
@@ -44,6 +56,7 @@ export async function captureLeadIfNew(
       status: "new",
       platform: "whatsapp",
       tags: ["nuevo", "whatsapp"],
+      channelAccountId: channelAccountId ?? null,
     })
     .returning({ id: leads.id });
 

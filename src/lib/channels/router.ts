@@ -190,7 +190,11 @@ export async function findOrCreateConversation(
       ? normalizePhone(customerPhone)
       : normalizePhone(externalUserId);
     if (finalPhone) {
-      await autoLinkLeadToConversation(finalPhone, resolved.record.id);
+      await autoLinkLeadToConversation(
+        finalPhone,
+        resolved.record.id,
+        resolved.record.channelAccountId
+      );
     }
   }
 
@@ -208,7 +212,8 @@ export async function findOrCreateConversation(
  */
 async function autoLinkLeadToConversation(
   phone: string,
-  conversationId: number
+  conversationId: number,
+  channelAccountId?: number | null
 ): Promise<void> {
   try {
     const [lead] = await db
@@ -220,7 +225,11 @@ async function autoLinkLeadToConversation(
     if (lead && !lead.conversationId) {
       await db
         .update(leads)
-        .set({ conversationId })
+        .set(
+          channelAccountId != null
+            ? { conversationId, channelAccountId }
+            : { conversationId }
+        )
         .where(eq(leads.id, lead.id));
       console.log(`[leads] Auto-linked lead #${lead.id} → conversation #${conversationId}`);
     }
@@ -602,7 +611,7 @@ export async function resolveUnboundWhatsAppSend(
  * A scoped row with a blank key is an explicit failure; only a global row or
  * a positively identified un-migrated schema may use the env install values.
  */
-async function resolveLegacyWhatsAppCredentials(): Promise<LegacyWhatsAppCredentialsResolution> {
+export async function resolveLegacyWhatsAppCredentials(): Promise<LegacyWhatsAppCredentialsResolution> {
   const { resolveAgentConfig, resolveAgentConfigStrict } = await import(
     "@/lib/agent-config-scope"
   );

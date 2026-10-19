@@ -257,8 +257,12 @@ export const channelEvents = pgTable("channel_events", {
   payload: jsonb("payload"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
+  // Delivery-id uniqueness is per ACCOUNT: provider redeliveries fan out per
+  // channel account, so a provider-wide unique would silently drop the second
+  // account's copy. COALESCE keeps legacy NULL rows in their own partition.
   providerDeliveryUq: uniqueIndex("channel_events_provider_delivery_uq").on(
     table.provider,
+    sql`coalesce(${table.channelAccountId}, -1)`,
     table.deliveryId
   ),
   providerPlatformUq: uniqueIndex("channel_events_provider_platform_uq")

@@ -1,10 +1,24 @@
 "use server";
 
 import { db } from "@/db";
-import { agentConfig, chatMessages, conversations } from "@/db/schema";
+import { chatMessages, conversations } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
+import {
+  messenger,
+  resolveChannelAccount,
+  resolveChannelAccountById,
+} from "@/lib/messaging";
+import {
+  insertMessage,
+  resolveConversationAccountForPhone,
+  resolveDefaultWhatsAppAccount,
+  resolveLegacyWhatsAppCredentials,
+  resolveUnboundWhatsAppSend,
+} from "@/lib/channels/router";
+import { sendWhatsAppBubbles } from "@/lib/buffer/response-sender";
+import { runWhatsAppAgent } from "@/lib/whatsapp/agent";
 import type { ChannelAccount } from "@/lib/messaging/types";
 
 /**
@@ -45,7 +59,10 @@ export async function triggerAgentForConversation(
     // 3. Resolver la identidad de envío (S15):
     //    - conversación con channelAccountId → esa channel_account
     //    - canal no-whatsapp sin binding → resolución por canal (fail closed)
-    //    - whatsapp sin binding → credenciales agent_config/env (legacy)
+    //    - whatsapp sin binding → la misma decisión de send-account que
+    //      sendOutboundMessage: binding por teléfono, después la única cuenta
+    //      activa; las credenciales legacy solo aplican a un canal realmente
+    //      unprovisioned y jamás rescatan una resolución ambigua/fallida.
     const [conv] = await db
       .select({
         channel: conversations.channel,
@@ -57,8 +74,8 @@ export async function triggerAgentForConversation(
 
     const channel = conv?.channel || "whatsapp";
     let account: ChannelAccount | undefined;
+    let legacyCredentials: { apiKey: string; senderAddress: string } | undefined;
     if (conv?.channelAccountId != null) {
-      const { resolveChannelAccountById } = await import("@/lib/messaging");
       account = await resolveChannelAccountById(conv.channelAccountId);
       if (!account) {
         return {
@@ -67,7 +84,6 @@ export async function triggerAgentForConversation(
         };
       }
     } else if (channel !== "whatsapp") {
-      const { resolveChannelAccount } = await import("@/lib/messaging");
       account = await resolveChannelAccount(channel);
       if (!account) {
         return {
@@ -75,23 +91,26 @@ export async function triggerAgentForConversation(
           message: `El canal '${channel}' no tiene proveedor registrado`,
         };
       }
-    }
-
-    const [cfg] = await db
-      .select({ ycloudApiKey: agentConfig.ycloudApiKey, phoneNumber: agentConfig.phoneNumber })
-      .from(agentConfig)
-      .where(eq(agentConfig.id, 1))
-      .limit(1);
-
-    const { decryptIfEncrypted } = await import("@/lib/encryption");
-    const apiKey = decryptIfEncrypted(cfg?.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
-    const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
-    if (!account && (!apiKey || !from)) {
-      return { success: false, message: "WhatsApp no configurado (falta API key)" };
+    } else {
+      const decision = await resolveUnboundWhatsAppSend(customerPhone, {
+        resolveBinding: resolveConversationAccountForPhone,
+        resolveDefaultAccount: resolveDefaultWhatsAppAccount,
+        resolveLegacyCredentials: resolveLegacyWhatsAppCredentials,
+      });
+      if (decision.kind === "fail") {
+        return {
+          success: false,
+          message: `Sin remitente seguro para WhatsApp: ${decision.reason}`,
+        };
+      }
+      if (decision.kind === "account") {
+        account = decision.account;
+      } else {
+        legacyCredentials = decision.credentials;
+      }
     }
 
     // 4. Ejecutar agente
-    const { runWhatsAppAgent } = await import("@/lib/whatsapp/agent");
     const { text: responseText, pendingMedia } = await runWhatsAppAgent({
       conversationId,
       customerPhone,
@@ -99,17 +118,19 @@ export async function triggerAgentForConversation(
     });
 
     // 5. Guardar respuesta en DB
-    const { insertMessage } = await import("@/lib/channels/router");
     const { id: msgId } = await insertMessage(conversationId, "assistant", responseText);
 
-    // 6. Enviar por el canal de la conversación — como la cuenta vinculada
-    //    cuando existe, o con las credenciales legacy si es whatsapp sin
-    //    binding (comportamiento idéntico al anterior).
-    const { sendWhatsAppBubbles } = await import("@/lib/buffer/response-sender");
+    // 6. Enviar por el canal de la conversación — como la cuenta resuelta,
+    //    o con las credenciales legacy cuando el canal está unprovisioned.
     const ycloudResult = await sendWhatsAppBubbles(
       account
         ? { to: customerPhone, text: responseText, apiKey: "", from: "", channel, account }
-        : { to: customerPhone, text: responseText, apiKey, from }
+        : {
+            to: customerPhone,
+            text: responseText,
+            apiKey: legacyCredentials?.apiKey ?? "",
+            from: legacyCredentials?.senderAddress ?? "",
+          }
     );
 
     // 7. Guardar wamid
@@ -122,7 +143,6 @@ export async function triggerAgentForConversation(
 
     // 8. Media pendiente
     if (pendingMedia.length > 0) {
-      const { messenger } = await import("@/lib/messaging");
       for (const media of pendingMedia) {
         if (media.type === "image" || media.type === "sticker") {
           await messenger.send(
@@ -132,7 +152,9 @@ export async function triggerAgentForConversation(
               mediaUrl: media.url,
               text: media.caption,
             },
-            account ? { channel, account } : {}
+            account
+              ? { channel, account }
+              : { credentials: legacyCredentials ?? { apiKey: "", senderAddress: "" } }
           );
           await insertMessage(conversationId, "assistant", media.dbContent);
         }

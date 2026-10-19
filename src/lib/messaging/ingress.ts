@@ -21,9 +21,10 @@
  * - handlePassiveChannelEvent: passive persistence for channels the WhatsApp
  *   app-pipeline can't consume (non-ycloud envelopes). Messages/comments/
  *   echoes persist to conversations + chat_messages stamped with the account;
- *   statuses/lifecycle/other kinds get a structured log + 200 — there is no
- *   `channel_events` table today and schema changes belong to another worker.
- *   The agent/buffer stack stays WhatsApp-bound until S15 generalizes it.
+ *   status/lifecycle/other kinds persist to `channel_events` via
+ *   persistChannelEvent (a positively identified missing schema acks 200;
+ *   any other failure is retryable). The agent/buffer stack stays
+ *   WhatsApp-bound until S15 generalizes it.
  */
 
 import { NextResponse } from "next/server";
@@ -212,8 +213,9 @@ export async function resolveIngressContext(
 
 /**
  * Structured ack log for events that are accepted but have no persistence
- * target. Exists because no `channel_events` table exists yet — this is the
- * seam where those rows land once schema work adds the table.
+ * target (protocol artifacts, unsupported kinds, unresolvable account
+ * identities). Status/lifecycle kinds DO have a target — they persist to
+ * `channel_events` via persistChannelEvent before reaching here.
  */
 export function logAckedWithoutPersistence(
   event: NormalizedInboundEvent,

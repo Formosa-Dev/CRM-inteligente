@@ -25,6 +25,14 @@ import {
   resolveAgentConfig,
   resolveAgentConfigId,
 } from "@/lib/agent-config-scope";
+import { messenger, resolveChannelAccountByIdStrict } from "@/lib/messaging";
+import {
+  resolveConversationAccountForPhone,
+  resolveDefaultWhatsAppAccount,
+  resolveLegacyWhatsAppCredentials,
+  resolveUnboundWhatsAppSend,
+} from "@/lib/channels/router";
+import type { ChannelAccount } from "@/lib/messaging/types";
 
 export interface OrderCreationContext {
   /** Current-day buffered user text (server truth, not the model's view). */
@@ -43,18 +51,13 @@ async function notifyDeliveryOrder(
   address: string | null,
   items: { name: string; quantity: number; unitPrice: number }[],
   total: number,
-  orderId: number
+  orderId: number,
+  channelAccountId: number | null
 ): Promise<void> {
   try {
     const cfg = await resolveAgentConfig();
     const deliveryPhone = cfg?.deliveryPhoneNumber?.trim();
     if (!deliveryPhone) return;
-
-    const { messenger } = await import("@/lib/messaging");
-    const { decryptIfEncrypted } = await import("@/lib/encryption");
-    const apiKey = decryptIfEncrypted(cfg?.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
-    const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
-    if (!apiKey || !from) return;
 
     // Buscar el maps link más reciente del cliente
     const [lastAddr] = await db
@@ -79,9 +82,48 @@ async function notifyDeliveryOrder(
       `💰 Total: $${total.toLocaleString("es-AR")}`,
     ].filter(Boolean).join("\n");
 
+    // Same sender decision as outbound replies: a bound conversation sends as
+    // its channel_account (a blank scoped key surfaces as an explicit
+    // mismatch — never a global/env fallback); an unbound one goes through
+    // the shared send-account decision where legacy credentials only apply
+    // to a truly unprovisioned channel.
+    let sendOptions:
+      | { channel: "whatsapp"; account: ChannelAccount }
+      | { credentials: { apiKey: string; senderAddress: string } };
+    if (channelAccountId != null) {
+      const resolution = await resolveChannelAccountByIdStrict(
+        channelAccountId,
+        "ycloud"
+      );
+      if (resolution.kind !== "resolved") {
+        console.warn(
+          `[delivery] Order #${orderId}: channel_account #${channelAccountId} not resolvable` +
+            ` (${resolution.kind === "mismatch" ? resolution.reason : resolution.kind}) — notification not sent`
+        );
+        return;
+      }
+      sendOptions = { channel: "whatsapp", account: resolution.account };
+    } else {
+      const decision = await resolveUnboundWhatsAppSend(deliveryPhone, {
+        resolveBinding: resolveConversationAccountForPhone,
+        resolveDefaultAccount: resolveDefaultWhatsAppAccount,
+        resolveLegacyCredentials: resolveLegacyWhatsAppCredentials,
+      });
+      if (decision.kind === "fail") {
+        console.warn(
+          `[delivery] Order #${orderId}: no safe WhatsApp sender (${decision.reason}) — notification not sent`
+        );
+        return;
+      }
+      sendOptions =
+        decision.kind === "account"
+          ? { channel: "whatsapp", account: decision.account }
+          : { credentials: decision.credentials };
+    }
+
     const res = await messenger.send(
       { to: deliveryPhone, type: "text", text: message },
-      { credentials: { apiKey, senderAddress: from } },
+      sendOptions
     );
     if (!res.ok) throw new Error(res.error);
     console.log(`[delivery] Order #${orderId} notified to ${deliveryPhone}`);
@@ -114,9 +156,17 @@ export function createCreateOrderTool(
   execute: async ({ customerName, orderType, items: explicitItems, customerPhone, address, deliveryFee, paymentStatus, paymentMethod, notes }) => {
     if (referencedWebOrderId) return `El pedido web #${referencedWebOrderId} ya está registrado. Continuá sobre ese mismo pedido; no lo dupliques.`;
     // Bind creation to the actual conversation, never an LLM-supplied identity.
-    const [conversation] = await db.select({ phone: conversations.customerPhone }).from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+    const [conversation] = await db
+      .select({
+        phone: conversations.customerPhone,
+        channelAccountId: conversations.channelAccountId,
+      })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
     if (!conversation?.phone) return "No pude verificar el remitente. No creé el pedido.";
     customerPhone = normalizePhone(conversation.phone);
+    const convAccountId = conversation.channelAccountId ?? null;
 
     const now = new Date();
     const repository = context.lifecycleRepository ?? new DrizzleOrderLifecycleRepository();
@@ -143,7 +193,7 @@ export function createCreateOrderTool(
     // ─── Material temporal + lifecycle guard (server-side, prompt-proof) ──
     let activeOrder: ActiveOrderSnapshot | null = null;
     try {
-      activeOrder = await repository.findActiveOrder(customerPhone);
+      activeOrder = await repository.findActiveOrder(customerPhone, convAccountId);
     } catch {
       return "No pude verificar si ya existe un pedido. Reintentá en un momento para evitar duplicados.";
     }
@@ -252,21 +302,26 @@ export function createCreateOrderTool(
 
       if (lead) {
         leadId = lead.id;
+        // The order-taking account owns the lead so scoped order lookups
+        // (lifecycle, delivery-arrived, agent context) attribute it correctly.
+        // NULL conversation bindings never write the column.
+        const accountStamp =
+          convAccountId != null ? { channelAccountId: convAccountId } : {};
         // Save/update address on the lead if provided
         if (address) {
           await db.update(leads)
-            .set({ address })
+            .set({ address, ...accountStamp })
             .where(eq(leads.id, lead.id));
         }
         // Set client type based on order type
         const clientType = orderType === "pan_mayorista" ? "b2b" : "b2c";
         await db.update(leads)
-          .set({ type: clientType })
+          .set({ type: clientType, ...accountStamp })
           .where(eq(leads.id, lead.id));
         // Si era un lead sin pedidos, actualizar a "converted" (cliente)
         if (lead.status === "new" || lead.status === "contacted") {
           await db.update(leads)
-            .set({ status: "converted" })
+            .set({ status: "converted", ...accountStamp })
             .where(eq(leads.id, lead.id));
         }
 
@@ -305,7 +360,7 @@ export function createCreateOrderTool(
 
     // Notificar al delivery con pedido + dirección
     if (address) {
-      notifyDeliveryOrder(customerName, customerPhone, address, resolvedItems, total, order.id);
+      notifyDeliveryOrder(customerName, customerPhone, address, resolvedItems, total, order.id, convAccountId);
     }
 
     const typeLabel = orderType === "hamburguesas" ? "🍔 Hamburguesas" : "🍞 Pan Mayorista";

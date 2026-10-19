@@ -11,7 +11,7 @@
  */
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { conversations, orders } from "@/db/schema";
+import { conversations, leads, orders } from "@/db/schema";
 import { logger } from "@/lib/logger";
 import {
   ACTIVE_ORDER_STATUSES,
@@ -23,19 +23,53 @@ import {
 const ACTIVE_STATUS_LIST = [...ACTIVE_ORDER_STATUSES] as ActiveOrderStatus[];
 
 export interface OrderLifecycleRepository {
-  findActiveOrder(phoneNumber: string): Promise<ActiveOrderSnapshot | null>;
+  /**
+   * Open-order snapshot for a phone. When `channelAccountId` names a bound
+   * account, only orders whose lead is owned by that account count — a
+   * customer shared across provisioned accounts never sees cross-account
+   * order facts. `null` preserves the legacy phone-global lookup used by
+   * unbound/legacy contexts.
+   */
+  findActiveOrder(
+    phoneNumber: string,
+    channelAccountId?: number | null
+  ): Promise<ActiveOrderSnapshot | null>;
   /** Conditional close: returns true only when this call transitioned the row. */
   closeOrderAsDeliveredPaid(orderId: number, at: Date): Promise<boolean>;
 }
 
 export class DrizzleOrderLifecycleRepository implements OrderLifecycleRepository {
-  async findActiveOrder(phoneNumber: string): Promise<ActiveOrderSnapshot | null> {
-    const [row] = await db
-      .select({ id: orders.id, status: orders.status, createdAt: orders.createdAt })
-      .from(orders)
-      .where(and(eq(orders.phoneNumber, phoneNumber), inArray(orders.status, ACTIVE_STATUS_LIST)))
-      .orderBy(desc(orders.createdAt))
-      .limit(1);
+  async findActiveOrder(
+    phoneNumber: string,
+    channelAccountId: number | null = null
+  ): Promise<ActiveOrderSnapshot | null> {
+    const selection = {
+      id: orders.id,
+      status: orders.status,
+      createdAt: orders.createdAt,
+    };
+    const statusFilter = inArray(orders.status, ACTIVE_STATUS_LIST);
+    const [row] =
+      channelAccountId != null
+        ? await db
+            .select(selection)
+            .from(orders)
+            .innerJoin(leads, eq(orders.leadId, leads.id))
+            .where(
+              and(
+                eq(orders.phoneNumber, phoneNumber),
+                statusFilter,
+                eq(leads.channelAccountId, channelAccountId)
+              )
+            )
+            .orderBy(desc(orders.createdAt))
+            .limit(1)
+        : await db
+            .select(selection)
+            .from(orders)
+            .where(and(eq(orders.phoneNumber, phoneNumber), statusFilter))
+            .orderBy(desc(orders.createdAt))
+            .limit(1);
     return row ?? null;
   }
 
@@ -54,9 +88,41 @@ export class DrizzleOrderLifecycleRepository implements OrderLifecycleRepository
   }
 }
 
-/** Read-only snapshot of the customer's open order, if any. */
-export async function getActiveOrderSnapshot(phoneNumber: string): Promise<ActiveOrderSnapshot | null> {
-  return new DrizzleOrderLifecycleRepository().findActiveOrder(phoneNumber);
+/**
+ * True when `orderId` may be surfaced inside an account-bound scope. A bound
+ * scope only sees orders whose owning lead carries that account — orders with
+ * no attributed lead (leadId NULL) never become visible to an account. A NULL
+ * account keeps the legacy unrestricted read.
+ */
+export async function isOrderVisibleToScope(
+  orderId: number,
+  channelAccountId: number | null
+): Promise<boolean> {
+  if (channelAccountId == null) return true;
+  const [order] = await db
+    .select({ leadId: orders.leadId })
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1);
+  if (order?.leadId == null) return false;
+  const [lead] = await db
+    .select({ id: leads.id })
+    .from(leads)
+    .where(and(eq(leads.id, order.leadId), eq(leads.channelAccountId, channelAccountId)))
+    .limit(1);
+  return lead != null;
+}
+
+/**
+ * Read-only snapshot of the customer's open order, if any. `channelAccountId`
+ * scopes the lookup to orders owned by that account's leads; `null` keeps the
+ * legacy phone-global lookup.
+ */
+export async function getActiveOrderSnapshot(
+  phoneNumber: string,
+  channelAccountId: number | null = null
+): Promise<ActiveOrderSnapshot | null> {
+  return new DrizzleOrderLifecycleRepository().findActiveOrder(phoneNumber, channelAccountId);
 }
 
 // ─── Same/new clarification state (two-turn, server-side) ───────────────────

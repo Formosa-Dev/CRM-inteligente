@@ -11,10 +11,11 @@
  * event persists. Legacy callers pass nothing and every write stays null —
  * byte-for-byte identical to the pre-S12 pipeline.
  *
- * Passive persistence: kinds with no storage target (status/lifecycle/other
- * artifacts) are logged via `logAckedWithoutPersistence` and acked 200 —
- * no `channel_events` table exists yet (schema is owned by another slice);
- * that helper is the seam where those rows land when the table ships.
+ * Passive persistence: kinds with no conversation row (status/lifecycle/other
+ * artifacts) persist to `channel_events` via `persistChannelEvent` — a
+ * positively identified missing schema acks 200 without persistence, any
+ * other failure is retryable. Kinds with no storage target at all are logged
+ * via `logAckedWithoutPersistence` and acked 200.
  */
 
 import { NextResponse } from "next/server";
@@ -68,6 +69,7 @@ import { analyzeVideo } from "@/lib/media/video";
 import { extractDocumentText } from "@/lib/media/document";
 import { BufferManager } from "@/lib/buffer/manager";
 import { scheduleBufferProcessing } from "@/lib/buffer/processor";
+import { accountScopedInboundKey } from "./inbound-keys";
 import { buildSellerPrompt, internalSellerTools } from "@/lib/whatsapp/seller-prompt";
 import { generateText, stepCountIs } from "ai";
 import { openai, type OpenAILanguageModelChatOptions } from "@ai-sdk/openai";
@@ -691,10 +693,17 @@ export async function handleNormalizedEvent(
   // phone (normalizado) se usa para buscar en DB
   const phone = normalizePhone(customerPhone);
 
+  // Account-scoped inbound identities: a bound channel account namespaces the
+  // customer key so the same phone messaging two provisioned numbers never
+  // shares a rate-limit window, dedup slot, or buffer debounce turn. NULL
+  // preserves the exact legacy `${phone}`/`${customerPhone}` key shapes.
+  const phoneKey = accountScopedInboundKey(channelAccountId, phone);
+  const customerKey = accountScopedInboundKey(channelAccountId, customerPhone);
+
   // Per-phone rate limit — a spamming customer would otherwise burn OpenAI
   // tokens through Whisper/vision/agent calls. 200 is returned regardless so
   // YCloud does not retry-storm dropped messages.
-  const inboundRate = await checkRateLimit(`wa-inbound:${phone}`);
+  const inboundRate = await checkRateLimit(`wa-inbound:${phoneKey}`);
   if (!inboundRate.success) {
     console.warn(`[webhook:wa] Rate limited inbound from ${phone}`);
     return NextResponse.json({ ok: true, rateLimited: true }, { status: 200 });
@@ -819,7 +828,7 @@ export async function handleNormalizedEvent(
     const textForLead = msgType === "text" ? event.text ?? "" : "";
     if (shouldCaptureLead(actor)) {
       try {
-        await captureLeadIfNew(customerPhone, customerName, textForLead);
+        await captureLeadIfNew(customerPhone, customerName, textForLead, channelAccountId);
       } catch (leadError) {
         console.error("[webhook:wa] Lead capture failed — continuing pipeline", leadError);
       }
@@ -937,9 +946,15 @@ export async function handleNormalizedEvent(
       // ── PERSISTIR dirección en leads.address + tabla addresses ──
       const addrToSave = loc?.address || loc?.name || "";
       if (addrToSave) {
-        // Actualizar leads.address como dirección principal
+        // Actualizar leads.address como dirección principal — y, cuando el
+        // evento llegó por una cuenta vinculada, atribuir el lead a esa cuenta
+        // para que los lookups de pedidos scoped la encuentren.
         db.update(leads)
-          .set({ address: addrToSave })
+          .set(
+            channelAccountId != null
+              ? { address: addrToSave, channelAccountId }
+              : { address: addrToSave }
+          )
           .where(eq(leads.phone, phone))
           .then((r) => {
             if (r.rowCount && r.rowCount > 0)
@@ -1176,7 +1191,7 @@ export async function handleNormalizedEvent(
       // order" (never forces a commercial route on stale/unknown state).
       let hasActiveOrder = false;
       try {
-        hasActiveOrder = (await getActiveOrderSnapshot(phone)) !== null;
+        hasActiveOrder = (await getActiveOrderSnapshot(phone, channelAccountId)) !== null;
       } catch {
         hasActiveOrder = false;
       }
@@ -1289,14 +1304,14 @@ export async function handleNormalizedEvent(
     // ───────────────────────────────────────────────────────────────────────
 
     // Content-level dedup (Level 2) — catches exact resends within 5s
-    const isDuplContent = await BufferManager.isContentDuplicate("whatsapp", customerPhone, agentText);
+    const isDuplContent = await BufferManager.isContentDuplicate("whatsapp", customerKey, agentText);
     if (isDuplContent) {
       console.log(`[buffer:enqueue] Content duplicate detected, skipping: ${agentText.slice(0, 50)}`);
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
-    console.log(`[webhook:wa] Enqueueing to buffer for whatsapp:${customerPhone}`);
-    await BufferManager.enqueue("whatsapp", customerPhone, {
+    console.log(`[webhook:wa] Enqueueing to buffer for whatsapp:${customerKey}`);
+    await BufferManager.enqueue("whatsapp", customerKey, {
       content: agentText,
       messageId,
       timestamp: Date.now(),
@@ -1314,7 +1329,7 @@ export async function handleNormalizedEvent(
     console.log(`[webhook:wa] Config for agent — apiKey:${apiKey ? "SET" : "EMPTY"} botNumber:${botNumber || "EMPTY"} prompt:${systemPrompt ? "SET" : "EMPTY"}`);
 
     // Fire-and-forget: webhook returns 200 immediately, processing happens in background
-    scheduleBufferProcessing("whatsapp", customerPhone, async (bufferedMessages) => {
+    scheduleBufferProcessing("whatsapp", customerKey, async (bufferedMessages) => {
       return runWithAgentConfigScope(configScope, async () => {
       console.log(`[webhook:wa] Buffer callback fired — ${bufferedMessages.length} msgs for ${customerPhone}${isSeller ? " (SELLER)" : ""}`);
 

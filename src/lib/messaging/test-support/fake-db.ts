@@ -141,7 +141,11 @@ function uniqueKeys(table: string, row: Row): string[] {
     keys.push(`platform:${String(row.platformMessageId)}`);
   }
   if (table === "channel_events" && row.deliveryId) {
-    keys.push(`delivery:${String(row.provider)}|${String(row.deliveryId)}`);
+    // Mirrors channel_events_provider_delivery_uq (migration 0019):
+    // (provider, coalesce(channel_account_id, -1), delivery_id).
+    keys.push(
+      `delivery:${String(row.provider)}|${String(row.channelAccountId ?? -1)}|${String(row.deliveryId)}`
+    );
   }
   return keys;
 }
@@ -155,6 +159,7 @@ class QueryBuilder implements PromiseLike<unknown> {
   private readonly joins: { table: string; condition: unknown }[] = [];
   private inserted: Row | undefined;
   private updated: Row | undefined;
+  private ignoreConflict = false;
 
   constructor(db: FakeDb, op: QueryBuilder["op"], table: string) {
     this.db = db;
@@ -201,6 +206,7 @@ class QueryBuilder implements PromiseLike<unknown> {
   }
 
   onConflictDoNothing(): this {
+    this.ignoreConflict = true;
     return this;
   }
 
@@ -226,7 +232,13 @@ class QueryBuilder implements PromiseLike<unknown> {
       return this.limitCount != null ? rows.slice(0, this.limitCount) : rows;
     }
     if (this.op === "insert") {
-      return [this.db.insert(this.table, this.inserted ?? {})];
+      try {
+        return [this.db.insert(this.table, this.inserted ?? {})];
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (this.ignoreConflict && code === "23505") return [];
+        throw error;
+      }
     }
     return this.db.update(this.table, this.updated ?? {}, this.whereExpr);
   }

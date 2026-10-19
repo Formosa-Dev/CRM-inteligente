@@ -134,6 +134,13 @@
       "when": 1792401859958,
       "tag": "0018_legacy_identity_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792406966154,
+      "tag": "0019_channel_events_scoped_delivery",
+      "breakpoints": true
     }
   ]
 }
