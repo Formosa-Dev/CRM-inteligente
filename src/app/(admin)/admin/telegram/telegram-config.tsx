@@ -31,6 +31,7 @@ import type {
   TelegramStatus,
   WebhookInfo,
 } from "./actions";
+import { useIsAdmin } from "@/components/admin/role-context";
 
 type Props = {
   initialStatus: TelegramStatus;
@@ -41,6 +42,7 @@ export function TelegramConfigClient({ initialStatus }: Props) {
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [confirmDeleteWebhook, setConfirmDeleteWebhook] = useState(false);
+  const isAdmin = useIsAdmin();
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -319,6 +321,7 @@ export function TelegramConfigClient({ initialStatus }: Props) {
 
             {/* Acciones */}
             <div className="flex flex-wrap gap-3">
+              {isAdmin && (
               <Button
                 type="button"
                 variant="default"
@@ -333,6 +336,7 @@ export function TelegramConfigClient({ initialStatus }: Props) {
                   ? "Configurando..."
                   : "Configurar Webhook"}
               </Button>
+              )}
 
               <Button
                 type="button"
@@ -347,7 +351,7 @@ export function TelegramConfigClient({ initialStatus }: Props) {
                 Verificar estado
               </Button>
 
-              {confirmDeleteWebhook ? (
+              {isAdmin && (confirmDeleteWebhook ? (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">
                     Corta los mensajes entrantes hasta reconfigurar
@@ -387,7 +391,7 @@ export function TelegramConfigClient({ initialStatus }: Props) {
                   <Trash2Icon className="h-4 w-4" />
                   Eliminar Webhook
                 </Button>
-              )}
+              ))}
             </div>
 
             {/* Webhook info */}

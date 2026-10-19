@@ -9,6 +9,7 @@ import { CustomerContextPanel } from "@/components/messages/customer-context-pan
 import { CreateOrderModal } from "@/components/orders/create-order-modal";
 import { ChevronLeft } from "lucide-react";
 import { toast } from "sonner";
+import { useIsAdmin } from "@/components/admin/role-context";
 import {
   useConversation,
   useConversations,
@@ -49,6 +50,7 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
     initialSel !== null ? "chat" : "list"
   );
   const [orderModal, setOrderModal] = useState<{ phone: string; name: string } | null>(null);
+  const isAdmin = useIsAdmin();
 
   // Channel/account filters live in the URL so a filtered inbox is shareable.
   const channelFilter = normalizeChannelParam(searchParams.get("channel"));
@@ -160,7 +162,10 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
         </button>
         <span className="text-sm font-medium text-foreground">Perfil del Cliente</span>
       </div>
-      <CustomerContextPanel conversationId={selectedId} onNewOrder={handleNewOrder} />
+      <CustomerContextPanel
+        conversationId={selectedId}
+        onNewOrder={isAdmin ? handleNewOrder : undefined}
+      />
     </div>
   ) : null;
 
@@ -202,8 +207,9 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
             onSend={handleSend}
             onBack={handleBackToList}
             onShowContext={handleOpenContext}
-            onHumanOverride={handleHumanOverride}
+            onHumanOverride={isAdmin ? handleHumanOverride : undefined}
             humanOverrideActive={isHumanOverride}
+            readOnly={!isAdmin}
           />
         )}
       </div>

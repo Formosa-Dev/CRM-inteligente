@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { navItems } from "./nav-items";
 import { staggerContainer, fadeUpSmall } from "@/lib/animation-variants";
 import { useBusiness } from "@/lib/hooks/use-business";
+import { useIsAdmin } from "./role-context";
 
 interface AdminSidebarContentProps {
   showFooter?: boolean;
@@ -17,6 +18,7 @@ export default function AdminSidebarContent({
 }: AdminSidebarContentProps) {
   const pathname = usePathname();
   const business = useBusiness();
+  const isAdmin = useIsAdmin();
 
   return (
     <div className="flex h-full flex-col bg-sidebar">
@@ -81,6 +83,15 @@ export default function AdminSidebarContent({
           );
         })}
       </motion.nav>
+
+      {/* Read-only indicator for viewer accounts */}
+      {!isAdmin && (
+        <div className="px-3 pb-3">
+          <span className="block rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-center text-[11px] font-medium text-amber-400">
+            Solo lectura
+          </span>
+        </div>
+      )}
 
       {/* Footer */}
       {showFooter && (

@@ -32,6 +32,7 @@ import {
   startZernioConnect,
   type ChannelAccountRow,
 } from "./actions";
+import { useIsAdmin } from "@/components/admin/role-context";
 import type { ProviderId } from "@/lib/messaging/types";
 
 export interface WebhookEndpoint {
@@ -125,6 +126,7 @@ export function ChannelsView({
   flashError?: string;
 }) {
   const router = useRouter();
+  const isAdmin = useIsAdmin();
   // Local state only holds optimistic status overrides — rows derive from
   // server props, so a router.refresh() after create can't leave the table
   // stale (a useState(initialAccounts) copy did exactly that).
@@ -215,6 +217,7 @@ export function ChannelsView({
   return (
     <div className="flex flex-col gap-6">
       {/* Create form */}
+      {isAdmin && (
       <div className="glass-card rounded-xl p-5">
         <div className="mb-4 flex items-center gap-2">
           <PlugIcon className="size-4 text-primary" />
@@ -308,8 +311,10 @@ export function ChannelsView({
           Conectar
         </Button>
       </div>
+      )}
 
       {/* Zernio embedded connect */}
+      {isAdmin && (
       <div className="glass-card rounded-xl p-5">
         <div className="mb-4 flex items-center gap-2">
           <LinkIcon className="size-4 text-primary" />
@@ -343,6 +348,7 @@ export function ChannelsView({
           auto-reply del agente.
         </p>
       </div>
+      )}
 
       {/* Webhook endpoints per provider */}
       <div className="glass-card rounded-xl p-5">
@@ -376,7 +382,7 @@ export function ChannelsView({
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
                   <CopyButton text={w.url} />
-                  {w.provider === "zernio" && (
+                  {isAdmin && w.provider === "zernio" && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -453,6 +459,7 @@ export function ChannelsView({
                     </span>
                   </TableCell>
                   <TableCell className="text-right">
+                    {isAdmin && (
                     <Button
                       variant="ghost"
                       size="sm"
@@ -469,6 +476,7 @@ export function ChannelsView({
                         </>
                       )}
                     </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

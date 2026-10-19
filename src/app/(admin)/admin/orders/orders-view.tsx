@@ -8,6 +8,7 @@ import { fadeUpSmall, staggerContainer } from "@/lib/animation-variants";
 import { updateOrderStatus, notifyCustomer, deleteOrder, markPaidAndDelivered, type OrderRow, type OrderStatus } from "./actions";
 import { computeOrderTotal } from "@/lib/client-utils";
 import { OrderEditModal } from "./order-edit-modal";
+import { useIsAdmin } from "@/components/admin/role-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,6 +85,7 @@ function OrderCard({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const isAdmin = useIsAdmin();
   const statusCfg = STATUSES[order.status] ?? STATUSES.pending;
   const typeBadge = orderTypeBadge(order.orderType);
   const items: Array<{ name?: string; quantity?: number; productName?: string; price?: number; unitPrice?: number }> =
@@ -117,8 +119,8 @@ function OrderCard({
       layout
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      onClick={() => setEditOpen(true)}
-      className={`rounded-xl border p-4 flex flex-col gap-3 bg-card transition-all duration-200 hover:border-primary/40 cursor-pointer ${
+      onClick={() => isAdmin && setEditOpen(true)}
+      className={`rounded-xl border p-4 flex flex-col gap-3 bg-card transition-all duration-200 hover:border-primary/40 ${isAdmin ? "cursor-pointer" : ""} ${
         order.status === "pending" ? "border-primary/30" : "border-border"
       }`}
     >
@@ -192,6 +194,7 @@ function OrderCard({
           </span>
         </div>
 
+        {isAdmin && (
         <div className="flex flex-wrap gap-1.5">
           {NEXT_STATUS[order.status] && (
             <Button
@@ -343,6 +346,7 @@ function OrderCard({
             <Pencil size={14} aria-hidden="true" />
           </Button>
         </div>
+        )}
       </div>
     </motion.div>
     <OrderEditModal order={order} open={editOpen} onClose={() => setEditOpen(false)} />

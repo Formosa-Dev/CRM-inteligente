@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/sheet";
 import { ShoppingBag, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { useIsAdmin } from "@/components/admin/role-context";
 import { CreateOrderModal } from "@/components/orders/create-order-modal";
 import { deleteLead } from "@/app/(admin)/admin/clients/actions";
 
@@ -123,6 +124,7 @@ export default function LeadsTable({
   const [orderModalOpen, setOrderModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const isAdmin = useIsAdmin();
 
   const buildUrl = useCallback(
     (overrides: Record<string, string | undefined>) => {
@@ -367,7 +369,7 @@ export default function LeadsTable({
                 </section>
 
                 {/* Botón convertir a cliente */}
-                {selectedLead?.status !== "converted" && (
+                {isAdmin && selectedLead?.status !== "converted" && (
                   <div className="pt-2">
                     <button
                       onClick={() => { setSheetOpen(false); setOrderModalOpen(true); }}
@@ -380,6 +382,7 @@ export default function LeadsTable({
                 )}
 
                 {/* Botón eliminar lead */}
+                {isAdmin && (
                 <div className="pt-2 border-t border-border">
                   {confirmDelete ? (
                     <div className="flex gap-2">
@@ -420,6 +423,7 @@ export default function LeadsTable({
                     </button>
                   )}
                 </div>
+                )}
               </div>
             </>
           )}

@@ -22,6 +22,7 @@ import {
 import { cardEntrance, fadeUpSmall, staggerContainer } from "@/lib/animation-variants";
 import { formatCurrency } from "@/lib/client-utils";
 import { addCashMovementAction } from "./actions";
+import { useIsAdmin } from "@/components/admin/role-context";
 import type { ClosedSessionLine, OpenSessionView } from "./queries";
 
 interface CajaViewProps {
@@ -302,6 +303,8 @@ function HistoryTable({ history }: { history: ClosedSessionLine[] }) {
 // ─── Vista principal ──────────────────────────────────────────────────────────
 
 export function CajaView({ open, history }: CajaViewProps) {
+  const isAdmin = useIsAdmin();
+
   return (
     <>
       {open ? (
@@ -362,7 +365,7 @@ export function CajaView({ open, history }: CajaViewProps) {
               </div>
             </div>
 
-            <MovementForm />
+            {isAdmin && <MovementForm />}
             <MovementsTable movements={open.movements} />
           </motion.div>
         </>

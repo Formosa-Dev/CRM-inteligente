@@ -9,6 +9,7 @@ import { fadeUpSmall, staggerContainer, cardEntrance } from "@/lib/animation-var
 import type { ActionCard } from "./page";
 import { updateOrderStatus, markPaidAndDelivered } from "@/app/(admin)/admin/orders/actions";
 import { triggerAgentForConversation } from "./dashboard-actions-server";
+import { useIsAdmin } from "@/components/admin/role-context";
 
 // ─── Single gold accent (D8: oro, no multi-hue) ────────────────────────────
 
@@ -41,6 +42,14 @@ function notifyResult(result: { success: boolean; message?: string }) {
   if (result.success) toast.success(result.message ?? "Listo");
   else toast.error(result.message ?? "La acción falló");
 }
+
+// Mutations hidden for viewer accounts; navigation actions stay.
+const MUTATION_ACTIONS = new Set([
+  "mark-delivered",
+  "mark-ready",
+  "mark-paid",
+  "trigger-agent",
+]);
 
 // ─── Action Button ────────────────────────────────────────────────────────
 
@@ -79,6 +88,10 @@ function ActionCardComponent({
   router: ReturnType<typeof useRouter>;
 }) {
   const [loadingItems, setLoadingItems] = useState<Record<string, Record<string, boolean>>>({});
+  const isAdmin = useIsAdmin();
+  const visibleActions = isAdmin
+    ? card.actions
+    : card.actions.filter((a) => !MUTATION_ACTIONS.has(a.action));
 
   const styles = GOLD_STYLE;
 
@@ -150,7 +163,7 @@ function ActionCardComponent({
                 <p className="text-[11px] text-foreground/30 truncate">{item.subtitle}</p>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                {card.actions.map((action) => (
+                {visibleActions.map((action) => (
                   <ActionButton
                     key={action.action}
                     label={action.label}

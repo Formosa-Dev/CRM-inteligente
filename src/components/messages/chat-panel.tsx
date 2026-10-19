@@ -17,6 +17,7 @@ interface ChatPanelProps {
   onHumanOverride?: () => void;
   onShowContext?: () => void;
   humanOverrideActive?: boolean;
+  readOnly?: boolean;
   className?: string;
 }
 
@@ -65,6 +66,7 @@ export function ChatPanel({
   onHumanOverride,
   onShowContext,
   humanOverrideActive,
+  readOnly = false,
   className,
 }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -191,7 +193,12 @@ export function ChatPanel({
       </div>
 
       {/* Reply input */}
-      <ReplyInput onSend={onSend} channel={conversation.channel} />
+      <ReplyInput
+        onSend={onSend}
+        channel={conversation.channel}
+        disabled={readOnly}
+        placeholder={readOnly ? "Solo lectura — no podés responder" : undefined}
+      />
     </div>
   );
 }

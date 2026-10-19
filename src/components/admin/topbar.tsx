@@ -13,8 +13,14 @@ interface TopbarProps {
   user: {
     name?: string | null;
     email?: string | null;
+    role?: string;
   };
 }
+
+const ROLE_LABELS: Record<string, string> = {
+  admin: "Administrador",
+  viewer: "Solo lectura",
+};
 
 function getInitials(name?: string | null, email?: string | null): string {
   if (name) {
@@ -82,7 +88,7 @@ export default function AdminTopbar({ user }: TopbarProps) {
             {displayName}
           </span>
           <span className="text-xs mt-0.5 text-muted-foreground">
-            Administrador
+            {ROLE_LABELS[user.role ?? ""] ?? user.role ?? "Usuario"}
           </span>
         </motion.div>
 

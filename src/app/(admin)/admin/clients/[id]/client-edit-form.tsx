@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Edit, X, Save } from "lucide-react";
 import { updateClient } from "../actions";
+import { useIsAdmin } from "@/components/admin/role-context";
 
 interface LeadData {
   id: number;
@@ -22,6 +23,7 @@ interface LeadData {
 }
 
 export function ClientEditForm({ lead }: { lead: LeadData | null }) {
+  const isAdmin = useIsAdmin();
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -33,7 +35,7 @@ export function ClientEditForm({ lead }: { lead: LeadData | null }) {
   const [type, setType] = useState(lead?.type ?? "");
   const [tagsStr, setTagsStr] = useState((lead?.tags ?? []).join(", "));
 
-  if (!lead) return null;
+  if (!lead || !isAdmin) return null;
 
   const handleSave = async () => {
     setSaving(true);
