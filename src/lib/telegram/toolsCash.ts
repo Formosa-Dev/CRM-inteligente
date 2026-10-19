@@ -23,17 +23,15 @@ import {
   type CloseResult,
 } from "@/lib/cash/session";
 import { notifyAdmins } from "@/lib/telegram/notifier";
+import { formatArgentinaStamp } from "@/lib/whatsapp/temporal-context";
 
 const CLOSED_BY = "telegram-admin";
 
 const fmtMoney = (n: number) => `$${n.toLocaleString("es-AR")}`;
 
+// DD/MM HH:mm en hora Argentina (el servidor corre en UTC).
 function fmtDateTime(d: Date): string {
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  return `${dd}/${mm} ${hh}:${mi}`;
+  return formatArgentinaStamp(d).slice(1, -1);
 }
 
 function digitalCount(s: CashSnapshot): number {

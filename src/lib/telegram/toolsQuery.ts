@@ -4,14 +4,12 @@ import { db } from "@/db";
 import { orders } from "@/db/schema";
 import { eq, and, gte, lte, desc } from "drizzle-orm";
 import { resolveClientNamesBatch } from "@/lib/lead-utils";
+import { argentinaDayStartFromInput, argentinaTodayRange } from "./ar-time";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function getTodayRange() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-  return { start, end };
+  return argentinaTodayRange();
 }
 
 const statusLabels: Record<string, string> = {
@@ -156,14 +154,11 @@ export const searchOrdersByDate = tool({
     date: z.string().optional().describe("Fecha en formato YYYY-MM-DD (default hoy)"),
   }),
   execute: async ({ date }) => {
-    const targetDate = date
-      ? new Date(date)
-      : new Date();
-    const start = new Date(
-      targetDate.getFullYear(),
-      targetDate.getMonth(),
-      targetDate.getDate()
-    );
+    // El parámetro es un día calendario Argentina: el rango tiene que
+    // cubrir 00:00→24:00 hora local, no el día UTC del servidor.
+    const start = date
+      ? argentinaDayStartFromInput(date)
+      : argentinaTodayRange().start;
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
     const rows = await db

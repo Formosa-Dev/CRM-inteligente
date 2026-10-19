@@ -9,6 +9,7 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 import { resolveClientNamesBatch } from "@/lib/lead-utils";
 import { getBusinessInfo } from "@/lib/business";
 import { getStatusNotificationMessage } from "@/lib/whatsapp/status-utils";
+import { getArgentinaHour } from "@/lib/argentina-time";
 
 const PAGE_SIZE = 30;
 
@@ -18,9 +19,8 @@ const PAGE_SIZE = 30;
  */
 async function scheduleFollowUp(orderId: number, _phoneNumber: string, _customerName: string | null) {
   try {
-    const now = new Date();
-    const hour = now.getHours();
-    // Solo enviar follow-up en horario hábil (9-22hs)
+    const hour = getArgentinaHour();
+    // Solo enviar follow-up en horario hábil (9-22hs Argentina)
     if (hour < 9 || hour >= 22) {
       console.log(`[followup] Skipped for order #${orderId} — outside business hours (${hour}:00)`);
       return;
