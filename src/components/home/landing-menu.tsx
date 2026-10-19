@@ -131,27 +131,40 @@ function toLandingPromo(promo: ApiPromo): LandingPromo {
 export function LandingMenu() {
   const [products, setProducts] = useState<ApiProduct[] | null>(null);
   const [promos, setPromos] = useState<LandingPromo[]>([]);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      fetch("/api/products?available=true")
-        .then((res) => (res.ok ? res.json() : []))
-        .catch(() => []),
-      fetch("/api/promotions?active=true")
-        .then((res) => (res.ok ? res.json() : []))
-        .catch(() => []),
-    ]).then(([productData, promoData]) => {
-      if (cancelled) return;
-      setProducts(Array.isArray(productData) ? productData : []);
-      setPromos(
-        Array.isArray(promoData) ? (promoData as ApiPromo[]).map(toLandingPromo) : [],
-      );
-    });
+      fetch("/api/products?available=true").then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      }),
+      fetch("/api/promotions?active=true").then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      }),
+    ])
+      .then(([productData, promoData]) => {
+        if (cancelled) return;
+        setProducts(Array.isArray(productData) ? productData : []);
+        setPromos(
+          Array.isArray(promoData) ? (promoData as ApiPromo[]).map(toLandingPromo) : [],
+        );
+        setFailed(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProducts(null);
+          setPromos([]);
+          setFailed(true);
+        }
+      });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [attempt]);
 
   const presentCategories = useMemo(
     () => new Set((products ?? []).map((product) => product.category)),
@@ -169,8 +182,8 @@ export function LandingMenu() {
     presentCategories.has(section.category),
   );
   const hasPromos = promos.length > 0;
-  const loading = products === null;
-  const empty = !loading && products.length === 0 && !hasPromos;
+  const loading = products === null && !failed;
+  const empty = !loading && !failed && products !== null && products.length === 0 && !hasPromos;
 
   const anchors = [
     ...(hasPromos ? [{ id: "promos", label: "Promos" }] : []),
@@ -215,8 +228,9 @@ export function LandingMenu() {
       </div>
 
       {loading && (
-        <div className="mx-auto max-w-6xl px-4 py-12 sm:py-16">
-          <div className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-4">
+        <div className="mx-auto max-w-6xl px-4 py-12 sm:py-16" aria-busy="true">
+          <span className="sr-only">Cargando la carta…</span>
+          <div className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-4" aria-hidden="true">
             {Array.from({ length: 4 }).map((_, index) => (
               <div
                 key={index}
@@ -234,6 +248,28 @@ export function LandingMenu() {
         </div>
       )}
 
+      {failed && (
+        <div
+          role="alert"
+          className="mx-auto max-w-6xl px-4 py-12 text-center sm:py-16"
+        >
+          <p className="text-foreground/55">
+            No pudimos cargar la carta. Revisá tu conexión y reintentá.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setProducts(null);
+              setFailed(false);
+              setAttempt((a) => a + 1);
+            }}
+            className="btn-outline-gold mt-4 inline-flex items-center px-6 py-3 text-sm font-bold uppercase tracking-widest"
+          >
+            Reintentar
+          </button>
+        </div>
+      )}
+
       {empty && (
         <div className="mx-auto max-w-6xl px-4 py-12 text-center sm:py-16">
           <p className="text-foreground/55">
@@ -248,7 +284,7 @@ export function LandingMenu() {
         </div>
       )}
 
-      {!loading && (
+      {!loading && !failed && (
         <>
           <PromosSection promos={promos} />
           {visibleCategories.map((section) => (

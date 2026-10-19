@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { CatalogImage } from "@/components/products/catalog-image";
+import { Skeleton } from "@/components/ui/skeleton";
 import { motion } from "framer-motion";
 import {
   fadeUp,
@@ -66,26 +67,38 @@ const benefits = [
   },
 ];
 
+type CatalogStatus = "loading" | "error" | "ready";
+
 export default function PanMayoristaPage() {
   const [products, setProducts] = useState<ProductFromAPI[]>([]);
-  const [, setLoading] = useState(true);
+  const [status, setStatus] = useState<CatalogStatus>("loading");
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     async function fetchProducts() {
       try {
         const res = await fetch("/api/products?available=true");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
+        if (cancelled) return;
         // Filter for pan mayorista
-        const panProducts = data.filter((p: ProductFromAPI) => p.category === "pan_mayorista");
+        const panProducts = Array.isArray(data)
+          ? data.filter((p: ProductFromAPI) => p.category === "pan_mayorista")
+          : [];
         setProducts(panProducts);
+        setStatus("ready");
       } catch (err) {
+        if (cancelled) return;
         console.error("[pan-mayorista] fetch error:", err);
-      } finally {
-        setLoading(false);
+        setStatus("error");
       }
     }
     fetchProducts();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt]);
 
   return (
     <div className="min-h-screen bg-background relative">
@@ -195,6 +208,56 @@ export default function PanMayoristaPage() {
             </p>
           </motion.div>
 
+          {status === "loading" && (
+            <div
+              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6"
+              aria-busy="true"
+            >
+              <span className="sr-only">Cargando variedades…</span>
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div
+                  key={index}
+                  className="bg-card border border-border rounded-xl overflow-hidden"
+                  aria-hidden="true"
+                >
+                  <Skeleton variant="shimmer" className="aspect-[4/3] w-full rounded-none" />
+                  <div className="space-y-2 p-5">
+                    <Skeleton variant="shimmer" className="h-4 w-2/3" />
+                    <Skeleton variant="shimmer" className="h-3 w-full" />
+                    <Skeleton variant="shimmer" className="h-8 w-28" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {status === "error" && (
+            <div role="alert" className="flex flex-col items-center gap-4 py-10 text-center">
+              <p className="text-sm text-foreground/60 max-w-md">
+                No pudimos cargar las variedades. Revisá tu conexión e intentá
+                de nuevo.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setStatus("loading");
+                  setAttempt((a) => a + 1);
+                }}
+                className="btn-outline-gold px-6 py-3 text-sm uppercase tracking-widest"
+              >
+                Reintentar
+              </button>
+            </div>
+          )}
+
+          {status === "ready" && products.length === 0 && (
+            <p className="py-10 text-center text-sm text-foreground/60">
+              Estamos actualizando el catálogo de pan mayorista. Consultanos por
+              WhatsApp para precios y disponibilidad.
+            </p>
+          )}
+
+          {status === "ready" && products.length > 0 && (
           <motion.div
             className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6"
             variants={staggerContainer}
@@ -233,6 +296,7 @@ export default function PanMayoristaPage() {
               );
             })}
           </motion.div>
+          )}
         </div>
       </section>
 

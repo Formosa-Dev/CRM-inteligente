@@ -1,6 +1,5 @@
 "use client";
 
-import { Star } from "lucide-react";
 import { useBusiness } from "@/lib/hooks/use-business";
 
 export function SellerBadge() {
@@ -17,15 +16,6 @@ export function SellerBadge() {
         <p className="text-[11px] text-foreground/50 leading-tight">
           {business?.tagline || "Pedidos online"}
         </p>
-        <div className="flex items-center gap-1 mt-0.5">
-          <span className="text-xs font-bold text-foreground mr-1">5.0</span>
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Star
-              key={i}
-              className="w-3 h-3 fill-primary text-primary"
-            />
-          ))}
-        </div>
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { CAMPAIGNS } from "@/lib/constants";
 import { PromoPageClient } from "./promo-page-client";
@@ -44,6 +45,21 @@ const CAMPAIGN_META: Record<
     em: "Empanadas",
   },
 };
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { slug } = await params;
+  const campaign = CAMPAIGNS.find((c) => c.slug === slug && c.active);
+  if (!campaign) return { title: "Promo no encontrada" };
+  const meta = CAMPAIGN_META[slug];
+  const title = meta?.headline ?? campaign.name;
+  const description = meta?.sub ?? campaign.name;
+  return {
+    title,
+    description,
+    alternates: { canonical: `/promo/${slug}` },
+    openGraph: { title, description },
+  };
+}
 
 export default async function PromoPage({ params }: PageProps) {
   const { slug } = await params;

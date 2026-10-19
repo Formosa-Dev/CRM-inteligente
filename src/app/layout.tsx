@@ -3,7 +3,9 @@ import { Poppins, Playfair_Display, Inter, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { MetaPixelProvider } from "@/components/meta/meta-pixel-provider";
 import { CartProvider } from "@/lib/cart/cart-context";
+import { PublicToaster } from "@/components/layout/public-toaster";
 import { getBusinessInfo } from "@/lib/business";
+import { getSiteUrl } from "@/lib/site-url";
 
 const poppins = Poppins({
   variable: "--font-poppins",
@@ -31,16 +33,34 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const OG_FALLBACK_IMAGE = "/assets/images/logo.png";
+
 export async function generateMetadata(): Promise<Metadata> {
   const biz = await getBusinessInfo();
+  const description =
+    biz.description || `${biz.name} — pedidos online por WhatsApp.`;
   return {
+    metadataBase: new URL(getSiteUrl()),
     title: {
       default: biz.name,
       template: `%s — ${biz.name}`,
     },
-    description:
-      biz.description ||
-      `${biz.name} — pedidos online por WhatsApp.`,
+    description,
+    alternates: { canonical: "/" },
+    openGraph: {
+      type: "website",
+      locale: "es_AR",
+      siteName: biz.name,
+      title: biz.name,
+      description,
+      images: [{ url: OG_FALLBACK_IMAGE, alt: biz.name }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: biz.name,
+      description,
+      images: [OG_FALLBACK_IMAGE],
+    },
   };
 }
 
@@ -57,6 +77,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col bg-background text-foreground overflow-x-hidden">
         <MetaPixelProvider />
         <CartProvider>{children}</CartProvider>
+        <PublicToaster />
       </body>
     </html>
   );
