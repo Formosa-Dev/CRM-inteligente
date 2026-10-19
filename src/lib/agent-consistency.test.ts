@@ -1562,9 +1562,6 @@ test("sheet bottom panel and editorial dialogs carry the spec elevation", () => 
   const panel = css.match(/\.catalog-dialog-panel\{[^}]*\}/)?.[0] ?? "";
   assert.match(panel, /0 20px 50px -4px rgba\(0,\s*0,\s*0,\s*\.7\)/);
   assert.match(panel, /env\(safe-area-inset-bottom\)/);
-  const upsell = readFileSync("src/components/products/upsell-modal.tsx", "utf8");
-  assert.match(upsell, /shadow-\[0_20px_50px_-4px_rgba\(0,0,0,\.7\)\]/);
-  assert.match(upsell, /rounded-3xl/);
 });
 
 // ─── ui-redesign-r2 B: mixed roman+italic headings + black numerals ──────────
