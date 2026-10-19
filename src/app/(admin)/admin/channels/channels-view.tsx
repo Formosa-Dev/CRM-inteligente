@@ -125,7 +125,15 @@ export function ChannelsView({
   flashError?: string;
 }) {
   const router = useRouter();
-  const [accounts, setAccounts] = useState(initialAccounts);
+  // Local state only holds optimistic status overrides — rows derive from
+  // server props, so a router.refresh() after create can't leave the table
+  // stale (a useState(initialAccounts) copy did exactly that).
+  const [statusOverrides, setStatusOverrides] = useState<
+    Record<number, string>
+  >({});
+  const accounts = initialAccounts.map((row) =>
+    statusOverrides[row.id] ? { ...row, status: statusOverrides[row.id] } : row
+  );
   const [pending, startTransition] = useTransition();
 
   const [provider, setProvider] = useState("zernio");
@@ -199,9 +207,7 @@ export function ChannelsView({
         toast.error(res.error ?? "No se pudo actualizar");
         return;
       }
-      setAccounts((rows) =>
-        rows.map((r) => (r.id === row.id ? { ...r, status: next } : r))
-      );
+      setStatusOverrides((overrides) => ({ ...overrides, [row.id]: next }));
       toast.success(next === "active" ? "Cuenta activada" : "Cuenta desconectada");
     });
   }
