@@ -9,7 +9,7 @@ import {
   useMotionValueEvent,
   motion,
 } from "framer-motion";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useReducedMotion } from "@/hooks/use-reduced-motion";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import Image from "next/image";
@@ -39,6 +39,17 @@ export function Navbar() {
   const business = useBusiness();
   const brandName = business?.name || "";
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const activeCategory = searchParams.get("category");
+
+  // usePathname() drops the query string, so category links need an explicit
+  // compare on pathname + ?category= to ever show their active state.
+  const isActive = (href: string) => {
+    const [path, query] = href.split("?");
+    if (pathname !== path) return false;
+    const linkCategory = query ? new URLSearchParams(query).get("category") : null;
+    return linkCategory === activeCategory;
+  };
   const { scrollY } = useScroll();
   const bgColor = useTransform(
     scrollY,
@@ -85,8 +96,9 @@ export function Navbar() {
               <Link
                 key={link.href}
                 href={link.href}
+                aria-current={isActive(link.href) ? "page" : undefined}
                 className={`relative rounded-lg px-3 py-2 text-sm font-semibold transition-colors duration-200 ${
-                  pathname === link.href
+                  isActive(link.href)
                     ? "text-gold-light bg-primary/[0.12]"
                     : "text-foreground/70"
                 }`}
@@ -155,8 +167,9 @@ export function Navbar() {
                         key={link.href}
                         href={link.href}
                         onClick={() => setOpen(false)}
+                        aria-current={isActive(link.href) ? "page" : undefined}
                         className={`rounded-lg px-3 py-2 text-base font-semibold transition-colors ${
-                          pathname === link.href
+                          isActive(link.href)
                             ? "text-gold-light bg-primary/[0.12]"
                             : "text-foreground/80"
                         }`}
