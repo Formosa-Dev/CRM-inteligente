@@ -24,6 +24,16 @@
  * `channel: "whatsapp"` on `raw` — the designed `resolveEventChannel` hint —
  * so ingress can derive the channel without touching the registry map.
  *
+ * Echo origin: `whatsapp.message.sent` items stamp `echoOrigin: "api"` on
+ * `raw` when `message.kapso.origin === "cloud_api"` (API/agent-authored
+ * send). Passive persistence maps that to role "assistant"; absent/other
+ * origins (business_app) keep role "human".
+ *
+ * Batch detection: `X-Webhook-Batch` truthy ("true"/"1"/"yes"/"on"),
+ * `body.batch` truthy, or a top-level `data[]` all flatten. A flagged
+ * envelope without `data[]` warns and falls through to the single-event
+ * parse — un-parsed items are never silently acked.
+ *
  * [RESEARCH] — open evidence items kept as named seams (one-line corrections):
  * - KAPSO_GRAPH_PROXY_BASE: canonical proxy host (docs show api.kapso.ai/meta/
  *   whatsapp; SDK quickstart shows app.kapso.ai/api/meta/).
@@ -331,6 +341,14 @@ function normalizeItem(
     // Like ycloud: the customer is the conversation routing key on echoes.
     event.providerConversationId =
       asString(message.to) ?? asString(conversation.phone_number) ?? event.providerConversationId;
+    // kapso.origin separates API-authored sends ("cloud_api") from human
+    // Business-app sends — stamped as a normalized raw hint (same seam as
+    // raw.channel) so persistence maps agent-authored echoes to role
+    // "assistant" instead of a foreign "human" sender.
+    const kapso = isRecord(message.kapso) ? message.kapso : undefined;
+    if (asString(kapso?.origin) === "cloud_api") {
+      (event.raw as Record<string, unknown>).echoOrigin = "api";
+    }
   }
 
   if (kind === "message.received" || kind === "message.echo") {
@@ -351,6 +369,16 @@ function itemEventName(
   fallback: string | undefined
 ): string | undefined {
   return asString(item.event) ?? asString(item.type) ?? fallback;
+}
+
+/** "true"/"1"/"yes"/"on" — tolerates non-standard batch-flag values. */
+function isTruthyFlag(value: unknown): boolean {
+  if (value === true) return true;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    return v === "true" || v === "1" || v === "yes" || v === "on";
+  }
+  return false;
 }
 
 /** [RESEARCH] send idempotency — not documented for the Graph proxy. The
@@ -532,16 +560,31 @@ export const kapsoProvider: MessagingProvider = {
     const eventName =
       getHeader(headers, EVENT_HEADER) ?? asString(body.event) ?? asString(body.type);
     const deliveryKey = getHeader(headers, IDEMPOTENCY_HEADER);
-    const batched =
-      getHeader(headers, BATCH_HEADER) === "true" || body.batch === true;
-
-    if (batched) {
-      const data = Array.isArray(body.data) ? body.data : [];
-      return data
-        .filter(isRecord)
-        .map((item, index) =>
+    const batchHeader = getHeader(headers, BATCH_HEADER);
+    const data = body.data;
+    // Batch detection tolerates truthy header forms, the body flag, or a
+    // bare data[] envelope — anything carrying items must flatten or the
+    // route would ack un-parsed data[] entries as a single bogus event.
+    if (isTruthyFlag(batchHeader) || isTruthyFlag(body.batch) || Array.isArray(data)) {
+      if (!Array.isArray(data)) {
+        // Flagged as batch but nothing flattenable — log and fall through
+        // to the single-event parse so the envelope is still persisted.
+        console.warn(
+          `[kapso] batch-flagged delivery ${deliveryKey ?? "n/a"} carries no data[] ` +
+            `(header=${batchHeader ?? "absent"} batch=${String(body.batch)}) — parsing as single event`
+        );
+      } else {
+        const items = data.filter(isRecord);
+        if (items.length !== data.length) {
+          console.warn(
+            `[kapso] batch delivery ${deliveryKey ?? "n/a"} — dropped ` +
+              `${data.length - items.length} non-object item(s)`
+          );
+        }
+        return items.map((item, index) =>
           normalizeItem(item, itemEventName(item, eventName), deliveryKey, index)
         );
+      }
     }
     return [normalizeItem(body, eventName, deliveryKey)];
   },

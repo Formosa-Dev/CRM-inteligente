@@ -12,7 +12,7 @@ import { aggregateWebhookStatuses } from "@/lib/messaging/webhook-response";
 /**
  * POST /api/webhooks/ingress/<provider> — unified inbound entry point (S12).
  *
- * Works for any registered provider (registry today: ycloud). Flow:
+ * Works for any registered provider (registry today: ycloud, kapso). Flow:
  * provider by path param (404 unknown) → per-provider webhook secret
  * (resolveWebhookSecret — ycloud keeps agent_config→env, future providers
  * read <PROVIDER>_WEBHOOK_SECRET) → verifyWebhook (401 bad signature) →

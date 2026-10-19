@@ -18,6 +18,8 @@
  *   in the raw payload (ycloud `whatsappInboundMessage.to`, echo `from`) so a
  *   row provisioned by sender E.164 still matches. Unmatched on a provisioned
  *   channel resolves `undefined` — fail-closed, never bind a foreign account.
+ *   The legacy placeholder for unprovisioned/un-migrated installs applies
+ *   only to ycloud — non-ycloud providers fail closed the same way.
  * - handlePassiveChannelEvent: passive persistence for channels the WhatsApp
  *   app-pipeline can't consume (non-ycloud envelopes). Messages/comments/
  *   echoes persist to conversations + chat_messages stamped with the account;
@@ -40,7 +42,7 @@ import {
   resolveChannelAccount,
   resolveChannelAccountStrict,
 } from "./accounts";
-import { persistChannelEvent } from "./channel-events";
+import { isChannelDeliveryRecorded, persistChannelEvent } from "./channel-events";
 import { classifyError } from "./errors";
 import { channelForProvider, isChannelKind } from "./registry";
 import type {
@@ -190,12 +192,22 @@ export async function resolveIngressContext(
     return undefined;
   }
 
-  // resolved, unprovisioned, or a positively identified un-migrated install:
-  // the latter two use the secret-less legacy placeholder.
+  // resolved → the matched row. unprovisioned/schema-not-ready → the
+  // secret-less legacy placeholder, which exists only for ycloud installs.
+  // Non-ycloud providers have no legacy installs to protect — they take the
+  // same fail-closed skip as not-found/mismatch.
+  if (resolution.kind !== "resolved" && provider.id !== "ycloud") {
+    console.warn(
+      `[ingress] ${provider.id}/${channel} event ${event.deliveryId} skipped — ` +
+        `channel_accounts ${resolution.kind}; legacy fallback is ycloud-only — fail-closed`
+    );
+    return undefined;
+  }
+
   const account =
     resolution.kind === "resolved"
       ? resolution.account
-      : await resolveChannelAccount(channel);
+      : await resolveChannelAccount(channel, undefined, provider.id);
   if (!account) {
     console.warn(
       `[ingress] ${provider.id}/${channel} event ${event.deliveryId} skipped — ` +
@@ -260,13 +272,31 @@ const PASSIVE_PERSISTED_KINDS = new Set<NormalizedInboundEvent["kind"]>([
 ]);
 
 /**
+ * Persisted role for passive message kinds. Echoes are operator-authored
+ * ("human") unless the adapter stamped `raw.echoOrigin === "api"` — the
+ * normalized hint for API/agent-authored sends (kapso `cloud_api`) —
+ * which maps to "assistant" instead of a foreign human sender. Unknown or
+ * absent origins keep "human" (status quo).
+ */
+export function passiveMessageRole(
+  event: NormalizedInboundEvent
+): "user" | "assistant" | "human" {
+  if (event.kind !== "message.echo") return "user";
+  const raw = isRecord(event.raw) ? event.raw : undefined;
+  return asNonEmptyString(raw?.echoOrigin) === "api" ? "assistant" : "human";
+}
+
+/**
  * Passive persistence for inbound events on channels other than the
  * WhatsApp/YCloud app pipeline: find-or-create the conversation keyed by
- * (channel, externalUserId), dedup on platformMessageId, and store the
- * content. Echoes persist as role "human" (dedup on the original message id
- * absorbs own-AI echoes). No agent run — agent dispatch for non-WhatsApp
- * channels is deferred until the agent layer is provider-generalized (S15).
- * Never throws: every event is acknowledged 200 so providers don't retry.
+ * (channel, externalUserId), dedup on deliveryId (channel_events marker)
+ * then platformMessageId (chat_messages), and store the content. Echoes
+ * persist as role "human" unless the adapter stamped raw.echoOrigin="api"
+ * (kapso cloud_api sends → "assistant"); own-API echoes are also absorbed
+ * by the platformMessageId dedup. No agent run — agent dispatch for
+ * non-WhatsApp channels is deferred until the agent layer is
+ * provider-generalized (S15). Never throws: every event is acknowledged
+ * 200 so providers don't retry.
  */
 export async function handlePassiveChannelEvent(
   event: NormalizedInboundEvent,
@@ -294,10 +324,46 @@ export async function handlePassiveChannelEvent(
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
+    /** Delivery marker claimed in channel_events (provider+deliveryId unique)
+     * after a handled delivery — best-effort: the message row is already
+     * durable, so a failed marker only weakens deliveryId dedup (documented
+     * residual for id-less replays under a rotated delivery key). */
+    const markDeliveryHandled = async () => {
+      try {
+        const marker = await persistChannelEvent(event, {
+          channel: ctx.channel,
+          account: ctx.account,
+          channelAccountId: ctx.channelAccountId,
+        });
+        if (marker.kind === "schema-not-ready") {
+          console.warn(
+            `[ingress] channel_events schema not ready — ${event.provider}/${event.deliveryId} ` +
+              `dedups on platformMessageId only`
+          );
+        }
+      } catch (markerError) {
+        console.warn(
+          `[ingress] delivery marker write failed for ${event.provider}/${event.deliveryId} — ` +
+            `deliveryId dedup degraded`,
+          markerError
+        );
+      }
+    };
+
+    // Delivery-level dedup first: the same X-Idempotency-Key redelivery is
+    // already fully handled even when the message carried no wamid.
+    if (await isChannelDeliveryRecorded(event.provider, event.deliveryId)) {
+      console.log(
+        `[ingress] Duplicate delivery ${event.provider}:${event.deliveryId} on ${ctx.channel} — skipping`
+      );
+      return NextResponse.json({ ok: true }, { status: 200 });
+    }
+
     if (event.platformMessageId && (await isMessageDuplicate(event.platformMessageId))) {
       console.log(
         `[ingress] Duplicate ${event.kind} ${event.platformMessageId} on ${ctx.channel} — skipping`
       );
+      await markDeliveryHandled();
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
@@ -312,7 +378,7 @@ export async function handlePassiveChannelEvent(
     const text = event.text?.trim() || `[${event.type ?? event.kind}]`;
     const content =
       event.kind === "comment.received" ? `[Comentario]: ${text}` : text;
-    const role = event.kind === "message.echo" ? "human" : "user";
+    const role = passiveMessageRole(event);
 
     const inserted = await insertMessage(
       conversationId,
@@ -325,8 +391,9 @@ export async function handlePassiveChannelEvent(
     console.log(
       inserted.wasDuplicate
         ? `[ingress] Duplicate ${event.kind} ${event.platformMessageId} — already persisted`
-        : `[ingress] Persisted ${event.kind} on ${ctx.channel} conv=${conversationId} account=${ctx.account.id}`
+        : `[ingress] Persisted ${event.kind} on ${ctx.channel} conv=${conversationId} account=${ctx.account.id} role=${role}`
     );
+    await markDeliveryHandled();
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (error) {
     // Transient persistence failures must be retried, not acked/dropped.

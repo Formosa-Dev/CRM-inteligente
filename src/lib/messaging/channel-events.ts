@@ -7,6 +7,8 @@
  * persistence"; any other failure is surfaced (retryable) by the caller.
  */
 
+import { and, eq } from "drizzle-orm";
+
 import { db } from "@/db";
 import { channelEvents } from "@/db/schema";
 
@@ -88,6 +90,36 @@ export async function persistChannelEventWithRepo(
     return outcome === "inserted" ? { kind: "persisted" } : { kind: "duplicate" };
   } catch (error) {
     if (isSchemaNotReady(error)) return { kind: "schema-not-ready", error };
+    throw error;
+  }
+}
+
+/**
+ * Delivery-level read seam for message kinds: chat_messages dedups on
+ * `platformMessageId` only, so an id-less message redelivered under a new
+ * `X-Idempotency-Key` would persist twice. channel_events is the only
+ * durable store keyed on (provider, deliveryId) — this check plus a marker
+ * write after persistence closes that gap. Positively identified missing
+ * schema degrades to "not recorded" (platformMessageId stays the only key).
+ */
+export async function isChannelDeliveryRecorded(
+  provider: string,
+  deliveryId: string
+): Promise<boolean> {
+  try {
+    const rows = await db
+      .select({ id: channelEvents.id })
+      .from(channelEvents)
+      .where(
+        and(
+          eq(channelEvents.provider, provider),
+          eq(channelEvents.deliveryId, deliveryId)
+        )
+      )
+      .limit(1);
+    return rows.length > 0;
+  } catch (error) {
+    if (isSchemaNotReady(error)) return false;
     throw error;
   }
 }

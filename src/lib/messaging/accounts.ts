@@ -356,6 +356,24 @@ function fallbackAccount(channel: ChannelKind): ChannelAccount | undefined {
   };
 }
 
+/**
+ * The legacy placeholder is stamped with the channel's routed provider
+ * (whatsapp → ycloud in v1) and exists only to keep un-provisioned or
+ * un-migrated YCLOUD installs working. A caller expecting another
+ * provider must never receive it — non-ycloud providers have no legacy
+ * installs, so an unprovisioned/schema-not-ready channel fails closed.
+ */
+export function legacyFallbackAccount(
+  channel: ChannelKind,
+  expectedProvider?: ProviderId
+): ChannelAccount | undefined {
+  const fallback = fallbackAccount(channel);
+  if (expectedProvider && fallback?.provider !== expectedProvider) {
+    return undefined;
+  }
+  return fallback;
+}
+
 export class ChannelAccountResolutionError extends Error {
   readonly retryable: boolean;
   readonly resolution: ChannelAccountResolution;
@@ -399,7 +417,7 @@ export async function resolveChannelAccount(
       return resolution.account;
     case "unprovisioned":
     case "schema-not-ready":
-      return fallbackAccount(channel);
+      return legacyFallbackAccount(channel, expectedProvider);
     case "db-error":
       throw new ChannelAccountResolutionError(resolution);
     case "not-found":
