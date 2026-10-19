@@ -48,9 +48,7 @@ import {
 } from "@/lib/channels/router";
 import { captureLeadIfNew } from "@/lib/whatsapp/lead-capture";
 import { runWhatsAppAgent, resolveAgentRouting } from "@/lib/whatsapp/agent";
-import { toSessionContext, type RoutingDecision } from "@/lib/whatsapp/session-policy";
-import { resolveHandoffTransport } from "@/lib/whatsapp/human-handoff";
-import { sendEscalationEmail } from "@/lib/whatsapp/tools/escalation-email";
+import { toSessionContext } from "@/lib/whatsapp/session-policy";
 import { db } from "@/db";
 import { agentConfig, conversations, leads, addresses } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -497,67 +495,6 @@ async function checkHumanOverride(conversationId: number): Promise<boolean> {
  * Los vendedores SIEMPRE hablan con la IA — no hay human override, no hay AI disabled.
  */
 
-
-/**
- * Minimal webhook handoff transport (SDD memoria-persistente-sesion-whatsapp,
- * W2). Claims are at-most-once per episode/message and the transport follows
- * the same claims, so retries stay silent. The owner side (24h override write
- * + escalation email/Telegram) is deliverable even with AI disabled; the
- * customer reply is NEVER sent from this path while the IA stays off.
- */
-async function deliverWebhookHandoff(input: {
-  conversationId: number;
-  customerName: string | null;
-  customerPhone: string;
-  messageId: string;
-  channel?: ChannelKind;
-  decision: Extract<RoutingDecision, { kind: "handoff" }>;
-}): Promise<void> {
-  const { decision } = input;
-  console.log(`[webhook:wa] Session handoff notifyClaim=${decision.notifyClaim} replyClaim=${decision.replyClaim} delivery=${decision.delivery} — persisting without GPT/tools or automatic replies`);
-  const transport = resolveHandoffTransport({
-    notifyClaim: decision.notifyClaim,
-    replyClaim: decision.replyClaim,
-    delivery: decision.delivery,
-    channel: input.channel,
-  });
-  if (transport.sendCustomerReply && transport.transport !== "messenger") {
-    // Non-messenger surfaces can't send the customer reply from this
-    // whatsapp-scoped route — surfaced for the operator, never dropped
-    // silently. (whatsapp resolves to "messenger" → this never fires there.)
-    console.warn(
-      `[webhook:wa] Handoff customer reply deliverable on '${transport.transport}' transport — no sender wired for channel '${transport.channel}' in this route`
-    );
-  }
-  if (transport.writeOverride) {
-    try {
-      await db
-        .update(conversations)
-        .set({ humanOverrideUntil: new Date(Date.now() + 2 * 60 * 60 * 1000) })
-        .where(eq(conversations.id, input.conversationId));
-    } catch (overrideError) {
-      console.error("[webhook:wa] Handoff override write failed — claim already durable", overrideError);
-    }
-  }
-  if (transport.sendOwnerNotification) {
-    try {
-      await sendEscalationEmail({
-        customerName: input.customerName ?? "Desconocido",
-        customerPhone: input.customerPhone,
-        reason: "Derivación automática por política de sesión (handoff determinístico)",
-        category: "otro",
-        conversationSummary:
-          `Sesión handed_off — conversación ${input.conversationId}, ` +
-          `episodio ${input.decision.state.episode}, mensaje ${input.messageId} ` +
-          `(notifyClaim=${input.decision.notifyClaim} replyClaim=${input.decision.replyClaim} ` +
-          `delivery=${input.decision.delivery})`,
-        lastMessages: [],
-      });
-    } catch (notifyError) {
-      console.error("[webhook:wa] Handoff owner notification failed — claim already durable", notifyError);
-    }
-  }
-}
 
 /**
  * Per-event pipeline. The adapter already translated the envelope into
@@ -1307,9 +1244,8 @@ export async function handleNormalizedEvent(
         }
         return NextResponse.json({ ok: true }, { status: 200 });
       }
-      if (sessionDecision.kind === "blocked" || sessionDecision.kind === "handoff") {
-        if (sessionDecision.kind === "handoff") await deliverWebhookHandoff({ conversationId, customerName, customerPhone, messageId, channel: convChannel, decision: sessionDecision });
-        console.log(`[webhook:wa] Session ${sessionDecision.kind} — persisting without GPT/tools or automatic replies`);
+      if (sessionDecision.kind === "blocked") {
+        console.log(`[webhook:wa] Session blocked — persisting without GPT/tools or automatic replies`);
         return NextResponse.json({ ok: true }, { status: 200 });
       }
     }

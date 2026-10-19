@@ -27,11 +27,6 @@ import {
   type SessionEventType,
   type SessionPolicyRepository,
 } from "./session-policy";
-import {
-  DrizzleHandoffEffectRepository,
-  HandoffEffectService,
-} from "./human-handoff";
-
 function isUniqueViolation(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const record = error as Record<string, unknown>;
@@ -239,9 +234,11 @@ export async function persistSessionTransition(
     messageType: input.messageType,
     hasActiveOrder: input.hasActiveOrder ?? false,
   });
+  // A-54 — no handoff claimant: the deterministic transition never emits
+  // "handoff"; handoffs only happen via the transferToHuman tool, which
+  // claims its effects directly.
   const service = new SessionPolicyService(
-    new DrizzleSessionPolicyRepository(),
-    new HandoffEffectService(new DrizzleHandoffEffectRepository())
+    new DrizzleSessionPolicyRepository()
   );
   return service.decide(input.conversationId, {
     signal,
