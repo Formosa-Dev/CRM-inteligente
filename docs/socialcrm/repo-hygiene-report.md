@@ -334,10 +334,11 @@ Kept-because-referenced deletions: **0** — every candidate was unreferenced.
 
 ### 5.4 Kept by rule — not customer PII
 
-- Business-owned numbers: store WhatsApp (`SYSTEM-PROMPT-V2.md`), `wa.me/…`
-  CTA in `sdd/mrs-muzzarella-marketplace/specs.md`, store street address.
-- Synthetic fixtures `5493704111111`, `5493704123456`, `5491100000000`,
-  `+5491100000000` — the only `549…` literals left in tracked files.
+- Business-owned numbers: store WhatsApp (`SYSTEM-PROMPT-V2.md`), store
+  street address.
+- Synthetic fixture numbers only — every remaining `549…` literal in tracked
+  files is one of the synthetic fixtures (`5493704111111`,
+  `5493704123456`, `549370400000x`, `5491100000000`, `+5491100000000`).
 - `docs/socialcrm/*` citations of deleted filenames — audit provenance.
 - Drizzle journal `when` timestamps and npm integrity hashes — not phones.
 
@@ -360,9 +361,9 @@ missed**, all since fixed:
   replaced with synthetic for consistency (business numbers are allowed, but
   hardcoding them in specs/placeholders is unnecessary).
 
-Post-fix audit over tracked files (`5493704`, `5493705`, `5492966…`,
-owner/customer name list, `Neriza`, `Electro`, `Nahir`, `Hector`, aliases,
-addresses, coordinates) returns **zero real-PII hits**. Remaining matches
+Post-fix audit over tracked files (`5493704`, `5493705`, `5492966…`, the
+owner/customer name list, aliases, addresses, coordinates) returns **zero
+real-PII hits**. Remaining matches
 are exactly: (a) synthetic fixtures `5493704111111`, `5493704123456`,
 `549370400000x`, `5491100000000`, `+5491100000000`; (b) `Cliente A`-style
 labels and `[alias]`/`[dirección]` placeholders; (c) `docs/socialcrm/`
