@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import { CheckCircle, Clock, DollarSign, Inbox, MessageSquare, Target, Truck, UserPlus } from "lucide-react";
 import { fadeUpSmall, staggerContainer, cardEntrance } from "@/lib/animation-variants";
 import type { ActionCard } from "./page";
-import { updateOrderStatus } from "@/app/(admin)/admin/orders/actions";
+import { updateOrderStatus, markPaidAndDelivered } from "@/app/(admin)/admin/orders/actions";
 import { triggerAgentForConversation } from "./dashboard-actions-server";
 
 // ─── Single gold accent (D8: oro, no multi-hue) ────────────────────────────
@@ -89,7 +89,7 @@ function ActionCardComponent({
           await updateOrderStatus(Number(itemId), "ready");
           break;
         case "mark-paid":
-          await updateOrderStatus(Number(itemId), "delivered");
+          await markPaidAndDelivered(Number(itemId));
           break;
         case "open-chat":
           if (item.conversationId) {
