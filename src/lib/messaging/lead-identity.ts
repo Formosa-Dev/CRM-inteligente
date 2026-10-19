@@ -94,6 +94,7 @@ export async function ensureLeadIdentity(
     }
 
     // 3. No match anywhere → create the phone-less social lead.
+    let createdLeadId: number | undefined;
     if (leadId == null) {
       const [created] = await db
         .insert(leads)
@@ -107,6 +108,7 @@ export async function ensureLeadIdentity(
         })
         .returning({ id: leads.id });
       leadId = created.id;
+      createdLeadId = created.id;
       console.log(
         `[leads] Created phone-less lead #${leadId} for ${channel}:${externalId}`
       );
@@ -134,6 +136,13 @@ export async function ensureLeadIdentity(
         .limit(1);
       if (winner && winner.leadId !== leadId) {
         await linkConversationToLead(winner.leadId, input);
+        if (createdLeadId != null) {
+          // We created this shell milliseconds ago and lost the race: it
+          // can hold no identities/orders/attachments yet, so drop it
+          // instead of leaving a second lead stamped on one conversation.
+          // A pre-existing lead (phone fallback) is never deleted.
+          await db.delete(leads).where(eq(leads.id, createdLeadId));
+        }
       }
     }
   } catch (err) {

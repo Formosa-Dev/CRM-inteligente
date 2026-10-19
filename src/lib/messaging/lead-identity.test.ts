@@ -22,6 +22,8 @@ const restoreDb = installFakeDb(fake);
 const {
   findOrCreateConversation,
 } = require("@/lib/channels/router") as typeof import("@/lib/channels/router");
+const { ensureLeadIdentity } =
+  require("@/lib/messaging/lead-identity") as typeof import("@/lib/messaging/lead-identity");
 const { leadIdentities, leads, conversations } = require("@/db/schema") as typeof import("@/db/schema");
 
 process.on("exit", () => restoreDb());
@@ -154,5 +156,61 @@ describe("social lead identities (phone-less channels)", () => {
     const idRows = fake.rows("lead_identities").filter((r) => r.channel === "facebook" && r.externalId === "fb-psid-222");
     assert.equal(idRows.length, 1);
     assert.equal(idRows[0].leadId, 7);
+  });
+});
+
+describe("lead identity race (concurrent first-contact inbounds)", () => {
+  const input = (conversationId: number) => ({
+    channel: "instagram" as const,
+    externalUserId: "ig-race-1",
+    externalUserIdNormalized: "ig-race-1",
+    customerName: "Race User",
+    customerPhone: null,
+    channelAccountId: ACCOUNT_ID,
+    conversationId,
+  });
+
+  it("the losing lead shell is deleted — one lead owns the identity", async () => {
+    fake.seed(leads, []);
+    fake.seed(leadIdentities, []);
+
+    // FakeDb runs side effects synchronously inside then(), so Promise.all
+    // interleaves deterministically: both see no identity, both create a
+    // lead, the second insert hits 23505 and its shell must be dropped.
+    await Promise.all([
+      ensureLeadIdentity(input(9001)),
+      ensureLeadIdentity(input(9002)),
+    ]);
+
+    const leadRows = fake.rows("leads");
+    assert.equal(leadRows.length, 1, "only the winning lead survives");
+    const ids = fake.rows("lead_identities");
+    assert.equal(ids.length, 1, "one identity row");
+    assert.equal(ids[0].leadId, leadRows[0].id, "identity owned by the surviving lead");
+  });
+
+  it("a phone-matched pre-existing lead is never deleted on race", async () => {
+    fake.seed(leads, [
+      { id: 30, name: "Pre", phone: "5493704111111", channel: "whatsapp", conversationId: null, status: "new" },
+    ]);
+    fake.seed(leadIdentities, []);
+
+    const withPhone = (conversationId: number) => ({
+      ...input(conversationId),
+      externalUserId: "ig-race-2",
+      externalUserIdNormalized: "ig-race-2",
+      customerPhone: "+54 9 3704 11-1111",
+    });
+    await Promise.all([
+      ensureLeadIdentity(withPhone(9003)),
+      ensureLeadIdentity(withPhone(9004)),
+    ]);
+
+    const leadRows = fake.rows("leads");
+    assert.equal(leadRows.length, 1, "pre-existing lead untouched");
+    assert.equal(leadRows[0].id, 30);
+    const ids = fake.rows("lead_identities").filter((r) => r.externalId === "ig-race-2");
+    assert.equal(ids.length, 1);
+    assert.equal(ids[0].leadId, 30);
   });
 });

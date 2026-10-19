@@ -167,7 +167,7 @@ function uniqueKeys(table: string, row: Row): string[] {
 
 class QueryBuilder implements PromiseLike<unknown> {
   private readonly db: FakeDb;
-  private readonly op: "select" | "insert" | "update";
+  private readonly op: "select" | "insert" | "update" | "delete";
   private table: string;
   private whereExpr: unknown;
   private limitCount: number | undefined;
@@ -255,6 +255,9 @@ class QueryBuilder implements PromiseLike<unknown> {
         throw error;
       }
     }
+    if (this.op === "delete") {
+      return this.db.deleteRows(this.table, this.whereExpr);
+    }
     return this.db.update(this.table, this.updated ?? {}, this.whereExpr);
   }
 }
@@ -313,6 +316,17 @@ export class FakeDb {
     return updated;
   }
 
+  deleteRows(table: string, whereExpr: unknown): Row[] {
+    const rows = this.rows(table);
+    const removed: Row[] = [];
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (!evaluate(whereExpr, rows[i])) continue;
+      removed.push(rows[i]);
+      rows.splice(i, 1);
+    }
+    return removed;
+  }
+
   select(): QueryBuilder {
     return new QueryBuilder(this, "select", "");
   }
@@ -323,6 +337,10 @@ export class FakeDb {
 
   updateTable(table: unknown): QueryBuilder {
     return new QueryBuilder(this, "update", getTableName(table as never));
+  }
+
+  deleteFrom(table: unknown): QueryBuilder {
+    return new QueryBuilder(this, "delete", getTableName(table as never));
   }
 }
 
@@ -344,6 +362,7 @@ export function installFakeDb(fake: FakeDb): () => void {
           select: () => fake.select(),
           insert: (table: unknown) => fake.insertInto(table),
           update: (table: unknown) => fake.updateTable(table),
+          delete: (table: unknown) => fake.deleteFrom(table),
         },
         getDb: () => fake,
       };
