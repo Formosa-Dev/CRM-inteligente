@@ -1,28 +1,41 @@
 # Provider Integration Evidence — YCloud / Zernio / Kapso
 
 Research for the multi-provider messaging abstraction proposed in
-`docs/socialcrm/multiprovider-source-spec.md`. All claims below come from each
-provider's official documentation, fetched **2026-10-18**. Product context:
+`docs/socialcrm/multiprovider-source-spec.md`. Provider claims below come from
+each provider's official documentation, fetched **2026-10-18**. Product context:
 SocialCRM ships as a **self-hosted single-install** on Render + Neon (one
 business per install). Multitenancy stays possible in the contract but is not
 implemented now.
 
-## Verdict
+## How to read this document
 
+- **§1–§3 are verified provider evidence** — claims traceable to official docs
+  (sources in §8), plus an explicitly labeled unverified-facts table (§3).
+- **§4 is the CANONICAL adapter contract.** It resolves review CR-1:
+  `architecture-roadmap.md` §2.2 and `multiprovider-source-spec.md` §4.1 are
+  superseded and must reference §4 instead of redefining the interface.
+- **§5–§7 are product recommendations, not evidence findings.** They propose
+  the v1 scope and routing below and require product-owner confirmation before
+  becoming decisions.
+
+## Verdict (recommendations — pending product-owner confirmation)
+
+- **v1 scope — supersedes the source brief's "build everything" ask.** Build
+  now: contract freeze (§4) + `YCloudAdapter` extraction. Deferred until a
+  second provider is approved: `channel_accounts` table, unified ingress route,
+  per-provider webhook registration API. `multiprovider-source-spec.md` §7
+  remains the requirements record for the target end-state, not the v1 plan.
 - **WhatsApp stays on YCloud for v1.** The existing pipeline already matches
   YCloud's documented send API, webhook signature scheme, and payload shapes.
   No provider migration is justified for a single install.
-- **Social channels (Instagram/Facebook/etc.) → Zernio** when that feature is
-  prioritized. It is the only candidate that covers them; it also covers
-  WhatsApp, so a future consolidation path exists.
-- **Kapso is deferred.** Its differentiators (Multi-Partner Solution, embedded
-  signup for customers, managed Meta billing, pre-verified number pools) solve
-  *multi-customer onboarding* problems a single install does not have. The
-  adapter contract below keeps it expressible so it can be added later cheaply.
-- **Do not build the routing matrix or a ChannelAccount table now.** Introduce
-  the `MessagingProvider` seam around the current YCloud code (pure refactor),
-  and add a provider discriminator + per-provider webhook registration only
-  when a second provider is actually enabled.
+- **Social channels (Instagram/Facebook) → Zernio** when that feature is
+  approved. It is the only candidate that covers them; it also covers WhatsApp,
+  so a future consolidation path exists.
+- **Kapso is deferred — spike only, no production wiring, embedded signup out
+  of v1.** Its differentiators (Multi-Partner Solution, embedded signup for
+  customers, managed Meta billing, pre-verified number pools) solve
+  *multi-customer onboarding* problems a single install does not have. §4 keeps
+  it expressible so it can be added later cheaply.
 
 ## 1. Evidence matrix
 
@@ -135,9 +148,12 @@ stated in the pages read).
 - **Inbound media.** Attachments carry `{type, url (signed, expires),
   refreshUrl, mimeType, originalType}` — persist `refreshUrl` (re-mints the
   URL), never the signed `url`.
-- **Channels.** 16 platforms: Instagram, Facebook, Threads, TikTok, YouTube, X,
-  LinkedIn, Pinterest, Reddit, Bluesky, Telegram, Discord, Slack, Snapchat
-  (pending), WordPress, Shopify commerce — plus WhatsApp, SMS, calls, iMessage.
+- **Channels.** The current docs list 17 platforms including Google Business
+  Profile: Instagram, Facebook, Threads, TikTok, YouTube, X, LinkedIn,
+  Pinterest, Reddit, Bluesky, Telegram, Discord, Slack, Snapchat (pending
+  approval), Google Business Profile, plus WordPress and Shopify — which are
+  documented as Blogs/commerce API targets, not social-publishing channels.
+  Messaging surfaces on top: WhatsApp, SMS, voice calls, iMessage.
 - **SDK.** `@zernio/node` (`new Zernio({apiKey})`), Python `zernio`, CLI,
   hosted MCP server, OpenAPI spec for codegen.
 
@@ -202,20 +218,49 @@ stated in the pages read).
 | Zernio = "Late" rebrand | Inferred from `X-Late-*` legacy header aliases; not stated in the pages read. |
 | Pricing / messaging limits per plan | Out of scope; not evaluated. |
 
-## 4. Adapter contract (single-install edition)
+## 4. Adapter contract — CANONICAL (single-install edition)
 
-Derived from the spec's `IMessagingProvider`, corrected against the evidence:
+**This is the one canonical contract** (resolves review CR-1). Derived from
+the source brief's `IMessagingProvider`, corrected against the evidence.
+`architecture-roadmap.md` §2.2 and `multiprovider-source-spec.md` §4.1 must
+reference this section, not redefine it. Term mapping vs. the other documents:
+`deliveryId` ≙ `providerEventId` · `mediaRefs` ≙ `media` · `resolveMedia` ≙
+`downloadMedia` · `sendMessage` ≙ `send` · `verifyWebhook` ≙ `verifySignature`
+· `parseWebhook` ≙ `parseInbound`.
+
+Two decisions baked in:
+
+- **`tenantId` is on `ChannelAccount`** (review W-3): the field exists so a
+  multitenant migration needs no interface change, but v1 hard-codes it to
+  `"default"` and implements no tenant logic.
+- **`sendTemplate?` stays** (review W-2): Zernio WhatsApp first contact and any
+  send outside the 24h window require a template; Kapso/YCloud reach the same
+  rule through Meta.
+- **Channels and event kinds are separate** (review W-14): `comment` and
+  `messenger` are not channels — comments are `EventKind`s arriving on
+  `instagram`/`facebook` accounts, and Messenger DMs arrive on `facebook`.
 
 ```ts
 type ProviderId = 'ycloud' | 'zernio' | 'kapso';
-type ChannelKind =
-  | 'whatsapp' | 'instagram' | 'facebook' | 'messenger'
-  | 'telegram' | 'sms' | 'comment';
+
+/** Delivery surface. 'facebook' covers Page posts, Messenger DMs and
+ *  comments on them; 'instagram' covers DMs and comments. Extend (tiktok,
+ *  threads, …) when a Zernio account of that platform is enabled. */
+type ChannelId =
+  | 'whatsapp' | 'instagram' | 'facebook' | 'telegram' | 'sms';
+
+/** What happened — not a channel. */
+type EventKind =
+  | 'message.received' | 'message.echo' | 'message.status'
+  | 'comment.received' | 'account.lifecycle' | 'other';
 
 interface ChannelAccount {
   id: string;
+  /** v1: constant "default". Field exists for multitenant migration;
+   *  no tenant logic is implemented. */
+  tenantId: string;
   provider: ProviderId;
-  channel: ChannelKind;
+  channel: ChannelId;
   /** ycloud: sender E.164 · zernio: accountId · kapso: phoneNumberId */
   providerAccountId: string;
   /** E.164 phone (WhatsApp/SMS) or page/handle id (social) */
@@ -243,8 +288,7 @@ interface NormalizedInboundEvent {
   provider: ProviderId;
   /** delivery-level dedup key: evt_* | X-Zernio-Event-Id | X-Idempotency-Key */
   deliveryId: string;
-  kind: 'message.received' | 'message.echo' | 'message.status'
-      | 'comment.received' | 'account.lifecycle' | 'other';
+  kind: EventKind;
   direction: 'inbound' | 'outbound' | 'na';
   /** routing key: wabaId | zernio accountId | kapso phone_number_id */
   providerAccountId: string;
@@ -322,27 +366,40 @@ Contract rules driven by the evidence:
     webhooks` (per number, we pick `secret_key`). For a single install,
     registering via each provider's console/dashboard is acceptable.
 
-## 5. Routing recommendation (single-install)
+## 5. Routing recommendation (single-install — pending owner confirmation)
 
 ```
-channel 'whatsapp' ──→ provider 'ycloud'  (default, only wired provider)
-channel 'instagram'|'facebook'|'messenger'|'comment' ──→ provider 'zernio' (when enabled)
-channel 'sms'      ──→ provider 'ycloud' (v2) or 'zernio' — decide later
-provider 'kapso'   ──→ reserved; no routes in v1
+channel 'whatsapp'            ──→ provider 'ycloud'  (only wired provider in v1)
+channel 'instagram'|'facebook' ──→ provider 'zernio' (when a second provider is approved)
+channel 'sms'                 ──→ undecided ('ycloud' or 'zernio') — decide later
+channel 'telegram'            ──→ native Bot API, unchanged — outside this matrix
+provider 'kapso'              ──→ reserved; no routes in v1
 ```
 
-- **Now:** hard-code the registry `whatsapp → ycloud`. Do not add a
-  `ChannelAccount` table or tenant routing — the spec's `tenantId` is deferred
-  by design. Credentials stay in `agent_config` (encrypted) + env fallback.
-- **Later (social channels):** enable Zernio with one API key + one webhook
-  endpoint + `message.received`/`comment.received` subscriptions; its
+(Messenger DMs ride `facebook` accounts; comments arrive as `comment.received`
+events on `instagram`/`facebook` accounts — neither is a separate channel.)
+
+- **v1 — recommended, explicit scope decision:** hard-code the registry
+  `whatsapp → ycloud`. Credentials stay in `agent_config` (encrypted) + env
+  fallback. This **supersedes the source brief §7 scope** ("build
+  messaging-core + all adapters + unified ingress"): the brief stays the
+  requirements record for the multichannel end-state; this document is the v1
+  plan proposal.
+- **`channel_accounts` table and unified ingress: deferred-conditional, not
+  refused.** They are built the moment a second provider is approved — the
+  same position the architecture and self-hosted roadmaps converge on after
+  reconciliation. Until then a DB table with exactly one row buys nothing.
+- **Later (social channels approved):** enable Zernio with one API key + one
+  webhook endpoint + `message.received`/`comment.received` subscriptions; its
   `accountId`/`profiles[].externalId` map onto `providerAccountId`/`tenantId`
   when multitenancy arrives.
 - **Kapso as a WhatsApp fallback:** because its send endpoint accepts raw
   Cloud-API payloads, it doubles as a disaster-recovery path if the YCloud
   account ever fails — worth a spike, not a build.
-- Multitenancy stays open: `ChannelAccount`/`tenantId` fields exist in the
-  contract but are unused in v1.
+- Multitenancy stays open: `ChannelAccount.tenantId` exists in the contract
+  (constant `"default"`, unused) and `providerAccountId` is already
+  provider-shaped, so a later `channel_accounts` table is a mechanical
+  materialization, not a redesign.
 
 ## 6. YCloud compatibility plan
 
@@ -364,8 +421,10 @@ storage, touching the schema.
 
 ## 7. Ordered implementation & test checklist
 
-1. **Define the contract.** `src/lib/messaging/types.ts` +
-   `MessagingProvider` registry (`whatsapp → ycloud` only).
+1. **Freeze the canonical contract (§4).** `src/lib/messaging/types.ts` +
+   `MessagingProvider` registry (`whatsapp → ycloud` only), including
+   `tenantId` (constant `"default"`), `sendTemplate?`, and the
+   `ChannelId`/`EventKind` split.
    Gate: `npm run typecheck`.
 2. **Extract `YCloudAdapter`** (pure refactor of §6).
    Gates: `npm run test:agents`, `npm run lint`; webhook route behavior
@@ -378,12 +437,16 @@ storage, touching the schema.
    YCloud inbound text/image/audio/location, echo, smb echo, `whatsapp.message.updated`;
    Zernio `message.received` (with `account.accountId`, `platformMessageId`),
    `comment.received`; Kapso `whatsapp.message.received` single + batched.
-5. **Dedup hardening:** confirm `platformMessageId` unique index covers
-   cross-provider ids (wamid namespace is Meta-global); add durable
-   `deliveryId` dedup for non-message events.
+5. **Dedup hardening (decided rule):** WhatsApp `wamid`s are stored **bare** in
+   `platformMessageId` — the namespace is Meta-global and namespacing would
+   break echo matching across YCloud/Kapso. Social platform message/comment
+   ids (Instagram, Facebook, …) are stored **namespaced** as
+   `${provider}:${nativeId}`. `deliveryId` provides durable dedup for events
+   with no message id (status, comment, lifecycle).
    Test: same fixture POSTed twice → single side effect.
-6. **Unified ingress (only when provider #2 lands):**
-   `POST /api/webhooks/ingress/:provider` → secret per provider →
+6. **Unified ingress (only when provider #2 is approved):**
+   `POST /api/webhooks/ingress/[provider]` (Next.js dynamic segment; no
+   `/api/v1` — the app has no versioned API surface) → secret per provider →
    `verifyWebhook` → `parseWebhook` → existing pipeline. Keep
    `/api/whatsapp/webhook` as the YCloud binding until then.
 7. **ZernioAdapter** (when social channels are prioritized): API key →
