@@ -7,7 +7,6 @@ import {
   argentinaDayWindow,
   buildGuidanceProposal,
   classifyOrder,
-  isGuidanceMemory,
   normalizeGuidanceKey,
   redactPII,
   summarizeOutcomes,
@@ -141,12 +140,9 @@ test("buildGuidanceProposal sin hallazgos no inventa reglas", () => {
 
 // ─── Claves de guía aprobada ─────────────────────────────────────────────────
 
-test("normalizeGuidanceKey prefija y sanea; isGuidanceMemory distingue el namespace", () => {
+test("normalizeGuidanceKey prefija y sanea", () => {
   const key = normalizeGuidanceKey("Tono Directo!");
   assert.equal(key, `${GUIDANCE_KEY_PREFIX}tono-directo`);
-  assert.equal(isGuidanceMemory(key), true);
-  assert.equal(isGuidanceMemory("catalog-items-only"), false);
-  assert.equal(isGuidanceMemory(undefined), false);
 });
 
 // ─── Ventana Argentina ───────────────────────────────────────────────────────

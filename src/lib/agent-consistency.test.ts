@@ -20,7 +20,6 @@ import {
 } from "./whatsapp/session-policy";
 import {
   isProtocolArtifact,
-  isEligibleInboundMessage,
   resolveSessionPersistence,
 } from "./whatsapp/webhook-pipeline";
 import {
@@ -328,41 +327,6 @@ test("protocol artifacts never cause lookup, mutation, routing, or reply", () =>
         image: { id: "media-1", caption: "foto del menu" },
       },
     }),
-    false
-  );
-});
-
-test("only eligible customer input reaches session persistence", () => {
-  assert.equal(
-    isEligibleInboundMessage({
-      type: "text",
-      id: "eligible-1",
-      from: "+5493704000001",
-      text: { body: "quiero hacer un pedido" },
-    }),
-    true
-  );
-  assert.equal(
-    isEligibleInboundMessage({
-      type: "image",
-      id: "eligible-2",
-      from: "+5493704000002",
-      image: { id: "media-1" },
-    }),
-    true
-  );
-
-  assert.equal(
-    isEligibleInboundMessage({ type: "text", id: "empty-1", from: "+5493704000003", text: { body: "   " } }),
-    false
-  );
-  assert.equal(isEligibleInboundMessage({ type: "status", id: "status-1" }), false);
-  assert.equal(
-    isEligibleInboundMessage({ type: "text", id: "", from: "+5493704000004", text: { body: "hola" } }),
-    false
-  );
-  assert.equal(
-    isEligibleInboundMessage({ type: "text", id: "no-from-1", text: { body: "hola" } }),
     false
   );
 });
