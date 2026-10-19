@@ -405,7 +405,10 @@ export async function handlePassiveChannelEvent(
       );
     }
 
-    if (event.platformMessageId && (await isMessageDuplicate(event.platformMessageId))) {
+    if (
+      event.platformMessageId &&
+      (await isMessageDuplicate(event.platformMessageId, ctx.channelAccountId ?? null))
+    ) {
       console.log(
         `[ingress] Duplicate ${event.kind} ${event.platformMessageId} on ${ctx.channel} — skipping`
       );

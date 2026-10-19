@@ -144,7 +144,11 @@ function uniqueKeys(table: string, row: Row): string[] {
     }
   }
   if (table === "chat_messages" && row.platformMessageId) {
-    keys.push(`platform:${String(row.platformMessageId)}`);
+    // Mirrors idx_chat_messages_platform_id (migration 0021):
+    // (coalesce(channel_account_id, -1), platform_message_id).
+    keys.push(
+      `platform:${String(row.channelAccountId ?? -1)}:${String(row.platformMessageId)}`
+    );
   }
   if (table === "lead_identities") {
     // Mirrors lead_identities_channel_external_uq (migration 0020).

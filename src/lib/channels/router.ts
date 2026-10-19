@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { conversations, chatMessages, leads, attachments } from "@/db/schema";
-import { eq, and, desc, isNull, or } from "drizzle-orm";
+import { eq, and, desc, isNull, or, sql } from "drizzle-orm";
 import { normalizePhone } from "@/lib/phone-utils";
 import {
   resolveConversationIdentity,
@@ -298,13 +298,20 @@ export async function insertMessage(
       })
       .returning({ id: chatMessages.id });
   } catch (err: unknown) {
-    // P0001 / 23505 = unique_violation on platform_message_id
-    // If this is a duplicate platformMessageId, return the existing message ID
+    // P0001 / 23505 = unique_violation on (coalesce(channel_account_id, -1),
+    // platform_message_id). If this is a duplicate platformMessageId in THIS
+    // account's partition, return the existing message ID — another account's
+    // identical platform id lives in its own partition and must not match.
     if (platformMessageId && (err as { code?: string } | null)?.code === "23505") {
       const [existing] = await db
         .select({ id: chatMessages.id })
         .from(chatMessages)
-        .where(eq(chatMessages.platformMessageId, platformMessageId))
+        .where(
+          and(
+            eq(chatMessages.platformMessageId, platformMessageId),
+            sql`coalesce(${chatMessages.channelAccountId}, -1) = coalesce(${sql.param(channelAccountId ?? null)}, -1)`
+          )
+        )
         .limit(1);
       if (existing) {
         console.log(`[router] Duplicate platformMessageId ${platformMessageId} — returning existing msg ${existing.id}`);
@@ -381,16 +388,28 @@ async function autoAttachToLead(
   }
 }
 
-// Check if message was already processed (deduplication)
+// Check if message was already processed (deduplication).
+// Pass the owning channel account when known: the check then mirrors the
+// (coalesce(channel_account_id, -1), platform_message_id) unique partition so
+// dual-account setups never drop each other's messages. Omitting it keeps the
+// legacy provider-wide read for callers that carry no account context.
 export async function isMessageDuplicate(
-  platformMessageId: string
+  platformMessageId: string,
+  channelAccountId?: number | null
 ): Promise<boolean> {
   if (!platformMessageId) return false;
 
   const existing = await db
     .select({ id: chatMessages.id })
     .from(chatMessages)
-    .where(eq(chatMessages.platformMessageId, platformMessageId))
+    .where(
+      channelAccountId === undefined
+        ? eq(chatMessages.platformMessageId, platformMessageId)
+        : and(
+            eq(chatMessages.platformMessageId, platformMessageId),
+            sql`coalesce(${chatMessages.channelAccountId}, -1) = coalesce(${sql.param(channelAccountId)}, -1)`
+          )
+    )
     .limit(1);
 
   return existing.length > 0;

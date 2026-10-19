@@ -140,6 +140,51 @@ describe("A-53 — non-ycloud agent_config credentialsRef fails closed", () => {
   });
 });
 
+describe("A-12 — platform_message_id dedup is account-scoped", () => {
+  it("the same platform id persists once per account, never dropped", async () => {
+    const a = await insertMessage(1, "user", "copy A", undefined, "wamid-shared", 7);
+    const b = await insertMessage(2, "user", "copy B", undefined, "wamid-shared", 8);
+
+    assert.equal(a.wasDuplicate, false);
+    assert.equal(b.wasDuplicate, false);
+    assert.notEqual(a.id, b.id, "account B's copy must persist, not alias A's");
+  });
+
+  it("a same-account duplicate returns the existing row", async () => {
+    const again = await insertMessage(1, "user", "copy A2", undefined, "wamid-shared", 7);
+    assert.equal(again.wasDuplicate, true);
+    const first = fake
+      .rows("chat_messages")
+      .find((row) => row.platformMessageId === "wamid-shared" && row.channelAccountId === 7);
+    assert.equal(again.id, first?.id);
+  });
+
+  it("isMessageDuplicate scopes reads to the owning partition", async () => {
+    assert.equal(await isMessageDuplicate("wamid-shared", 7), true);
+    assert.equal(await isMessageDuplicate("wamid-shared", 8), true);
+    assert.equal(await isMessageDuplicate("wamid-shared", 9), false);
+    // The legacy NULL partition only sees NULL-account rows.
+    assert.equal(await isMessageDuplicate("wamid-shared", null), false);
+    // Callers without account context keep the provider-wide read.
+    assert.equal(await isMessageDuplicate("wamid-shared"), true);
+  });
+
+  it("NULL-account messages still dedup inside their own partition", async () => {
+    const first = await insertMessage(3, "user", "legacy", undefined, "wamid-legacy", null);
+    const dupe = await insertMessage(3, "user", "legacy again", undefined, "wamid-legacy", null);
+    assert.equal(first.wasDuplicate, false);
+    assert.equal(dupe.wasDuplicate, true);
+    assert.equal(dupe.id, first.id);
+
+    // An account-bound row with the same id is a different partition.
+    const bound = await insertMessage(4, "user", "bound copy", undefined, "wamid-legacy", 7);
+    assert.equal(bound.wasDuplicate, false);
+    assert.equal(await isMessageDuplicate("wamid-legacy", null), true);
+    assert.equal(await isMessageDuplicate("wamid-legacy", 7), true);
+    assert.equal(await isMessageDuplicate("wamid-legacy", 8), false);
+  });
+});
+
 // Keep the hook alive for the whole file; node runs this process per file.
 process.on("exit", () => {
   restoreDb();
