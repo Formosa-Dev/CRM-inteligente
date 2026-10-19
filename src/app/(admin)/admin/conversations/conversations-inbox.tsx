@@ -61,8 +61,13 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
   const applyFilter = useCallback(
     (key: "channel" | "account", value: string) => {
       const next = new URLSearchParams(searchParams.toString());
-      // Canonical URLs: defaults stay out of the query string.
-      if (value === "all" || (key === "channel" && value === "whatsapp")) {
+      // Canonical URLs: only true defaults leave the query string. Channel's
+      // default is whatsapp — "all" is an explicit filter and must persist,
+      // since a missing param normalizes back to whatsapp-only.
+      if (
+        (key === "account" && value === "all") ||
+        (key === "channel" && value === "whatsapp")
+      ) {
         next.delete(key);
       } else {
         next.set(key, value);

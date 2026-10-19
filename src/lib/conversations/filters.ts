@@ -116,10 +116,17 @@ export function normalizeConversationListFilters(raw: {
 }
 
 /**
- * Index-friendly predicates for the conversations list query. Every branch
- * hits a plain `=`/`IS NULL` on `channel`/`channel_account_id` (or the
- * existing ILIKE pair for search) — no expressions that would defeat the
- * B-tree indexes on those columns.
+ * Predicates for the conversations list query, kept index-friendly: plain
+ * `=`/`IS NULL` on `channel`/`channel_account_id` (or the existing ILIKE pair
+ * for search) — no expressions or functions that would defeat a B-tree.
+ *
+ * Index reality today (schema.ts): `channel` is the leading column of
+ * `conversations_channel_identity_idx` and of both partial unique indexes,
+ * so channel filters are served. `channel_account_id` is NOT covered — the
+ * only indexes containing it are partial uniques that can't satisfy plain
+ * `= N` or `IS NULL` scans. Residual recommendation: an additive
+ * `(channel, channel_account_id)` index (deferred — migration numbering is
+ * owned by another slice); these predicates already match its column order.
  */
 export function buildConversationConditions(
   filters: ConversationListFilters

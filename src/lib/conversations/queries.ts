@@ -1,4 +1,9 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useQuery,
+  useMutation,
+  useQueryClient,
+  keepPreviousData,
+} from "@tanstack/react-query";
 import {
   getConversations,
   getMessages,
@@ -57,6 +62,9 @@ export function useConversations(params: GetConversationsParams) {
         pageSize: result.pageSize,
       };
     },
+    // Keep showing the previous result while a changed filter fetches —
+    // without it the list flashes the unfiltered SSR fallback on every switch.
+    placeholderData: keepPreviousData,
     // Smart polling: 5s si hay activas, 30s si idle, pausa en hidden
     refetchInterval: (_query) => {
       if (typeof document !== "undefined" && document.hidden) return false;
