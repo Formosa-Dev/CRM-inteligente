@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import dns from "dns/promises";
+import http from "node:http";
+import https from "node:https";
 
 interface OgData {
   url: string;
@@ -10,20 +12,119 @@ interface OgData {
   siteName: string | null;
 }
 
-const PRIVATE_HOSTNAME = /^(localhost|127\.|0\.|10\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?|\[?fe80|\[?fc|\[?fd)/i;
+const MAX_HTML_BYTES = 256 * 1024;
+const FETCH_TIMEOUT_MS = 5000;
 
-function isPrivateIp(ip: string): boolean {
-  return PRIVATE_HOSTNAME.test(ip);
+const PRIVATE_HOSTNAME = /^(localhost|.*\.localhost|.*\.internal|.*\.local)$/i;
+
+// Loopback, RFC1918, link-local, CGNAT (100.64/10), unspecified/broadcast
+// and multicast/reserved space.
+const PRIVATE_V4 =
+  /^(0|10|127)\.|^169\.254\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|^2([2-9][4-9]|[3-5]\d)\./;
+
+export function isPrivateIp(ip: string): boolean {
+  let v = ip.trim().toLowerCase();
+  if (v.startsWith("[") && v.endsWith("]")) v = v.slice(1, -1);
+  // IPv4-mapped IPv6 (::ffff:1.2.3.4 / [::ffff:1.2.3.4]) — evaluate the
+  // embedded IPv4 against the same ranges instead of missing it entirely.
+  const mapped = v.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) v = mapped[1];
+  else if (v.includes(":")) {
+    // IPv6: unspecified (::), loopback (::1), link-local fe80::/10,
+    // ULA fc00::/7, multicast ff00::/8 and any leftover mapped/hex form.
+    return (
+      v === "::" ||
+      v === "::1" ||
+      /^fe[89ab]/.test(v) ||
+      /^f[cd]/.test(v) ||
+      v.startsWith("ff") ||
+      v.startsWith("::ffff:")
+    );
+  }
+  return PRIVATE_V4.test(v);
 }
 
-async function isSafeTarget(hostname: string): Promise<boolean> {
-  if (PRIVATE_HOSTNAME.test(hostname)) return false;
+interface ResolvedTarget {
+  address: string;
+  family: 4 | 6;
+}
+
+/**
+ * Resolves the hostname and validates EVERY answer — a multi-record rotation
+ * must not smuggle an internal IP past a single lookup. Returns the address
+ * the connection will be pinned to, or null when the target is unsafe.
+ */
+async function resolveSafeTarget(hostname: string): Promise<ResolvedTarget | null> {
+  if (PRIVATE_HOSTNAME.test(hostname) || isPrivateIp(hostname)) return null;
   try {
-    const { address } = await dns.lookup(hostname);
-    return !isPrivateIp(address);
+    const addresses = await dns.lookup(hostname, { all: true, verbatim: true });
+    if (addresses.length === 0) return null;
+    if (addresses.some((a) => isPrivateIp(a.address))) return null;
+    const first = addresses[0];
+    return { address: first.address, family: first.family as 4 | 6 };
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * Fetches `url` with DNS pinned to the already-validated address: the
+ * socket's lookup() is overridden, closing the rebind window between "check"
+ * and "connect" that a separate fetch() re-resolution leaves open. TLS SNI
+ * and cert validation still use the URL hostname — servername comes from the
+ * request options, not the lookup result. Redirects are refused and the body
+ * is capped at MAX_HTML_BYTES (declared or actual).
+ */
+function fetchPinned(
+  url: URL,
+  target: ResolvedTarget
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const transport = url.protocol === "https:" ? https : http;
+    const req = transport.request(
+      url,
+      {
+        lookup: (_hostname, _options, callback) =>
+          callback(null, target.address, target.family),
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (compatible; MuzappBot/1.0; +https://muzapp.com)",
+          Accept: "text/html",
+        },
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status >= 300 && status < 400) {
+          res.resume();
+          reject(new Error(`redirect refused (${status})`));
+          return;
+        }
+        const declared = Number(res.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > MAX_HTML_BYTES) {
+          res.resume();
+          reject(new Error("content-length exceeds cap"));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let size = 0;
+        res.on("data", (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > MAX_HTML_BYTES) {
+            req.destroy(new Error("response exceeds cap"));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on("end", () =>
+          resolve({ status, body: Buffer.concat(chunks).toString("utf8") })
+        );
+        res.on("error", reject);
+      }
+    );
+    req.setTimeout(FETCH_TIMEOUT_MS, () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+    req.end();
+  });
 }
 
 /**
@@ -51,25 +152,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid url scheme" }, { status: 400 });
   }
 
-  if (!(await isSafeTarget(parsed.hostname))) {
+  const target = await resolveSafeTarget(parsed.hostname);
+  if (!target) {
     return NextResponse.json({ error: "URL not allowed" }, { status: 403 });
   }
 
   try {
-    const response = await fetch(parsed.toString(), {
-      signal: AbortSignal.timeout(5000),
-      redirect: "error",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; MuzappBot/1.0; +https://muzapp.com)",
-        Accept: "text/html",
-      },
-    });
+    const { status, body: html } = await fetchPinned(parsed, target);
 
-    if (!response.ok) {
+    if (status < 200 || status >= 300) {
       return NextResponse.json({ url, title: null, description: null, image: null, siteName: null });
     }
-
-    const html = await response.text();
 
     const og: OgData = {
       url,
