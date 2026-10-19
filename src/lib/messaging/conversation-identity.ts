@@ -29,18 +29,17 @@ export function isPhoneChannel(channel: ChannelKind): boolean {
   return PHONE_CHANNELS.has(channel);
 }
 
-/** Canonical identity key: digits for phone-shaped channels, trimmed otherwise. */
+/**
+ * Canonical identity key: digits for phone-shaped values on phone channels,
+ * the trimmed raw id otherwise. A non-phone value (BSUID-only identity under
+ * Meta phone-hiding, social handle) must NOT be digit-stripped — stripping
+ * collapses distinct customers into "" or shared fragments.
+ */
 export function canonicalExternalUserId(
   channel: ChannelKind,
   value: string
 ): string {
   const trimmed = value.trim();
-  if (channel === "whatsapp" || channel === "sms") {
-    return normalizePhone(trimmed);
-  }
-  if (channel === "telegram" && PHONE_SHAPED.test(trimmed)) {
-    return normalizePhone(trimmed);
-  }
   if (PHONE_CHANNELS.has(channel) && PHONE_SHAPED.test(trimmed)) {
     return normalizePhone(trimmed);
   }

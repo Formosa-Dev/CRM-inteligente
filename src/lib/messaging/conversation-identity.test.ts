@@ -97,6 +97,15 @@ describe("canonicalExternalUserId", () => {
     assert.equal(canonicalExternalUserId("telegram", "@handle"), "@handle");
   });
 
+  it("keeps non-phone whatsapp/sms identifiers verbatim (BSUID-style ids)", () => {
+    // Meta phone-hiding can hand a BSUID-only identity — digit-stripping it
+    // would collapse distinct customers into "" or shared fragments.
+    assert.equal(canonicalExternalUserId("whatsapp", "bsuid_9f3a.123"), "bsuid_9f3a.123");
+    assert.equal(canonicalExternalUserId("whatsapp", "US.ABCDEF12345"), "US.ABCDEF12345");
+    assert.equal(canonicalExternalUserId("sms", "rcs:agent-9"), "rcs:agent-9");
+    assert.equal(canonicalExternalUserId("whatsapp", "  bsuid_9f3a.123  "), "bsuid_9f3a.123");
+  });
+
   it("trims every JS whitespace character (tabs/newlines), matching 0018", () => {
     assert.equal(canonicalExternalUserId("instagram", "\t@Some.Handle\n"), "@Some.Handle");
     assert.equal(canonicalExternalUserId("telegram", " \t12345678\n "), "12345678");
