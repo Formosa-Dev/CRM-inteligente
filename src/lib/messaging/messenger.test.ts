@@ -185,16 +185,19 @@ describe("messenger.send — account-bound sends (S15)", () => {
       return new Response("{}");
     });
     try {
+      // All shipped providers are registered now — a stale channel_accounts
+      // row can still name one this build doesn't know (rollback, drift).
+      const provider = "ghost" as ChannelAccount["provider"];
       const res = await messenger.send(
         { to: "+15550001234", type: "text", text: "hola" },
         {
           channel: "whatsapp",
-          account: { ...ACCOUNT, provider: "zernio" },
+          account: { ...ACCOUNT, provider },
         },
       );
       assert.deepEqual(res, {
         ok: false,
-        error: "no messaging provider registered for provider 'zernio'",
+        error: "no messaging provider registered for provider 'ghost'",
         retryable: false,
       });
       assert.equal(fetched, false);
@@ -204,16 +207,38 @@ describe("messenger.send — account-bound sends (S15)", () => {
   });
 
   test("account channel is used when no explicit channel is passed", async () => {
-    // An instagram-bound account without a registered provider surfaces the
-    // provider error — proving the channel fallback picked the account's.
-    const res = await messenger.send(
-      { to: "@handle", type: "text", text: "hola" },
-      { account: { ...ACCOUNT, channel: "instagram", provider: "zernio" } },
+    // instagram has no channel-default route — the send only dispatches
+    // because the bound account names its own provider. It must land on
+    // zernio's create-conversation endpoint, not the ycloud default.
+    const calls: { url: string; init?: RequestInit }[] = [];
+    mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({ data: { messageId: "zm1", conversationId: "zc1" } }),
+      );
+    });
+    try {
+      const res = await messenger.send(
+        { to: "@handle", type: "text", text: "hola" },
+        { account: { ...ACCOUNT, channel: "instagram", provider: "zernio" } },
+      );
+      assert.deepEqual(res, {
+        ok: true,
+        providerMessageId: "zm1",
+        status: "sent",
+      });
+    } finally {
+      mock.restoreAll();
+    }
+    assert.equal(calls.length, 1);
+    assert.equal(
+      calls[0].url,
+      "https://zernio.com/api/v1/inbox/conversations",
     );
-    assert.deepEqual(res, {
-      ok: false,
-      error: "no messaging provider registered for provider 'zernio'",
-      retryable: false,
+    assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
+      accountId: "15550009999",
+      participantId: "@handle",
+      message: "hola",
     });
   });
 });

@@ -63,7 +63,6 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import type {
   ChannelAccount,
-  ChannelKind,
   MessagingProvider,
   NormalizedInboundEvent,
   OutboundMessage,
