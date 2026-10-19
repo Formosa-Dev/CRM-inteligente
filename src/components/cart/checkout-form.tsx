@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ArrowUpRight, LoaderCircle, Check } from "lucide-react";
+import { ArrowUpRight, LoaderCircle } from "lucide-react";
 import { useCart } from "@/lib/cart/cart-context";
 import {
   checkoutPhone,
@@ -35,7 +35,7 @@ function attemptStorage(): AttemptStorage | null {
 }
 
 export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
-  const { clearCart } = useCart();
+  const { completeOrder } = useCart();
   const business = useBusiness();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -44,7 +44,6 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [errorCode, setErrorCode] = useState<string | null>(null);
-  const [receipt, setReceipt] = useState<CheckoutReceipt | null>(null);
   // Hard guards: one request at a time, one terminal success per attempt.
   const inFlight = useRef(false);
   const completed = useRef(false);
@@ -123,8 +122,9 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
       completed.current = true;
       clearAttempt(attemptStorage());
       attemptRef.current = null;
-      clearCart();
-      setReceipt(data as CheckoutReceipt);
+      // The receipt is lifted to the provider in the same commit that empties
+      // the cart, so the confirmation survives the cart-lines branch unmounting.
+      completeOrder(data as CheckoutReceipt);
       // The business URL is only opened after the server confirmed the order.
       if (typeof data.whatsappUrl === "string" && data.whatsappUrl) {
         window.location.assign(data.whatsappUrl);
@@ -142,22 +142,6 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
       inFlight.current = false;
       setBusy(false);
     }
-  }
-
-  if (receipt) {
-    return (
-      <div className="checkout-confirmation" role="status">
-        <Check size={20} />
-        <strong>Pedido #{receipt.orderId} registrado</strong>
-        <p>
-          Subtotal confirmado: ${receipt.total.toLocaleString("es-AR")}. Enviá el mensaje para
-          coordinar {fulfillmentMode === "pickup" ? "el retiro" : "la entrega"} y el pago.
-        </p>
-        <a className="menu-whatsapp-button" href={receipt.whatsappUrl}>
-          Continuar en WhatsApp <ArrowUpRight size={18} />
-        </a>
-      </div>
-    );
   }
 
   return (

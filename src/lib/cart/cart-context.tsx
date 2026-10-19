@@ -12,6 +12,7 @@ import {
 } from "react"
 import { toast } from "sonner"
 import { z } from "zod"
+import type { CheckoutReceipt } from "@/lib/checkout/contract"
 
 export type CartItemType = "product" | "promo"
 
@@ -45,6 +46,15 @@ type CartContextValue = {
   removeItem: (key: string) => void
   updateQuantity: (key: string, qty: number) => void
   clearCart: () => void
+  /**
+   * Last confirmed order receipt. Lifted to the provider because success
+   * empties the cart — parents render the confirmation outside the cart-lines
+   * branch so it is not unmounted before it can paint.
+   */
+  receipt: CheckoutReceipt | null
+  /** Clears the cart AND records the receipt in a single commit. */
+  completeOrder: (receipt: CheckoutReceipt) => void
+  dismissReceipt: () => void
 }
 
 const CartContext = createContext<CartContextValue | null>(null)
@@ -109,6 +119,7 @@ function saveCart(items: CartItem[]) {
 
 export function CartProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([])
+  const [receipt, setReceipt] = useState<CheckoutReceipt | null>(null)
   // Persist only after the first restore, so an empty initial render can never
   // overwrite a cart that is still being read back from storage.
   const hydrated = useRef(false)
@@ -131,6 +142,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
     (product: CartProduct, qty = 1, meta?: CartItemMeta) => {
       const type = meta?.type ?? "product"
       const key = cartKey(type, product.id)
+      // A new item starts a new order intent — a stale confirmation must go.
+      setReceipt(null)
       setItems((prev) => {
         const existing = prev.find((i) => cartKey(i.type, i.product.id) === key)
         if (existing) {
@@ -186,6 +199,14 @@ export function CartProvider({ children }: { children: ReactNode }) {
     saveCart([])
   }, [])
 
+  const completeOrder = useCallback((orderReceipt: CheckoutReceipt) => {
+    setItems([])
+    saveCart([])
+    setReceipt(orderReceipt)
+  }, [])
+
+  const dismissReceipt = useCallback(() => setReceipt(null), [])
+
   const total = useMemo(
     () => items.reduce((sum, i) => sum + i.product.price * i.quantity, 0),
     [items],
@@ -205,8 +226,22 @@ export function CartProvider({ children }: { children: ReactNode }) {
       removeItem,
       updateQuantity,
       clearCart,
+      receipt,
+      completeOrder,
+      dismissReceipt,
     }),
-    [items, total, itemCount, addItem, removeItem, updateQuantity, clearCart],
+    [
+      items,
+      total,
+      itemCount,
+      addItem,
+      removeItem,
+      updateQuantity,
+      clearCart,
+      receipt,
+      completeOrder,
+      dismissReceipt,
+    ],
   )
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>

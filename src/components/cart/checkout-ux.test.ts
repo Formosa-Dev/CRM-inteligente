@@ -206,16 +206,16 @@ test("checkout form issues exactly one POST and never schedules a retry", () => 
   assert.doesNotMatch(formSource, /setTimeout|setInterval|location\.reload/);
 });
 
-test("checkout form only clears on confirmed success, exactly once", () => {
-  assert.equal((formSource.match(/clearCart\(\)/g) ?? []).length, 1);
+test("checkout form only completes the order on confirmed success, exactly once", () => {
+  assert.equal((formSource.match(/completeOrder\(/g) ?? []).length, 1);
   assert.equal((formSource.match(/clearAttempt\(/g) ?? []).length, 1);
   const guard = formSource.indexOf("shouldClearAfter(outcome)");
-  const clear = formSource.indexOf("clearCart()");
+  const clear = formSource.indexOf("completeOrder(");
   assert.ok(guard !== -1 && clear !== -1 && guard < clear, "clear must be gated by success");
   const catchStart = formSource.lastIndexOf("} catch {");
   const catchBlock = formSource.slice(catchStart, formSource.indexOf("} finally {"));
   assert.ok(catchBlock.length > 0, "form must catch transport failures");
-  assert.doesNotMatch(catchBlock, /clearCart|clearAttempt/);
+  assert.doesNotMatch(catchBlock, /completeOrder|clearCart|clearAttempt/);
 });
 
 test("checkout form keeps one stable attempt id per signature", () => {
@@ -230,6 +230,23 @@ test("checkout form detects offline and forwards the server error code", () => {
   assert.match(formSource, /navigator\.onLine === false/);
   assert.match(formSource, /interpretCheckoutOutcome\(response\.ok, response\.status, data\.code\)/);
   assert.match(formSource, /checkoutFailureMessage\(outcome, data\.error, data\.code\)/);
+});
+
+test("the confirmation is lifted to the provider and rendered by cart parents", () => {
+  // Success empties the cart — if the confirmation lived in CheckoutForm's own
+  // state, the parents' empty-cart branch would unmount it before it paints.
+  const context = readFileSync("src/lib/cart/cart-context.tsx", "utf8");
+  assert.match(context, /completeOrder/);
+  assert.match(context, /setReceipt\(orderReceipt\)/);
+  assert.doesNotMatch(formSource, /if \(receipt\) return/, "form must not own the receipt surface");
+  for (const file of [
+    "src/components/cart/cart-drawer.tsx",
+    "src/app/carta-digital/menu-digital-client.tsx",
+  ]) {
+    const src = readFileSync(file, "utf8");
+    assert.match(src, /CheckoutConfirmation/, `${file} must render the lifted confirmation`);
+    assert.match(src, /dismissReceipt/, `${file} must be able to dismiss the receipt`);
+  }
 });
 
 test("cart clear persists synchronously so a redirect cannot resurrect it", () => {

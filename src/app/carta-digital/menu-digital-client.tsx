@@ -9,6 +9,7 @@ import { CatalogImage } from "@/components/products/catalog-image";
 import { CatalogDialog } from "@/components/storefront/catalog-dialog";
 import { EditorialHeading, editorialEase, editorialSpring, useEditorialMotion } from "@/components/storefront/motion";
 import { CheckoutForm } from "@/components/cart/checkout-form";
+import { CheckoutConfirmation } from "@/components/cart/checkout-confirmation";
 import { getCatalogProductImage } from "@/lib/catalog-images";
 import { cartKey, useCart } from "@/lib/cart/cart-context";
 import { useBusiness } from "@/lib/hooks/use-business";
@@ -76,7 +77,7 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
   const [query, setQuery] = useState("");
   const [detail, setDetail] = useState<Selection | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
-  const { items: cartItems, addItem, removeItem, updateQuantity } = useCart();
+  const { items: cartItems, addItem, removeItem, updateQuantity, receipt, dismissReceipt } = useCart();
 
   const selections = useMemo<Selection[]>(() => [...promos.map(data => ({ type: "promo" as const, data })), ...products.map(data => ({ type: "product" as const, data }))], [products, promos]);
   // Every canonical category stays visible (empty ones show the "preparando"
@@ -185,7 +186,7 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
       </section>
       <footer className="menu-editorial-footer"><span>{brandName}</span><p>{brandTagline}</p><Link href="/">Conocé nuestros espacios <ArrowUpRight size={16} /></Link></footer>
     </main>
-    <AnimatePresence>{count > 0 && <motion.button type="button" className="menu-floating-cart" onClick={() => setCartOpen(true)} initial={{ opacity: 0, y: reduced ? 0 : 80 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduced ? 0 : 80 }} transition={reduced ? { duration: 0 } : editorialSpring}><span><ShoppingBag size={19} />Tu pedido <b>{count}</b></span><strong>{money(total)}</strong><ArrowUpRight size={20} /></motion.button>}</AnimatePresence>
+    <AnimatePresence>{(count > 0 || receipt) && <motion.button type="button" className="menu-floating-cart" onClick={() => setCartOpen(true)} initial={{ opacity: 0, y: reduced ? 0 : 80 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduced ? 0 : 80 }} transition={reduced ? { duration: 0 } : editorialSpring}><span><ShoppingBag size={19} />{receipt ? "Pedido confirmado" : "Tu pedido"}{count > 0 && <b>{count}</b>}</span><strong>{receipt ? `#${receipt.orderId}` : money(total)}</strong><ArrowUpRight size={20} /></motion.button>}</AnimatePresence>
     <AnimatePresence>{detail && <CatalogDialog key="detail" title={detail.data.name} onDismiss={() => setDetail(null)} wide>
       <div className="menu-detail-layout"><div className="menu-detail-photo"><CatalogImage src={imageOf(detail)} alt={detail.data.name} contain sizes="(max-width: 760px) 100vw, 50vw" /></div><div className="menu-detail-content"><p className="menu-eyebrow">{detail.type === "promo" ? "Para compartir" : "De nuestra cocina"}</p><h2>{detail.data.name}</h2><p>{detail.data.description}</p>
         {detail.type === "promo" && <div className="menu-detail-includes">{detail.data.items?.map(i => <p key={i.productId}><span>{i.quantity}×</span> {i.productName}</p>)}</div>}
@@ -194,7 +195,7 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
     </CatalogDialog>}</AnimatePresence>
     <AnimatePresence>{cartOpen && <CatalogDialog key="cart" title="Tu pedido" onDismiss={() => setCartOpen(false)}>
       <div className="menu-cart-content"><p className="menu-eyebrow">Un buen momento empieza acá</p><h2>Tu pedido.</h2>
-        {!count ? <div className="menu-empty"><ShoppingBag size={30} /><p>¿Qué te gustaría probar?</p><button className="menu-add-button" onClick={() => setCartOpen(false)}>Explorar la carta</button></div> : <>
+        {receipt ? <CheckoutConfirmation receipt={receipt} onDone={() => { dismissReceipt(); setCartOpen(false); }} /> : !count ? <div className="menu-empty"><ShoppingBag size={30} /><p>¿Qué te gustaría probar?</p><button className="menu-add-button" onClick={() => setCartOpen(false)}>Explorar la carta</button></div> : <>
           <div className="menu-cart-lines"><AnimatePresence initial={false}>{resolvedCart.map(({ selected, quantity: qty }) => <motion.div layout={!reduced} key={keyOf(selected)} className="menu-cart-line" exit={{ opacity: 0, height: 0, margin: 0, paddingTop: 0, paddingBottom: 0 }} transition={{ duration: reduced ? 0 : .2 }}><div className="menu-cart-thumb"><CatalogImage src={imageOf(selected)} alt={selected.data.name} sizes="64px" /></div><div className="menu-cart-line-copy"><h3>{selected.data.name}</h3><p>{money(priceOf(selected) * qty)}</p></div><QuantityControl quantity={qty} onAdd={() => updateItem(selected, 1)} onRemove={() => updateItem(selected, -1)} /></motion.div>)}</AnimatePresence></div>
           {hasUnavailable && <p role="alert" className="checkout-error">Hay productos que ya no están disponibles. <button type="button" onClick={() => resolvedCart.filter(item => !available(item.selected)).forEach(item => removeItem(cartKey(item.selected.type, item.selected.data.id)))}>Quitarlos del pedido</button></p>}
           <div className="menu-cart-total"><div><span>Subtotal</span><small>Envío a coordinar</small></div><motion.strong key={total} initial={reduced ? false : { opacity: .3, y: 8 }} animate={{ opacity: 1, y: 0 }}>{money(total)}</motion.strong></div>

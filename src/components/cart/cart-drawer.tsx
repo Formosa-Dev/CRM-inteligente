@@ -2,6 +2,7 @@
 
 import { useCart, cartKey } from "@/lib/cart/cart-context"
 import { CheckoutForm } from "./checkout-form"
+import { CheckoutConfirmation } from "./checkout-confirmation"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { CatalogImage } from "@/components/products/catalog-image"
 import { getCatalogProductImage } from "@/lib/catalog-images"
@@ -27,8 +28,16 @@ type CartDrawerProps = {
 }
 
 export function CartDrawer({ open, onClose }: CartDrawerProps) {
-  const { items, total, itemCount, updateQuantity, removeItem, clearCart } =
-    useCart()
+  const {
+    items,
+    total,
+    itemCount,
+    updateQuantity,
+    removeItem,
+    clearCart,
+    receipt,
+    dismissReceipt,
+  } = useCart()
   // Mobile renders the cart as a bottom sheet; desktop keeps the side drawer.
   const isMobile = useMediaQuery("(max-width: 767px)")
   // Checkout only accepts catalog ids — drop stale entries persisted before
@@ -60,7 +69,17 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
           </SheetTitle>
         </SheetHeader>
 
-        {items.length === 0 ? (
+        {receipt ? (
+          <div className="px-5 pb-[max(20px,env(safe-area-inset-bottom))] pt-4">
+            <CheckoutConfirmation
+              receipt={receipt}
+              onDone={() => {
+                dismissReceipt();
+                onClose();
+              }}
+            />
+          </div>
+        ) : items.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-5 py-16 text-center">
             <ShoppingCart className="text-muted-foreground size-12 opacity-30" />
             <p className="text-muted-foreground text-sm">
