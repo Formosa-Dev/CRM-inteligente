@@ -3,10 +3,15 @@ import { auth } from "@/auth";
 import { eq, and } from "drizzle-orm";
 import { db } from "@/db";
 import { products } from "@/db/schema";
+import { checkRateLimit, clientIpFromRequest } from "@/lib/infra/rate-limit";
 
 // ─── GET /api/products ───────────────────────────────────────────────────────────
 
 export async function GET(req: NextRequest) {
+  const rate = await checkRateLimit(`pub:products:${clientIpFromRequest(req)}`);
+  if (!rate.success) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
   try {
     const { searchParams } = req.nextUrl;
     const category = searchParams.get("category") as string | null;
