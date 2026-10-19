@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHash, createHmac, timingSafeEqual } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import {
   ChannelAccountResolutionError,
   providerForChannel,
@@ -13,6 +13,7 @@ import {
   type InboundContext,
 } from "@/lib/messaging/inbound-pipeline";
 import { aggregateWebhookStatuses } from "@/lib/messaging/webhook-response";
+import { metaMessageToInboundEvent } from "./helpers";
 
 // Meta signs webhook payloads with X-Hub-Signature-256: sha256=<hmac>
 // computed over the raw body using the app secret.
@@ -24,47 +25,6 @@ async function verifyMetaSignature(rawBody: string, header: string | null): Prom
   const a = Buffer.from(expected);
   const b = Buffer.from(header);
   return a.length === b.length && timingSafeEqual(a, b);
-}
-
-/**
- * Meta → NormalizedInboundEvent. The envelope's routing key is
- * metadata.phone_number_id; the wamid becomes both deliveryId and
- * platformMessageId (durable dedup). The pipeline reads the provider message
- * off `raw.whatsappInboundMessage` — Meta's message object already uses the
- * same field names (type / text.body / location / media objects), so it is
- * passed through unchanged. Only text-bearing messages reach this point —
- * the route keeps its existing `!from || !text` skip.
- */
-export function metaMessageToInboundEvent(
-  msg: { id?: string; from?: string; timestamp?: string },
-  input: {
-    providerAccountId: string;
-    senderName?: string;
-    text: string;
-    provider: ProviderId;
-  }
-): NormalizedInboundEvent {
-  const epochSeconds = Number(msg.timestamp);
-  return {
-    provider: input.provider,
-    deliveryId: msg.id
-      ? `meta:${msg.id}`
-      : `meta:synth:${createHash("sha256")
-          .update(`${msg.from ?? ""}|${msg.timestamp ?? ""}|${input.text}`)
-          .digest("hex")
-          .slice(0, 24)}`,
-    kind: "message.received",
-    direction: "inbound",
-    providerAccountId: input.providerAccountId,
-    platformMessageId: msg.id,
-    sender: { phone: msg.from, name: input.senderName },
-    type: "text",
-    text: input.text,
-    timestamp: Number.isFinite(epochSeconds)
-      ? new Date(epochSeconds * 1000).toISOString()
-      : new Date().toISOString(),
-    raw: { type: "whatsapp.inbound_message.received", whatsappInboundMessage: msg },
-  };
 }
 
 // GET: Webhook verification

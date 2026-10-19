@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { UpdateLeadSchema } from "./route";
+import { UpdateLeadSchema } from "./helpers";
 
 describe("POST /api/leads/update schema", () => {
   it("rejects non-numeric ids that used to hit Postgres as syntax errors", () => {

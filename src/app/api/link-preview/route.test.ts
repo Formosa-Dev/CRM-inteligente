@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { isPrivateIp } from "./route";
+import { isPrivateIp } from "./helpers";
 
 describe("link-preview SSRF guard — isPrivateIp", () => {
   it("blocks every IPv4 private range", () => {

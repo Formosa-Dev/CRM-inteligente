@@ -3,7 +3,8 @@ import { createHmac } from "node:crypto";
 import { describe, it } from "node:test";
 import { NextRequest } from "next/server";
 
-import { GET, POST, metaMessageToInboundEvent } from "./route";
+import { GET, POST } from "./route";
+import { metaMessageToInboundEvent } from "./helpers";
 
 // Env must be set before the first getIntegrationSecrets() call — the module
 // caches for 30s once resolved. getIntegrationSecrets reads env lazily inside
