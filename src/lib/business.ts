@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { agentConfig } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { formatBusinessHours } from "@/lib/business-hours";
 
 export interface BusinessInfo {
   name: string;
@@ -12,6 +13,8 @@ export interface BusinessInfo {
   instagram: string;
   website: string;
   description: string;
+  /** Display-ready opening hours, only when the business configured them. */
+  hours?: string;
 }
 
 const FALLBACK: BusinessInfo = {
@@ -23,6 +26,7 @@ const FALLBACK: BusinessInfo = {
   instagram: "",
   website: "",
   description: "",
+  hours: process.env.BUSINESS_HOURS || undefined,
 };
 
 /**
@@ -41,6 +45,7 @@ export async function getBusinessInfo(): Promise<BusinessInfo> {
         instagramHandle: agentConfig.instagramHandle,
         businessWebsite: agentConfig.businessWebsite,
         businessDescription: agentConfig.businessDescription,
+        businessHours: agentConfig.businessHours,
         phoneNumber: agentConfig.phoneNumber,
         whatsappBotNumber: agentConfig.whatsappBotNumber,
       })
@@ -63,6 +68,9 @@ export async function getBusinessInfo(): Promise<BusinessInfo> {
       instagram: (cfg.instagramHandle || "").replace(/^@/, ""),
       website: cfg.businessWebsite || "",
       description: cfg.businessDescription || "",
+      hours:
+        formatBusinessHours(cfg.businessHours) ??
+        (process.env.BUSINESS_HOURS || undefined),
     };
   } catch {
     return FALLBACK;
