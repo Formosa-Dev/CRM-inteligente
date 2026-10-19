@@ -7,44 +7,79 @@ export interface RateLimitResult {
   limit: number;
 }
 
+export interface RateLimitOptions {
+  /**
+   * Namespaced shared ceiling for a route/purpose (e.g. "leads",
+   * "webhook:ycloud"). Defaults to the key prefix — everything before the
+   * last ":" — so `leads:1.2.3.4` lands in bucket "leads". A dedicated bucket
+   * is what stops an unauthenticated flood against one endpoint from
+   * exhausting a global pool shared with inbound message processing (F3).
+   */
+  bucket?: string;
+  /** Per-key limit within the window. Default 20/min. */
+  limit?: number;
+  /** Per-bucket shared limit within the window. Default 100/min. */
+  bucketLimit?: number;
+}
+
 interface WindowEntry {
   count: number;
   windowStart: number;
 }
 
 const WINDOW_MS = 60_000;
-const USER_LIMIT = 20;
-const GLOBAL_LIMIT = 100;
+const DEFAULT_KEY_LIMIT = 20;
+const DEFAULT_BUCKET_LIMIT = 100;
+const FALLBACK_BUCKET = "global";
 
 const redisUrl = process.env.UPSTASH_REDIS_REST_URL;
 const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
 const hasRedis = !!(redisUrl && redisToken && redisUrl.startsWith("https://"));
 
-let redis: Redis | null = null;
-let userRatelimit: Ratelimit | null = null;
-let globalRatelimit: Ratelimit | null = null;
+const redis = hasRedis
+  ? new Redis({ url: redisUrl!, token: redisToken! })
+  : null;
 
-if (hasRedis) {
-  redis = new Redis({
-    url: redisUrl!,
-    token: redisToken!,
-  });
+/**
+ * Ratelimit instances are immutable per (window size, prefix) — cache them.
+ * Per-key limiters share one prefix and are keyed by their token budget;
+ * bucket limiters additionally scope the Redis prefix by bucket name so a
+ * saturated bucket can never consume another purpose's allowance.
+ */
+const keyLimiters = new Map<number, Ratelimit>();
+const bucketLimiters = new Map<string, Ratelimit>();
 
-  userRatelimit = new Ratelimit({
-    redis,
-    limiter: Ratelimit.slidingWindow(USER_LIMIT, "1 m"),
-    prefix: "ratelimit:user",
-  });
-
-  globalRatelimit = new Ratelimit({
-    redis,
-    limiter: Ratelimit.slidingWindow(GLOBAL_LIMIT, "1 m"),
-    prefix: "ratelimit:global",
-  });
+function keyLimiter(limit: number): Ratelimit {
+  let limiter = keyLimiters.get(limit);
+  if (!limiter) {
+    limiter = new Ratelimit({
+      redis: redis!,
+      limiter: Ratelimit.slidingWindow(limit, "1 m"),
+      prefix: "ratelimit:key",
+    });
+    keyLimiters.set(limit, limiter);
+  }
+  return limiter;
 }
 
-const userMap = new Map<string, WindowEntry>();
-const globalMap = new Map<string, WindowEntry>();
+function bucketLimiter(bucket: string, limit: number): Ratelimit {
+  const cacheKey = `${bucket}:${limit}`;
+  let limiter = bucketLimiters.get(cacheKey);
+  if (!limiter) {
+    limiter = new Ratelimit({
+      redis: redis!,
+      limiter: Ratelimit.slidingWindow(limit, "1 m"),
+      // Bucket names come from our own call sites (or a trusted key prefix),
+      // never raw client input — safe inside the Redis prefix.
+      prefix: `ratelimit:bucket:${bucket}`,
+    });
+    bucketLimiters.set(cacheKey, limiter);
+  }
+  return limiter;
+}
+
+const keyMap = new Map<string, WindowEntry>();
+const bucketMap = new Map<string, WindowEntry>();
 
 function checkWindow(
   map: Map<string, WindowEntry>,
@@ -70,11 +105,11 @@ function checkWindow(
 
 function cleanup() {
   const now = Date.now();
-  for (const [key, entry] of userMap) {
-    if (now - entry.windowStart >= WINDOW_MS) userMap.delete(key);
+  for (const [key, entry] of keyMap) {
+    if (now - entry.windowStart >= WINDOW_MS) keyMap.delete(key);
   }
-  for (const [key, entry] of globalMap) {
-    if (now - entry.windowStart >= WINDOW_MS) globalMap.delete(key);
+  for (const [key, entry] of bucketMap) {
+    if (now - entry.windowStart >= WINDOW_MS) bucketMap.delete(key);
   }
 }
 
@@ -82,19 +117,41 @@ if (typeof setInterval !== "undefined") {
   setInterval(cleanup, WINDOW_MS);
 }
 
-export async function checkRateLimit(key: string): Promise<RateLimitResult> {
-  if (redis && userRatelimit && globalRatelimit) {
+/**
+ * Shared-ceiling rate limit: every request consumes one unit of its own
+ * per-key window AND one unit of a per-bucket window. Buckets isolate
+ * failure domains — e.g. abuse of `/api/leads` saturates only the "leads"
+ * bucket and can never starve "wa-inbound" message processing.
+ *
+ * Default bucket = the key's prefix (everything before the last ":"), so
+ * callers get purpose isolation even without passing `bucket`.
+ */
+export async function checkRateLimit(
+  key: string,
+  options: RateLimitOptions = {},
+): Promise<RateLimitResult> {
+  const limit = options.limit ?? DEFAULT_KEY_LIMIT;
+  const bucketLimit = options.bucketLimit ?? DEFAULT_BUCKET_LIMIT;
+  const bucket =
+    options.bucket ??
+    (key.lastIndexOf(":") > 0
+      ? key.slice(0, key.lastIndexOf(":"))
+      : FALLBACK_BUCKET);
+
+  if (redis) {
     try {
-      const user = await userRatelimit.limit(key);
-      if (!user.success) {
-        return { success: false, remaining: 0, limit: USER_LIMIT };
+      const keyResult = await keyLimiter(limit).limit(key);
+      if (!keyResult.success) {
+        return { success: false, remaining: 0, limit };
       }
 
-      const global = await globalRatelimit.limit("global");
+      const bucketResult = await bucketLimiter(bucket, bucketLimit).limit(
+        bucket,
+      );
       return {
-        success: global.success,
-        remaining: global.success ? user.remaining : 0,
-        limit: GLOBAL_LIMIT,
+        success: bucketResult.success,
+        remaining: bucketResult.success ? keyResult.remaining : 0,
+        limit: bucketLimit,
       };
     } catch (err) {
       // A Redis outage must degrade to the in-memory limiter, never drop the
@@ -104,10 +161,10 @@ export async function checkRateLimit(key: string): Promise<RateLimitResult> {
     }
   }
 
-  const user = checkWindow(userMap, key, USER_LIMIT);
-  if (!user.success) return user;
+  const keyResult = checkWindow(keyMap, key, limit);
+  if (!keyResult.success) return keyResult;
 
-  return checkWindow(globalMap, "global", GLOBAL_LIMIT);
+  return checkWindow(bucketMap, bucket, bucketLimit);
 }
 
 /**

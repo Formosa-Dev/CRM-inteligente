@@ -648,12 +648,21 @@ export async function handleNormalizedEvent(
   const customerKey = accountScopedInboundKey(channelAccountId, customerPhone);
 
   // Per-phone rate limit — a spamming customer would otherwise burn OpenAI
-  // tokens through Whisper/vision/agent calls. 200 is returned regardless so
-  // YCloud does not retry-storm dropped messages.
-  const inboundRate = await checkRateLimit(`wa-inbound:${phoneKey}`);
+  // tokens through Whisper/vision/agent calls. The dedicated account-scoped
+  // "wa-inbound" bucket is isolated from public-API buckets, so abuse of
+  // /api/leads etc. can never starve inbound processing. On limit we return
+  // 429 (not a 200 ack) so the provider retries the delivery instead of us
+  // silently dropping the customer message.
+  const inboundRate = await checkRateLimit(`wa-inbound:${phoneKey}`, {
+    bucket:
+      channelAccountId != null
+        ? `wa-inbound:acct${channelAccountId}`
+        : "wa-inbound",
+    bucketLimit: 300,
+  });
   if (!inboundRate.success) {
-    console.warn(`[webhook:wa] Rate limited inbound from ${phone}`);
-    return NextResponse.json({ ok: true, rateLimited: true }, { status: 200 });
+    console.warn(`[webhook:wa] Rate limited inbound message ${messageId}`);
+    return NextResponse.json({ error: "rate-limited" }, { status: 429 });
   }
 
   try {

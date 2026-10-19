@@ -14,7 +14,7 @@ import {
   createIdempotencyKey,
 } from "@/lib/idempotency";
 import { createCorrelationId, createLogger, logRequestReceived } from "@/lib/logger";
-import { checkRateLimit, getRateLimitHeaders } from "@/lib/infra/rate-limit";
+import { checkRateLimit, clientIpFromRequest, getRateLimitHeaders } from "@/lib/infra/rate-limit";
 import {
   findOrCreateConversation,
   insertMessage,
@@ -62,12 +62,12 @@ export async function POST(
       );
     }
 
-    // ── Rate limiting ──
-    const ip =
-      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-      request.headers.get("x-real-ip") ??
-      "unknown";
-    const rateCheck = await checkRateLimit(`telegram:${ip}`);
+    // ── Rate limiting — last-hop client IP, dedicated webhook bucket ──
+    const ip = clientIpFromRequest(request);
+    const rateCheck = await checkRateLimit(`telegram:${ip}`, {
+      bucket: "telegram-webhook",
+      limit: 60,
+    });
     if (!rateCheck.success) {
       return NextResponse.json(
         { ok: false, error: "Too many requests" },

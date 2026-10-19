@@ -33,7 +33,11 @@ export async function POST(req: NextRequest) {
     // Public lead-capture endpoint — rate limited to prevent spam floods.
     // The key uses the proxy-appended hop, not the client-controlled left
     // side of x-forwarded-for (rotatable spoof vector).
-    const rate = await checkRateLimit(`leads:${clientIpFromRequest(req)}`);
+    // Dedicated "leads" bucket: public-API abuse can never consume the
+    // inbound messaging allowance.
+    const rate = await checkRateLimit(`leads:${clientIpFromRequest(req)}`, {
+      bucket: "leads",
+    });
     if (!rate.success) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
