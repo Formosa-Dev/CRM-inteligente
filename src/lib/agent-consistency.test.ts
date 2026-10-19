@@ -1476,13 +1476,10 @@ test("sheet bottom path drags via controls with a 44px handle and safe-area pad"
   assert.match(sheet, /onDragDismiss/);
 });
 
-test("catalog dialog and upsell modal adopt the sheet handle affordance", () => {
+test("catalog dialog adopts the sheet handle affordance", () => {
   const dialog = readFileSync("src/components/storefront/catalog-dialog.tsx", "utf8");
   assert.match(dialog, /sheet-handle/);
   assert.match(dialog, /useDragControls|dragControls/);
-  const upsell = readFileSync("src/components/products/upsell-modal.tsx", "utf8");
-  assert.match(upsell, /sheet-handle/);
-  assert.match(upsell, /env\(safe-area-inset-bottom\)/);
 });
 
 // ─── ui-redesign R4: skeleton shimmer + editorial drift ──────────────────────
@@ -1533,18 +1530,9 @@ test("orders view adopts segmented pills and lucide action icons", () => {
   assert.match(src, /aria-label/);
 });
 
-test("product toggle active segment becomes an orb-finish pill", () => {
-  const src = readFileSync("src/components/products/product-toggle.tsx", "utf8");
-  assert.match(src, /orb-finish/);
-  assert.doesNotMatch(src, /from-gold|to-gold-ember/);
-});
-
-test("setup error state and hero gradient use tokens not raw hexes", () => {
+test("setup error state uses tokens not raw hexes", () => {
   const setup = readFileSync("src/app/setup/page.tsx", "utf8");
   assert.doesNotMatch(setup, /#0a0a0a|#D4A017|rgba\(245/);
-  const hero = readFileSync("src/components/hero/hero-section.tsx", "utf8");
-  assert.match(hero, /var\(--color-gold\)/);
-  assert.doesNotMatch(hero, /#D4A017|#F5A623|#E8712A/);
 });
 
 test("removed clients tab module is gone (gate: zero source references)", () => {
@@ -1583,9 +1571,6 @@ test("pill button standard unifies gold CTAs and editorial menu controls", () =>
 });
 
 test("ad-hoc outline CTAs migrate to the shared btn-outline-gold utility", () => {
-  const hero = readFileSync("src/components/hero/hero-section.tsx", "utf8");
-  assert.match(hero, /btn-outline-gold/);
-  assert.doesNotMatch(hero, /bg-primary\/10 border border-primary\/40/);
   const home = readFileSync("src/app/(storefront)/page.tsx", "utf8");
   assert.match(home, /btn-outline-gold/);
   const cta = readFileSync("src/components/home/delivery-cta.tsx", "utf8");
@@ -1620,12 +1605,10 @@ test("sheet bottom panel and editorial dialogs carry the spec elevation", () => 
 
 // ─── ui-redesign-r2 B: mixed roman+italic headings + black numerals ──────────
 
-test("hero reveal supports emLines and the hero italicizes its last line", () => {
+test("text reveal supports emLines", () => {
   const reveal = readFileSync("src/components/motion/text-reveal.tsx", "utf8");
   assert.match(reveal, /emLines\??:\s*number\[\]/);
   assert.match(reveal, /<em[>\s]/);
-  const hero = readFileSync("src/components/hero/hero-section.tsx", "utf8");
-  assert.match(hero, /emLines=\{/);
 });
 
 test("storefront display headings mix roman with real italic keywords", () => {
@@ -1823,8 +1806,6 @@ test("press-scale covers interactive surfaces and hover feedback lands on item t
   assert.match(css, /\.menu-item-body h3 button:hover\{color:var\(--menu-gold\)\}/);
   const seg = readFileSync("src/components/ui/segmented-control.tsx", "utf8");
   assert.match(seg, /active:scale-\[0\.98\]/);
-  const toggle = readFileSync("src/components/products/product-toggle.tsx", "utf8");
-  assert.match(toggle, /active:scale-\[0\.98\]/);
 });
 
 test("every new motion keyframe is honored in both reduced-motion blocks", () => {

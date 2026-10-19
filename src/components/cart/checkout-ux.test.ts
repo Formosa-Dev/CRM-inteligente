@@ -201,8 +201,6 @@ test("cart clear persists synchronously so a redirect cannot resurrect it", () =
 test("products and promos enter the same shared cart from every card", () => {
   const productCards = [
     "src/components/home/landing-product-card.tsx",
-    "src/components/products/product-card.tsx",
-    "src/components/products/upsell-modal.tsx",
   ];
   for (const file of productCards) {
     const src = readFileSync(file, "utf8");
