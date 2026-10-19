@@ -13,9 +13,20 @@ export interface OrderNotification {
   notes?: string | null;
 }
 
+/**
+ * Campos controlados por el cliente (nombre del lead, notas del pedido,
+ * nombres de producto) pueden traer `*`, `_`, `` ` `` o `[` — con
+ * parse_mode=Markdown eso rompe el parseo y TODO el sendMessage falla en
+ * silencio, o peor: permite inyectar formato/links. Se escapan los especiales
+ * del Markdown legacy; el markup intencional del template queda intacto.
+ */
+export function escapeTelegramMarkdown(text: string): string {
+  return text.replace(/([_*`[\]])/g, "\\$1");
+}
+
 function formatItems(items: unknown): string {
   return Array.isArray(items)
-    ? items.map((i: { quantity?: number; name?: string }) => `${i.quantity || 1}x ${i.name || "Item"}`).join(", ")
+    ? items.map((i: { quantity?: number; name?: string }) => `${i.quantity || 1}x ${escapeTelegramMarkdown(i.name || "Item")}`).join(", ")
     : "Ver detalle";
 }
 
@@ -38,7 +49,7 @@ export function buildOrderNotificationMessage(order: OrderNotification, resolved
   const typeIcon = order.orderType === "pan_mayorista" ? "🍞" : "🍔";
   return [
     `${typeIcon} *Nuevo Pedido #${order.id}*`,
-    `👤 Cliente: ${resolvedName}`,
+    `👤 Cliente: ${escapeTelegramMarkdown(resolvedName)}`,
     `📦 Items: ${items}`,
     `💰 Total: $${(order.total || 0).toLocaleString("es-AR")}`,
     `📋 Estado: ${order.status}`,
@@ -88,15 +99,15 @@ export async function notifyNewOrder(order: OrderNotification): Promise<void> {
         const lichasMessage = [
           "🫓 *NUEVO PEDIDO PAN MAYORISTA*",
           "",
-          `*Cliente:* ${resolvedName}`,
-          `*Teléfono:* ${order.phoneNumber || "No especificado"}`,
+          `*Cliente:* ${escapeTelegramMarkdown(resolvedName)}`,
+          `*Teléfono:* ${escapeTelegramMarkdown(order.phoneNumber || "No especificado")}`,
           `*Pedido:*`,
           `${formatItems(order.items)}`,
           ``,
           `*Total:* $${(order.total || 0).toLocaleString("es-AR")}`,
           ``,
-          order.notes ? `📝 *Notas:* ${order.notes}` : "",
-          `⏰ ${new Date().toLocaleString("es-AR")}`,
+          order.notes ? `📝 *Notas:* ${escapeTelegramMarkdown(order.notes)}` : "",
+          `⏰ ${new Date().toLocaleString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" })}`,
         ].filter(Boolean).join("\n");
 
         const chatIdNum = parseInt(lichasChatId.trim(), 10);

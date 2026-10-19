@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildOrderNotificationMessage, type OrderNotification } from "./notifier";
+import {
+  buildOrderNotificationMessage,
+  escapeTelegramMarkdown,
+  type OrderNotification,
+} from "./notifier";
 
 function order(overrides: Partial<OrderNotification> = {}): OrderNotification {
   return {
@@ -33,4 +37,32 @@ test("labels pan mayorista and keeps the urgency line", () => {
 test("omits the link when no phone number is present", () => {
   const message = buildOrderNotificationMessage(order({ phoneNumber: "" }), "Ramiro");
   assert.doesNotMatch(message, /wa\.me/);
+});
+
+test("escapes customer-controlled markdown without breaking template markup", () => {
+  // Regresión: resolvedName/items con * _ ` [ rompían el parseo Telegram y
+  // el notifyAdmins entero fallaba en silencio.
+  const message = buildOrderNotificationMessage(
+    order({
+      items: [
+        { name: "Genesis_Especial [x2]", quantity: 1 },
+        { name: "Toro *Asado*", quantity: 2 },
+      ],
+    }),
+    "Ro*chi* [admin]"
+  );
+  // El markup intencional del template sigue activo:
+  assert.match(message, /\*Nuevo Pedido #12\*/);
+  // Los especiales del cliente quedan escapados:
+  assert.match(message, /Ro\\\*chi\\\* \\\[admin\\\]/);
+  assert.match(message, /Genesis\\_Especial \\\[x2\\\]/);
+  assert.match(message, /Toro \\\*Asado\\\*/);
+});
+
+test("escapeTelegramMarkdown escapes legacy markdown specials", () => {
+  assert.equal(
+    escapeTelegramMarkdown("a*b_c`d[e]f"),
+    "a\\*b\\_c\\`d\\[e\\]f"
+  );
+  assert.equal(escapeTelegramMarkdown("normal"), "normal");
 });
