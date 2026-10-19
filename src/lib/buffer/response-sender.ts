@@ -74,6 +74,31 @@ export function splitIntoBubbles(text: string): string[] {
   return result.length > 0 ? result : [cleaned.slice(0, MAX_BUBBLE_CHARS)];
 }
 
+/**
+ * A-04 — own-echo recognition for multi-bubble replies.
+ *
+ * A reply longer than MAX_BUBBLE_CHARS is sent as N bubbles, each with its
+ * own providerMessageId, but only one id is persisted. An echo of any
+ * non-final bubble therefore misses the platformMessageId lookups — it is
+ * still ours, and must be recognized by CONTENT: true when `displayText`
+ * equals the whole stored message or any single bubble it was split into.
+ *
+ * The comparison runs the stored content through the same splitter that
+ * produced the sends, so markdown stripping and bullet normalization can't
+ * cause a false mismatch.
+ */
+export function matchesAssistantBubble(
+  lastContent: string,
+  displayText: string
+): boolean {
+  const fragment = displayText.trim();
+  if (!fragment) return false;
+  if (lastContent.trim() === fragment) return true;
+  return splitIntoBubbles(lastContent).some(
+    (bubble) => bubble.trim() === fragment
+  );
+}
+
 // Send response as bubbles via WhatsApp (YCloud)
 // Returns the LAST YCloud response (which has the wamid) for echo dedup
 //

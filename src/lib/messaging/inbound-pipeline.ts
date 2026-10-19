@@ -34,7 +34,10 @@ import type {
   ChannelKind,
   NormalizedInboundEvent,
 } from "./types";
-import { sendWhatsAppBubbles } from "@/lib/buffer/response-sender";
+import {
+  matchesAssistantBubble,
+  sendWhatsAppBubbles,
+} from "@/lib/buffer/response-sender";
 import {
   findOrCreateConversation,
   insertMessage,
@@ -216,24 +219,25 @@ async function handleEcho(
     const conversationId = echoConv.id;
 
     if (echoMsgId) {
-      // Dedup adicional: si el contenido coincide con el ÚLTIMO mensaje
-      // del assistant en los últimos 30s, es el eco de nuestra propia respuesta
-      const recentMessages = await getConversationMessages(conversationId, 1);
-      if (recentMessages.length > 0) {
-        const last = recentMessages[0];
-        const thirtySecAgo = Date.now() - 30_000;
-        const msgTime = last.createdAt instanceof Date
-          ? last.createdAt.getTime()
-          : new Date(last.createdAt).getTime();
-
-        if (
-          last.role === "assistant" &&
+      // Dedup adicional: si el contenido coincide con un mensaje del
+      // assistant reciente (últimos 30s), es el eco de nuestra propia
+      // respuesta. A-04: la comparación es por BURBUJA — una respuesta
+      // larga sale en N envíos y cada eco trae solo un fragmento.
+      const recentMessages = await getConversationMessages(conversationId, 6);
+      const thirtySecAgo = Date.now() - 30_000;
+      const isOwnBubbleEcho = recentMessages.some((recent) => {
+        if (recent.role !== "assistant") return false;
+        const msgTime = recent.createdAt instanceof Date
+          ? recent.createdAt.getTime()
+          : new Date(recent.createdAt).getTime();
+        return (
           msgTime > thirtySecAgo &&
-          last.content.trim() === displayText.trim()
-        ) {
-          console.log(`[webhook:echo] Skip — echo matches recent AI response (${echoMsgId})`);
-          return NextResponse.json({ ok: true }, { status: 200 });
-        }
+          matchesAssistantBubble(recent.content, displayText)
+        );
+      });
+      if (isOwnBubbleEcho) {
+        console.log(`[webhook:echo] Skip — echo matches recent AI response bubble (${echoMsgId})`);
+        return NextResponse.json({ ok: true }, { status: 200 });
       }
     }
 
