@@ -6,8 +6,9 @@ single-business product fully working at every step. YCloud stays the default �
 and for v1 the only wired — WhatsApp provider; Zernio (social channels) and a
 Kapso spike plug in behind the same interface.
 
-**v1 scope (explicit decision, CR-6):** v1 = frozen canonical contract (§2.2) +
-`YCloudAdapter` + outbound facade + inbound parse extraction, with zero
+**v1 scope (explicit decision, CR-6):** v1 = frozen canonical contract
+(`provider-integration-evidence.md` §4) + `YCloudAdapter` + outbound facade +
+inbound parse extraction, with zero
 behavior change. `channel_accounts` and the unified ingress are **built only
 when a second provider is approved** — until then the registry hard-codes
 `whatsapp → ycloud` and credentials resolve from `agent_config`/`env`. Kapso is
@@ -84,7 +85,7 @@ surface and no API versioning policy is adopted.
 
 | File | Responsibility |
 |---|---|
-| `types.ts` | Canonical contract types (§2.2) — the only definition site |
+| `types.ts` | Canonical contract types (evidence §4, mirrored into code) — the only definition site |
 | `registry.ts` | `getProvider(id)`, `listProviders()`; explicit map, no magic discovery. v1: `whatsapp → ycloud` hard-coded |
 | `accounts.ts` | `resolveChannelAccount({channel, provider?})` → default active account; credential resolution rules in C13 |
 | `messenger.ts` | `send()` facade — the only outbound entry point for app code |
@@ -92,119 +93,41 @@ surface and no API versioning policy is adopted.
 | `providers/zernio.ts`, `providers/kapso.ts` | Phase 4 / Phase 5 |
 | `provider-contract.test.ts` | shared contract suite every adapter must pass |
 
-### 2.2 Canonical provider contract (single source of truth — CR-1)
+### 2.2 Canonical provider contract (referenced — N-1)
 
-This is the **one canonical contract**, adopted from
-`provider-integration-evidence.md` §4 (verified against official provider docs
-2026-10-18) with two deltas: `tenantId` added to `ChannelAccount`, and
-`comment` removed from the channel union — it is an **event kind**, not a
-channel (W-14). Where the source brief §4.1 (`IMessagingProvider`) or any
-other document differs, **this contract wins**.
+The one canonical contract is **`docs/socialcrm/provider-integration-evidence.md`
+§4** — this roadmap references it and does not define a competing copy. Where
+this document, the source brief §4.1, `execution-control.md`, or any
+implementation slice differs from evidence §4, **evidence §4 wins**; divergent
+text must be corrected there or removed. The source brief's
+`IMessagingProvider`/`ChannelType` block is superseded requirements input.
 
-```ts
-type ProviderId = "ycloud" | "zernio" | "kapso";
-type ChannelId =
-  | "whatsapp" | "instagram" | "facebook" | "messenger"
-  | "telegram" | "sms";                       // no "comment" — that's an event kind
-type EventKind =
-  | "message.received" | "message.echo" | "message.status"
-  | "comment.received" | "account.lifecycle" | "other";
+For orientation only — the authoritative definitions live in evidence §4:
 
-interface ChannelAccount {
-  id: string;
-  tenantId: string;                  // constant "default" in v1 — multitenant migration path only
-  provider: ProviderId;
-  channel: ChannelId;
-  /** ycloud: sender E.164 · zernio: accountId · kapso: phoneNumberId */
-  providerAccountId: string;
-  /** E.164 phone (WhatsApp/SMS) or page/handle id (social) */
-  senderAddress: string;
-  /** AES-256-GCM encrypted at rest (lib/encryption.ts) */
-  credentials: { apiKey: string; webhookSecret: string; accessToken?: string };
-  status: "active" | "disconnected" | "error";
-}
+| Member | Canonical shape (evidence §4) |
+|---|---|
+| Providers | `ProviderId` — `ycloud`, `zernio`, `kapso` |
+| Channels | `ChannelId` — `whatsapp`, `instagram`, `facebook`, `telegram`, `sms`. **No `comment`, no `messenger`** (W-14/N-1): a comment is an *event kind*; Facebook Messenger rides the `facebook` channel |
+| Events | `EventKind` — `message.received`, `message.echo`, `message.status`, `comment.received`, `account.lifecycle`, `other` |
+| Account | `ChannelAccount` — `id`, `tenantId` (`"default"` in v1), `provider`, `channel`, `providerAccountId`, `senderAddress`, `credentials`, `status` |
+| Outbound | `OutboundMessage` + `SendResult`; `sendMessage` and optional `sendTemplate?` (needed for Zernio WA first contact — W-2) |
+| Inbound | `NormalizedInboundEvent` — `deliveryId` + `platformMessageId` dedup keys, `sender.bsuid` first-class, `mediaRefs` |
+| Adapter | `MessagingProvider` — `signatureScheme`, `verifyWebhook`, `parseWebhook` (array), `sendMessage`, `sendTemplate?`, `resolveMedia?` |
 
-interface OutboundMessage {
-  to: string;                        // E.164 phone, BSUID, or social user id
-  type: "text" | "image" | "document" | "template" | "interactive";
-  text?: string;
-  mediaUrl?: string;                 // public link; adapters may upload first
-  template?: { name: string; language: string; components?: unknown[] };
-  interactive?: unknown;             // provider-native passthrough
-  replyToMessageId?: string;
-  idempotencyKey?: string;           // → ycloud externalId / zernio Idempotency-Key
-}
+Binding adapter rules are evidence §4 rules 1–10: raw-body-first signature
+verification (timestamped `t,s` HMAC for YCloud, raw-body HMAC for
+Zernio/Kapso), two durable dedup keys (`deliveryId` event-level +
+`platformMessageId` message-level — namespacing rule C6), `parseWebhook`
+returns an array, Zernio sends are conversation-scoped, echo/status normalize
+to `kind` + `direction` and never trigger agent work, `sender.bsuid` is
+first-class (drives §2.4), and media goes through `resolveMedia`/`refreshUrl`.
 
-type SendResult =
-  | { ok: true; providerMessageId: string; status: string }
-  | { ok: false; error: string; retryable: boolean };
-
-interface NormalizedInboundEvent {
-  provider: ProviderId;
-  /** delivery-level dedup key: evt_* | X-Zernio-Event-Id | X-Idempotency-Key */
-  deliveryId: string;
-  kind: EventKind;
-  direction: "inbound" | "outbound" | "na";
-  /** routing key: wabaId | zernio accountId | kapso phone_number_id */
-  providerAccountId: string;
-  providerConversationId?: string;   // zernio conversationId / kapso conv.id
-  platformMessageId?: string;        // wamid / mid — durable message dedup (rule: C6)
-  sender: {
-    phone?: string; bsuid?: string; parentBsuid?: string;
-    username?: string; socialId?: string; name?: string;
-  };
-  type?: "text" | "image" | "audio" | "video" | "document"
-       | "location" | "sticker" | "interactive" | "reaction" | "unknown";
-  text?: string;
-  mediaRefs?: { id?: string; url?: string; refreshUrl?: string;
-                mimeType?: string; filename?: string }[];
-  replyToMessageId?: string;
-  status?: "sent" | "delivered" | "read" | "failed";
-  timestamp: string;
-  raw: unknown;
-}
-
-interface MessagingProvider {
-  readonly id: ProviderId;
-  /** 'timestamped-hmac' (ycloud t.s) vs 'raw-body-hmac' (zernio, kapso) */
-  readonly signatureScheme: "timestamped-hmac" | "raw-body-hmac";
-  verifyWebhook(input: {
-    headers: Record<string, string>;
-    rawBody: string;
-    secret: string;
-  }): { ok: boolean; reason?: string };
-  /** Returns an ARRAY — Kapso can deliver batched envelopes. */
-  parseWebhook(input: {
-    headers: Record<string, string>;
-    rawBody: string;
-  }): NormalizedInboundEvent[];
-  sendMessage(account: ChannelAccount, msg: OutboundMessage): Promise<SendResult>;
-  /** W-2: kept — Zernio WhatsApp first contact requires a template. */
-  sendTemplate?(account: ChannelAccount, msg: OutboundMessage): Promise<SendResult>;
-  resolveMedia?(account: ChannelAccount, ref: { id?: string; url?: string; refreshUrl?: string }):
-    Promise<{ url: string; mimeType?: string; filename?: string }>;
-}
-```
-
-Contract rules (from evidence §4 — binding on every adapter):
-
-1. `request.text()` first, verify signature, then `JSON.parse` — all three
-   providers sign the raw body.
-2. Signature variants: YCloud `t=...,s=...` over `{t}.{body}` + ~300s
-   tolerance + `timingSafeEqual`; Zernio/Kapso raw-body hex HMAC-SHA256 +
-   `timingSafeEqual` (Zernio `X-Late-Signature` accepted as alias).
-3. Two durable dedup keys: `deliveryId` (event/delivery level) and
-   `platformMessageId` (message level; rule C6 for namespacing).
-4. `parseWebhook` returns an array (Kapso batches; YCloud sends one event
-   per POST).
-5. Zernio sends are conversation-scoped (`POST /v1/inbox/conversations`,
-   cached per `(accountId, to)`); YCloud/Kapso send direct to recipient.
-   **[RESEARCH]** full Zernio conversation-create request shape.
-6. Echo/status map to `kind: "message.echo"`/`"message.status"`,
-   `direction` set; status events never trigger agent work.
-7. `sender.bsuid` is first-class — never assume `sender.phone` exists
-   (Meta's BSUID migration; drives §2.4).
-8. Media: use `resolveMedia`/`refreshUrl`, never expiring signed URLs.
+**S1 alignment (N-2, acceptance criterion):** the `socialcrm-messaging-core`
+slice's `types.ts` and its contract test must implement the canonical contract
+above — `ChannelId`/`EventKind` names, **no** `comment` or `messenger`
+channels, **no** `isDefault`/`displayAddress` fields (not canonical; account
+defaulting is a schema/resolver concern — C14, and `senderAddress` already
+covers the display role). Hold S1 until it matches evidence §4 exactly.
 
 ### 2.3 Routing rule
 
@@ -233,11 +156,11 @@ pgEnum only know `whatsapp|telegram`. Design decisions:
    lookup `lead_identities(channel, externalId)` first, `leads.phone` fallback.
 2. **Synthetic conversation key:** `conversations.whatsappId` keeps its
    current values (back-compat) and receives `"${channel}:${externalUserId}"`
-   for new channels (`ig:…`, `fb:…`, `msg:…`) — same convention as today's
+   for new channels (`ig:…`, `fb:…`) — same convention as today's
    `tg_` synthesis. Column semantics = "channel conversation key"; renaming
    the column is a later optional migration, not required.
 3. **Channel plumbing:** extend `channel` pgEnum (additive values:
-   `instagram`, `facebook`, `messenger`, `sms`), `Channel` union in
+   `instagram`, `facebook`, `sms`), `Channel` union in
    `channels/router.ts`, and `BUFFER_CONFIG` per channel (IG/FB debounce
    values TBD in Phase 4; comments may bypass the buffer entirely).
 4. **Fixture gate:** a phone-less Instagram `message.received` fixture must
@@ -374,14 +297,16 @@ later:               P6 per-channel policy / durable media / rotation
 ### Phase 0 — Provider research closeout (no product code)
 
 - Deliverable: update `provider-integration-evidence.md` (or
-  `provider-research.md`) closing the open items in §4; freeze §2.2 verbatim.
+  `provider-research.md`) closing the open items in §4; freeze the canonical
+  contract there.
 - Commit: `docs(socialcrm): close out provider research items`
 - Verify: doc review; contract types compile-checked in P1.
 
 ### Phase 1 — Messaging core + YCloudAdapter (pure refactor, zero behavior change)
 
 - Create `lib/messaging/{types,registry,accounts,messenger}.ts` implementing
-  §2.2 verbatim; v1 registry maps `whatsapp → ycloud`.
+  the canonical contract (evidence §4) verbatim; v1 registry maps
+  `whatsapp → ycloud`.
 - `providers/ycloud.ts` wraps existing send/signature/parse/media functions
   **without moving them yet** (delegation first, extraction later if useful).
 - Switch **every** direct send call site to `messenger.send` — complete list
@@ -492,7 +417,7 @@ later:               P6 per-channel policy / durable media / rotation
 
 ---
 
-## 6. First implementation slice (safe to start once §2.2 is frozen)
+## 6. First implementation slice (safe to start once the canonical contract is frozen)
 
 **Slice = Phase 1, work unit 1.** Exactly:
 
@@ -510,6 +435,11 @@ later:               P6 per-channel policy / durable media / rotation
   `test:agents` **and** adds the already-on-disk-but-unwired
   `src/lib/whatsapp/web-order-redirect.test.ts`.
 - Commit: `feat(messaging): add provider abstraction core and ycloud adapter`.
+- **Contract acceptance (N-1/N-2):** `types.ts` and `provider-contract.test.ts`
+  must implement the canonical contract — `provider-integration-evidence.md`
+  §4 — not any earlier draft of this document. If the already-running
+  `socialcrm-messaging-core` slice (S1) is used, hold it until its types and
+  tests match evidence §4 exactly (see §2.2 S1 alignment).
 - Verify before commit: the explicit test command above, `npm run
   test:agents`, `npm run typecheck`, `npm run lint`, `npm run build`.
 
