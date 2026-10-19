@@ -1,0 +1,94 @@
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { addToOrderTool, updateOrderTool } from "./tools/order-management-tools";
+
+const toolsSource = readFileSync(
+  new URL("./tools/order-management-tools.ts", import.meta.url),
+  "utf8",
+);
+const createOrderSource = readFileSync(
+  new URL("./tools/create-order.ts", import.meta.url),
+  "utf8",
+);
+const promptSource = readFileSync(
+  new URL("./prompt-builder.ts", import.meta.url),
+  "utf8",
+);
+
+function section(source: string, startMarker: string, endMarker: string): string {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker);
+  assert.notEqual(start, -1, `missing section start: ${startMarker}`);
+  assert.notEqual(end, -1, `missing section end: ${endMarker}`);
+  return source.slice(start, end);
+}
+
+// A-06: order tools must re-price through resolveItems — LLM-supplied
+// unitPrice/deliveryFee are untrusted input and never reach orders.items.
+describe("A-06 order tools re-price from the DB", () => {
+  test("addToOrder input schema does not accept a price field", () => {
+    const input = addToOrderTool.inputSchema as { parse: (v: unknown) => { newItems: { unitPrice?: unknown }[] } };
+    const parsed = input.parse({
+      orderId: 1,
+      newItems: [{ name: "Genesis", quantity: 2, unitPrice: 0.01 }],
+    });
+    assert.equal("unitPrice" in parsed.newItems[0], false, "unitPrice must be stripped/ignored");
+  });
+
+  test("updateOrder input schema does not accept prices or a model-set fee", () => {
+    const input = updateOrderTool.inputSchema as {
+      parse: (v: unknown) => { items?: { unitPrice?: unknown }[]; deliveryFee?: unknown; orderType?: unknown };
+    };
+    const parsed = input.parse({
+      orderId: 1,
+      items: [{ name: "Genesis", quantity: 1, unitPrice: 0.01 }],
+      deliveryFee: -500,
+      orderType: "delivery",
+    });
+    assert.equal("unitPrice" in (parsed.items ?? [])[0], false);
+    assert.equal("deliveryFee" in parsed, false, "deliveryFee is server-resolved, never model input");
+    assert.equal("orderType" in parsed, false);
+  });
+
+  test("both tools route items through resolveItems + validateResolvedOrderItems", () => {
+    const addSection = section(toolsSource, "addToOrderTool = tool(", "// ─── updateOrder");
+    const updateSection = section(toolsSource, "updateOrderTool = tool(", "// ─── cancelOrder");
+    for (const [name, src] of [["addToOrder", addSection], ["updateOrder", updateSection]] as const) {
+      assert.match(src, /resolveItems\(/, `${name} must resolve items against the DB`);
+      assert.match(src, /validateResolvedOrderItems\(/, `${name} must validate resolved items`);
+      assert.doesNotMatch(src, /unitPrice:\s*z\.number/, `${name} must not take a unitPrice input`);
+    }
+    assert.doesNotMatch(
+      section(toolsSource, "execute: async ({ orderId, notes, items, entrega, address })", "return parts.join"),
+      /updates\.deliveryFee\s*=\s*deliveryFee/,
+      "deliveryFee must not be written from a tool arg",
+    );
+  });
+});
+
+// A-07: updateOrder must never write the business-line enum order_type with
+// fulfillment values. Fulfillment is encoded by address presence.
+describe("A-07 updateOrder never writes order_type with fulfillment values", () => {
+  test("the tool schema uses entrega (delivery|retiro), not orderType", () => {
+    const updateSection = section(toolsSource, "updateOrderTool = tool(", "// ─── cancelOrder");
+    assert.match(updateSection, /entrega:\s*z\s*\.enum\(\["delivery",\s*"retiro"\]\)/);
+    assert.doesNotMatch(updateSection, /orderType:/);
+    assert.doesNotMatch(updateSection, /updates\.orderType/, "order_type is the business-line enum — never written here");
+  });
+
+  test("delivery requires an address and resolves the fee server-side", () => {
+    const updateSection = section(toolsSource, "updateOrderTool = tool(", "// ─── cancelOrder");
+    assert.match(updateSection, /resolveDeliveryFee\(/);
+    assert.match(updateSection, /necesito la dirección/i);
+    // retiro clears address and zeroes the fee
+    assert.match(updateSection, /entrega === "retiro"[\s\S]*?updates\.address = null/);
+  });
+
+  test("prompt text instructs entrega/address, not orderType/deliveryFee", () => {
+    const promptSection = section(promptSource, "MODIFICACION POST-CREATEORDER", "Diferencia entre AGREGAR");
+    assert.match(promptSection, /entrega \('delivery'\/'retiro'\)/);
+    assert.doesNotMatch(promptSection, /orderType \('delivery'\/'retiro'\)/, "prompt must not instruct writing orderType");
+    assert.doesNotMatch(promptSection, /deliveryFee/, "prompt must not tell the model to pass a fee");
+  });
+});

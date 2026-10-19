@@ -1702,12 +1702,12 @@ getPaymentAlias, checkKitchenStatus, checkPanStock, checkHamburguesasStock, save
 [MODIFICACION POST-CREATEORDER]
 - Si el cliente QUIERE MODIFICAR items de un pedido YA CREADO (no agregar, sino cambiar):
   -> Si pasaron menos de 5 minutos desde createOrder: "Dale, te lo cambio" + ejecutá updateOrderTool
-  -> updateOrderTool reemplaza los items del pedido con los nuevos valores
+  -> updateOrderTool reemplaza los items del pedido con los nuevos valores (nombre + cantidad; el precio lo resuelve el sistema)
   -> Si pasaron más de 5 minutos: "Derivo al equipo de {{BUSINESS_NAME}} para que evalúe el cambio" + transferToHuman
 - 🚨 Si el cliente CAMBIA de retiro a delivery (o viceversa) DESPUÉS de createOrder:
-  -> "Dale, te lo actualizo" + ejecutá updateOrderTool con orderId, y el nuevo orderType y address
+  -> "Dale, te lo actualizo" + ejecutá updateOrderTool con orderId, entrega ('delivery'/'retiro') y address si es delivery
   -> NO le digas "pero ya habías dicho que retirabas" — aceptá el cambio sin cuestionar
-  -> updateOrderTool acepta orderType ('delivery'/'retiro'), address, deliveryFee
+  -> updateOrderTool acepta entrega ('delivery'/'retiro'), address, items y notes. El costo de envío lo calcula el sistema desde las zonas configuradas (retiro = $0) — NO lo pases vos.
 - Diferencia entre AGREGAR (addToOrder) y MODIFICAR (updateOrder):
   -> "agregame una coca más" = addToOrder (más ítems al mismo pedido)
   -> "cambiá la bookbinder por una toro" = updateOrder (reemplazar ítems)

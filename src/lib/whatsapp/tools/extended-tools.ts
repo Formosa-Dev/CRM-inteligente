@@ -7,7 +7,7 @@ import { resolveAgentConfig } from "@/lib/agent-config-scope";
 
 // --- HELPERS ---
 // Lee las zonas de delivery desde la DB (configurables desde UI)
-async function getDeliveryZonesFromDB(): Promise<{ zona: string; disponible: boolean; tiempo: string; costo: number }[]> {
+export async function getDeliveryZonesFromDB(): Promise<{ zona: string; disponible: boolean; tiempo: string; costo: number }[]> {
   try {
     const config = await resolveAgentConfig();
     const zonas = config?.whatsappZonasDelivery as { zona: string; disponible: boolean; tiempo: string; costo: number }[] | null;
@@ -20,6 +20,23 @@ async function getDeliveryZonesFromDB(): Promise<{ zona: string; disponible: boo
     { zona: "norte", disponible: true, tiempo: "25-35 min", costo: 0 },
     { zona: "sur", disponible: true, tiempo: "30-40 min", costo: 0 },
   ];
+}
+
+/**
+ * Server-side delivery fee resolution. The model's tool args are untrusted
+ * input (src/lib/order-utils.ts invariant): the fee comes ONLY from the
+ * configured zones — the zone whose name appears in the address (or vice
+ * versa), clamped >= 0. No zone match => 0 (never an LLM-supplied amount).
+ */
+export async function resolveDeliveryFee(address?: string | null): Promise<number> {
+  if (!address || !address.trim()) return 0;
+  const zones = await getDeliveryZonesFromDB();
+  const normalized = address.toLowerCase();
+  const match = zones.find(
+    (z) => z.disponible && (normalized.includes(z.zona.toLowerCase()) || z.zona.toLowerCase().includes(normalized))
+  );
+  const costo = match ? Number(match.costo) : 0;
+  return Number.isFinite(costo) && costo > 0 ? costo : 0;
 }
 
 // --- CHECK DELIVERY TOOL ---

@@ -7,6 +7,8 @@ import { getStatusSemantic, isActiveStatus, getStatusNotificationMessage } from 
 import { currentAgentConfigScope } from "@/lib/agent-config-scope";
 import { isOrderVisibleToScope } from "@/lib/whatsapp/order-lifecycle";
 import { normalizePhone } from "@/lib/phone-utils";
+import { resolveItems, validateResolvedOrderItems } from "@/lib/order-utils";
+import { resolveDeliveryFee } from "./extended-tools";
 
 // The ambient scope carries the conversation's channelAccountId AND its
 // server-side customerPhone. A bound scope only sees/mutates orders owned by
@@ -129,10 +131,9 @@ export const addToOrderTool = tool({
         z.object({
           name: z.string(),
           quantity: z.number().int().positive(),
-          unitPrice: z.number().positive(),
         })
       )
-      .describe("Items nuevos a agregar"),
+      .describe("Items nuevos a agregar (el precio se resuelve desde la DB — nunca lo inventes)"),
   }),
   execute: async ({ orderId, newItems }) => {
     const rows = await db
@@ -161,8 +162,14 @@ export const addToOrderTool = tool({
       return "El pedido ya no está pendiente, no puedo agregar más items.";
     }
 
+    // Re-price against the DB: LLM-supplied prices are untrusted input and
+    // never reach orders.items (same invariant as createOrder).
+    const resolvedNew = await resolveItems(newItems);
+    const itemError = validateResolvedOrderItems(resolvedNew);
+    if (itemError) return itemError;
+
     const currentItems = (order.items as { name: string; quantity: number; unitPrice: number }[]) || [];
-    const updatedItems = [...currentItems, ...newItems];
+    const updatedItems = [...currentItems, ...resolvedNew];
     const total = updatedItems.reduce(
       (sum, i) => sum + i.quantity * i.unitPrice,
       0
@@ -173,7 +180,7 @@ export const addToOrderTool = tool({
       .set({ items: updatedItems, updatedAt: new Date() })
       .where(eq(orders.id, orderId));
 
-    const added = newItems
+    const added = resolvedNew
       .map((i) => `${i.quantity}x ${i.name}`)
       .join(", ");
 
@@ -184,50 +191,76 @@ export const addToOrderTool = tool({
 // ─── updateOrder ────────────────────────────────────────────────────────────
 export const updateOrderTool = tool({
   description:
-    "Modifica notas, items, tipo de entrega, o dirección de un pedido pendiente. Solo funciona si está en 'pending'. Usar cuando el cliente cambia delivery/retiro, dirección, o contenido del pedido.",
+    "Modifica notas, items, modo de entrega, o dirección de un pedido pendiente. Solo funciona si está en 'pending'. Usar cuando el cliente cambia delivery/retiro, dirección, o contenido del pedido.",
   inputSchema: z.object({
     orderId: z.number().describe("ID del pedido"),
     notes: z.string().optional().describe("Nuevas notas"),
-    orderType: z.enum(["delivery", "retiro"]).optional().describe("Cambiar tipo de entrega: delivery o retiro"),
+    entrega: z
+      .enum(["delivery", "retiro"])
+      .optional()
+      .describe("Cambiar modo de entrega: 'delivery' (requiere address) o 'retiro' (por el local)"),
     address: z.string().optional().describe("Nueva dirección si cambia a delivery"),
-    deliveryFee: z.number().optional().describe("Nuevo costo de envío"),
     items: z
       .array(
         z.object({
           name: z.string(),
           quantity: z.number().int().positive(),
-          unitPrice: z.number().positive(),
         })
       )
       .optional()
-      .describe("Items actualizados (reemplaza los existentes)"),
+      .describe("Items actualizados (reemplaza los existentes; el precio se resuelve desde la DB, nunca lo inventes)"),
   }),
-  execute: async ({ orderId, notes, items, orderType, address, deliveryFee }) => {
+  execute: async ({ orderId, notes, items, entrega, address }) => {
     const rows = await db
       .select()
       .from(orders)
       .where(and(eq(orders.id, orderId), eq(orders.status, "pending")))
       .limit(1);
 
-    if (!(await visibleOrderOrNull(rows[0]))) {
+    const order = await visibleOrderOrNull(rows[0]);
+    if (!order) {
       return "No encontré un pedido pendiente con ese número. Solo puedo modificar pedidos que todavía no se están preparando.";
     }
 
+    // Fulfillment mode lives in `address` (presence = delivery, per
+    // status-utils) — orders.order_type is the BUSINESS-LINE enum
+    // (hamburguesas|pan_mayorista) and is never written here. The delivery
+    // fee is resolved server-side from the configured zones; the model's
+    // price/fee args are untrusted and never persisted.
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (notes !== undefined) updates.notes = notes;
-    if (items !== undefined) updates.items = items;
-    if (orderType !== undefined) updates.orderType = orderType;
-    if (address !== undefined) updates.address = address;
-    if (deliveryFee !== undefined) updates.deliveryFee = deliveryFee;
+
+    let resolvedItems = undefined as Awaited<ReturnType<typeof resolveItems>> | undefined;
+    if (items !== undefined) {
+      resolvedItems = await resolveItems(items);
+      const itemError = validateResolvedOrderItems(resolvedItems);
+      if (itemError) return itemError;
+      updates.items = resolvedItems;
+    }
+
+    const effectiveAddress = address !== undefined ? address : order.address;
+    if (entrega === "retiro") {
+      updates.address = null;
+      updates.deliveryFee = "0";
+    } else if (entrega === "delivery") {
+      if (!effectiveAddress || !effectiveAddress.trim()) {
+        return "Para pasar a delivery necesito la dirección del cliente. Pedísela y ejecutá updateOrder con entrega='delivery' y address.";
+      }
+      updates.address = effectiveAddress;
+      updates.deliveryFee = String(await resolveDeliveryFee(effectiveAddress));
+    } else if (address !== undefined) {
+      updates.address = address;
+      updates.deliveryFee = String(await resolveDeliveryFee(address));
+    }
 
     await db.update(orders).set(updates).where(eq(orders.id, orderId));
 
     const parts: string[] = [`✅ Pedido #${orderId} actualizado.`];
-    if (orderType) parts.push(`📦 Tipo de entrega: ${orderType}`);
-    if (address) parts.push(`📍 Dirección: ${address}`);
-    if (deliveryFee !== undefined) parts.push(`🚚 Delivery: $${deliveryFee}`);
-    if (items) {
-      const total = items.reduce(
+    if (entrega) parts.push(`📦 Entrega: ${entrega === "delivery" ? "delivery" : "retiro"}`);
+    if (typeof updates.address === "string") parts.push(`📍 Dirección: ${updates.address}`);
+    if (typeof updates.deliveryFee === "string") parts.push(`🚚 Envío: $${updates.deliveryFee}`);
+    if (resolvedItems) {
+      const total = resolvedItems.reduce(
         (sum, i) => sum + i.quantity * i.unitPrice,
         0
       );
