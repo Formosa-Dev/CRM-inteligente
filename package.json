@@ -31,7 +31,7 @@
     "drizzle-orm": "^0.45.2",
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.14.0",
-    "next": "16.2.4",
+    "next": "16.4.2",
     "next-auth": "^5.0.0-beta.32",
     "pdf-parse": "^2.4.5",
     "pino": "^10.3.1",
@@ -52,7 +52,7 @@
     "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
-    "eslint-config-next": "16.2.4",
+    "eslint-config-next": "16.4.2",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"
