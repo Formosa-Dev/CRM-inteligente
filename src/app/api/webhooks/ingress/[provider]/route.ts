@@ -8,19 +8,28 @@ import {
 } from "@/lib/messaging/ingress";
 import { handleNormalizedEvent } from "@/lib/messaging/inbound-pipeline";
 import { aggregateWebhookStatuses } from "@/lib/messaging/webhook-response";
+import {
+  checkRateLimit,
+  clientIpFromRequest,
+} from "@/lib/infra/rate-limit";
+import {
+  MAX_WEBHOOK_EVENTS,
+  readBoundedBody,
+} from "@/lib/infra/webhook-guard";
 
 /**
  * POST /api/webhooks/ingress/<provider> — unified inbound entry point (S12).
  *
  * Works for any registered provider (registry today: ycloud, kapso). Flow:
- * provider by path param (404 unknown) → per-provider webhook secret
- * (resolveWebhookSecret — ycloud keeps agent_config→env, future providers
- * read <PROVIDER>_WEBHOOK_SECRET) → verifyWebhook (401 bad signature) →
- * parseWebhook → per event: resolve channel + channel_accounts row
- * (fail-closed skip + log when nothing matches) → WhatsApp/YCloud events run
- * the same shared app pipeline as /api/whatsapp/webhook; events on other
- * channels get passive persistence (conversation + message) or a structured
- * ack log when no persistence table exists for the kind.
+ * provider by path param (404 unknown) → per-IP rate limit + bounded body
+ * (F8) → per-provider webhook secret (resolveWebhookSecret — ycloud keeps
+ * agent_config→env, future providers read <PROVIDER>_WEBHOOK_SECRET) →
+ * verifyWebhook (401 bad signature) → parseWebhook (capped) → per event:
+ * resolve channel + channel_accounts row (fail-closed skip + log when
+ * nothing matches) → WhatsApp/YCloud events run the same shared app
+ * pipeline as /api/whatsapp/webhook; events on other channels get passive
+ * persistence (conversation + message) or a structured ack log when no
+ * persistence table exists for the kind.
  *
  * GET verification stays provider-specific (YCloud's ?token echo lives on
  * /api/whatsapp/webhook); there is no generic GET handshake here.
@@ -36,7 +45,21 @@ export async function POST(
   }
   const provider = getProvider(providerParam as ProviderId);
 
-  const rawBody = await request.text();
+  // Bound unauthenticated work BEFORE buffering the body (F8): per-IP rate
+  // limit inside a per-provider bucket, then a declared/actual size reject.
+  const rate = await checkRateLimit(
+    `webhook:${provider.id}:${clientIpFromRequest(request)}`,
+    { bucket: `webhook:${provider.id}`, limit: 120, bucketLimit: 600 }
+  );
+  if (!rate.success) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
+
+  const bounded = await readBoundedBody(request);
+  if (!bounded.ok) {
+    return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+  }
+  const rawBody = bounded.rawBody;
 
   const secret = await resolveWebhookSecret(provider.id);
   if (!secret) {
@@ -50,12 +73,21 @@ export async function POST(
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
-  const events = provider.parseWebhook({ headers, rawBody });
-  if (events.length === 0) {
+  const parsed = provider.parseWebhook({ headers, rawBody });
+  if (parsed.length === 0) {
     // Same contract as /api/whatsapp/webhook: a signed but non-JSON body
     // throws here (unhandled → 500); valid JSON that isn't an envelope acks.
     JSON.parse(rawBody);
     return NextResponse.json({ ok: true }, { status: 200 });
+  }
+
+  // Cap per-envelope event work (F8) — excess events are dropped with a
+  // warning; re-delivering the same envelope can't save them, so we still ack.
+  const events = parsed.slice(0, MAX_WEBHOOK_EVENTS);
+  if (events.length < parsed.length) {
+    console.warn(
+      `[ingress] ${provider.id} envelope carried ${parsed.length} events — capped at ${MAX_WEBHOOK_EVENTS}`
+    );
   }
 
   const statuses: number[] = [];
@@ -82,7 +114,7 @@ export async function POST(
   }
   const aggregate = aggregateWebhookStatuses(statuses);
   return NextResponse.json(
-    { ok: aggregate.ok, processed: events.length },
+    { ok: aggregate.ok, processed: statuses.length },
     { status: aggregate.status }
   );
 }

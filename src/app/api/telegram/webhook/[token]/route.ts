@@ -15,6 +15,7 @@ import {
 } from "@/lib/idempotency";
 import { createCorrelationId, createLogger, logRequestReceived } from "@/lib/logger";
 import { checkRateLimit, clientIpFromRequest, getRateLimitHeaders } from "@/lib/infra/rate-limit";
+import { readBoundedBody } from "@/lib/infra/webhook-guard";
 import {
   findOrCreateConversation,
   insertMessage,
@@ -75,8 +76,23 @@ export async function POST(
       );
     }
 
-    // ── Parsear el update de Telegram ──
-    const update: TelegramUpdate = await request.json();
+    // ── Parsear el update de Telegram — body bounded before reading (F8) ──
+    const bounded = await readBoundedBody(request, 64 * 1024);
+    if (!bounded.ok) {
+      return NextResponse.json(
+        { ok: false, error: "Payload too large" },
+        { status: 413 }
+      );
+    }
+    let update: TelegramUpdate;
+    try {
+      update = JSON.parse(bounded.rawBody);
+    } catch {
+      return NextResponse.json(
+        { ok: false, error: "Invalid payload" },
+        { status: 400 }
+      );
+    }
 
     // ── Process message: text or media ──
     const message = update.message;

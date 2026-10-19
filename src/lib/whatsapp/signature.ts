@@ -11,6 +11,27 @@
 import { createHmac, timingSafeEqual } from "crypto";
 
 /**
+ * Clock-skew allowance for FUTURE timestamps, in seconds. The replay window
+ * is asymmetric: provider clocks can legitimately drift a few seconds ahead
+ * of ours, but accepting a timestamp far in the future hands a captured
+ * signature a long validity window.
+ */
+export const YCLOUD_MAX_FUTURE_SKEW_SEC = 30;
+
+/**
+ * Timestamp acceptance window: [now - maxAgeSec, now + YCLOUD_MAX_FUTURE_SKEW_SEC].
+ * Exported so the provider's failure classifier can mirror the same bounds.
+ */
+export function ycloudTimestampInWindow(
+  timestampSec: number,
+  maxAgeSec = 300,
+  nowSec = Date.now() / 1000
+): boolean {
+  if (timestampSec > nowSec + YCLOUD_MAX_FUTURE_SKEW_SEC) return false;
+  return nowSec - timestampSec <= maxAgeSec;
+}
+
+/**
  * Parsea el header `ycloud-signature` y extrae timestamp + firma.
  */
 function parseSignatureHeader(header: string): {
@@ -54,9 +75,9 @@ export function verifyYCloudSignature(
   const timestamp = parseInt(parsed.timestamp, 10);
   if (isNaN(timestamp)) return false;
 
-  // Verificar que el timestamp no sea muy viejo (anti-replay)
-  const age = Math.abs(Date.now() / 1000 - timestamp);
-  if (age > maxAgeSec) return false;
+  // Anti-replay window [now-300s, now+30s] — the previous Math.abs check
+  // accepted future timestamps up to 300s out, extending the replay window.
+  if (!ycloudTimestampInWindow(timestamp, maxAgeSec)) return false;
 
   // El payload firmado es: `${timestamp}.${rawBody}`
   const signedPayload = `${parsed.timestamp}.${rawBody}`;
