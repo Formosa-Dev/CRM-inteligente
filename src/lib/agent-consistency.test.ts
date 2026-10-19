@@ -1256,8 +1256,9 @@ test("S15 operator sends resolve the conversation's channel account", () => {
   assert.match(router, /not resolvable for conversation/);
 
   // The echo→override flow attributes the business-side sender to a
-  // channel_accounts row before creating the conversation.
-  const route = readFileSync("src/app/api/whatsapp/webhook/route.ts", "utf8");
+  // channel_accounts row before creating the conversation. (S12 moved the
+  // webhook route's app logic into the shared inbound pipeline.)
+  const route = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
   assert.match(route, /matchSenderToChannelAccount\("whatsapp"/);
   assert.match(route, /senderAddress: botPhone/);
   assert.match(route, /providerAccountId: event\.providerAccountId/);
