@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConversationSidebar } from "@/components/messages/conversation-sidebar";
 import { ChatPanel } from "@/components/messages/chat-panel";
@@ -12,6 +13,11 @@ import {
   useMessages,
   useSendReply,
 } from "@/lib/conversations/queries";
+import {
+  normalizeAccountParam,
+  normalizeChannelParam,
+  type ChannelAccountOption,
+} from "@/lib/conversations/filters";
 import { toggleHumanOverride } from "./actions";
 import type { ConversationSummary } from "@/types/chat";
 
@@ -24,14 +30,58 @@ const queryClient = new QueryClient({
 interface Props {
   initialConversations: ConversationSummary[];
   sellerPhones: string[];
+  channelAccounts: ChannelAccountOption[];
 }
 
-function ConversationsInboxInner({ initialConversations, sellerPhones }: Props) {
+function ConversationsInboxInner({ initialConversations, sellerPhones, channelAccounts }: Props) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [currentView, setCurrentView] = useState<"list" | "chat" | "context">("list");
   const [orderModal, setOrderModal] = useState<{ phone: string; name: string } | null>(null);
 
-  const { data: convData } = useConversations({ page: 1 });
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Channel/account filters live in the URL so a filtered inbox is shareable.
+  const channelFilter = normalizeChannelParam(searchParams.get("channel"));
+  const accountFilter = normalizeAccountParam(searchParams.get("account"));
+  const page = Math.max(
+    1,
+    Number.parseInt(searchParams.get("page") ?? "1", 10) || 1
+  );
+
+  const { data: convData } = useConversations({
+    page,
+    channel: channelFilter,
+    account:
+      accountFilter === "all" || accountFilter === "unassigned"
+        ? accountFilter
+        : String(accountFilter),
+  });
+
+  const applyFilter = useCallback(
+    (key: "channel" | "account", value: string) => {
+      const next = new URLSearchParams(searchParams.toString());
+      // Canonical URLs: defaults stay out of the query string.
+      if (value === "all" || (key === "channel" && value === "whatsapp")) {
+        next.delete(key);
+      } else {
+        next.set(key, value);
+      }
+      next.delete("page");
+      const qs = next.toString();
+      router.replace(qs ? `/admin/conversations?${qs}` : "/admin/conversations");
+    },
+    [router, searchParams]
+  );
+
+  const handleChannelFilterChange = useCallback(
+    (value: string) => applyFilter("channel", value),
+    [applyFilter]
+  );
+  const handleAccountFilterChange = useCallback(
+    (value: string) => applyFilter("account", value),
+    [applyFilter]
+  );
   const { data: messages = [] } = useMessages(selectedId);
   const sendMutation = useSendReply(selectedId);
 
@@ -94,6 +144,11 @@ function ConversationsInboxInner({ initialConversations, sellerPhones }: Props) 
           activeId={selectedId}
           onSelect={handleSelect}
           sellerPhones={sellerPhones}
+          channelAccounts={channelAccounts}
+          channelFilter={channelFilter ?? "whatsapp"}
+          accountFilter={String(accountFilter)}
+          onChannelFilterChange={handleChannelFilterChange}
+          onAccountFilterChange={handleAccountFilterChange}
         />
       </div>
 
@@ -152,7 +207,9 @@ function ConversationsInboxInner({ initialConversations, sellerPhones }: Props) 
 export function ConversationsInbox(props: Props) {
   return (
     <QueryClientProvider client={queryClient}>
-      <ConversationsInboxInner {...props} />
+      <Suspense fallback={null}>
+        <ConversationsInboxInner {...props} />
+      </Suspense>
     </QueryClientProvider>
   );
 }

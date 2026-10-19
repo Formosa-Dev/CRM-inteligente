@@ -42,7 +42,7 @@ export interface ConversationSummary {
   humanOverrideUntil?: string | null;
 }
 
-export type ConversationFilter = "all" | "whatsapp" | "sellers" | "telegram" | "active" | "closed";
+export type ConversationFilter = "all" | "sellers" | "active" | "closed";
 
 // ─── Customer Profile (para context panel) ───────────────────────────────
 

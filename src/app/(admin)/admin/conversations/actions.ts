@@ -3,9 +3,10 @@
 import { auth } from "@/auth";
 import { db } from "@/db";
 import { conversations, chatMessages, leads, orders } from "@/db/schema";
-import { eq, desc, and, ilike, or, sql, count } from "drizzle-orm";
+import { eq, desc, sql, count } from "drizzle-orm";
 import { resolveClientNamesBatch } from "@/lib/lead-utils";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { conversationListWhere } from "@/lib/conversations/filters";
 
 const PAGE_SIZE = 50;
 
@@ -21,6 +22,7 @@ async function requireSession() {
 export type GetConversationsParams = {
   page?: number;
   channel?: string;
+  account?: string;
   status?: string;
   search?: string;
 };
@@ -35,40 +37,17 @@ export type GetConversationsResult = {
 // ─── Actions ──────────────────────────────────────────────────────────────────
 
 /**
- * Obtiene conversaciones paginadas con filtros opcionales por canal, estado y búsqueda.
+ * Obtiene conversaciones paginadas con filtros opcionales por canal, cuenta
+ * conectada, estado y búsqueda.
  */
 export async function getConversations(
   params: GetConversationsParams
 ): Promise<GetConversationsResult> {
   await requireSession();
-  const { page = 1, channel, status, search } = params;
+  const { page = 1, channel, account, status, search } = params;
   const offset = (page - 1) * PAGE_SIZE;
 
-  const conditions = [];
-
-  if (channel === "telegram") {
-    conditions.push(eq(conversations.channel, "telegram"));
-  } else if (channel && channel !== "all") {
-    conditions.push(eq(conversations.channel, channel as "whatsapp" | "telegram"));
-  } else {
-    // By default, exclude Telegram (internal admin channel)
-    conditions.push(eq(conversations.channel, "whatsapp"));
-  }
-  if (status && status !== "all") {
-    conditions.push(
-      eq(conversations.status, status as "active" | "closed" | "archived")
-    );
-  }
-  if (search) {
-    conditions.push(
-      or(
-        ilike(conversations.customerName, `%${search}%`),
-        ilike(conversations.customerPhone, `%${search}%`)
-      )
-    );
-  }
-
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const where = conversationListWhere({ channel, account, status, search });
 
   // COALESCE en SQL: ordena por lastMessageAt si existe, sino por updatedAt
   const orderExpr = sql`COALESCE(${conversations.lastMessageAt}, ${conversations.updatedAt}) DESC`;
