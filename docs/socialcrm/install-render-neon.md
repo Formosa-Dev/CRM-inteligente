@@ -2,8 +2,13 @@
 
 Golden path for a self-hosted single install: one Render web service (from the
 `render.yaml` blueprint in this repo) backed by an external Neon Postgres. No
-repo commit access or app shell required. End result: `/setup` → first admin →
-`/admin/agent` → wired WhatsApp webhook → verified with a real message.
+repo commit access required — but migrations and the first admin are run from
+a **local clone** (or a Render Shell on paid plans), so you need a machine
+with Node 20 and git.
+
+End result: schema migrated → first admin via `npm run db:seed` →
+`/admin/agent` configured → wired WhatsApp webhook → verified with a real
+message.
 
 **Neon is required, not optional.** `src/db/index.ts` uses the `neon-http`
 driver — a Render Postgres, RDS, or Supabase URL will not connect (roadmap G4).
@@ -12,7 +17,10 @@ driver — a Render Postgres, RDS, or Supabase URL will not connect (roadmap G4)
 
 - A **Render** account.
 - A **Neon** account (free tier works).
-- A git provider fork/clone of this repo Render can read.
+- A git provider fork/clone of this repo Render can read (see
+  `docs/socialcrm/implementer-onboarding.md` for the fork flow).
+- A **local clone** with Node 20 + `npm install` to run `db:migrate` and
+  `db:seed`. Alternative: the Render Shell of the web service (paid plans).
 - Optional, later or never: **Upstash** (durable queue/rate-limit),
   **Cloudinary** (image uploads), **YCloud** (WhatsApp), Telegram, Meta, and an
   OpenAI-compatible AI provider key — all settable from `/admin/agent`.
@@ -20,33 +28,42 @@ driver — a Render Postgres, RDS, or Supabase URL will not connect (roadmap G4)
 ## Quick path
 
 1. **Neon** — create a project in a US-East region (the blueprint deploys the
-   web service in `virginia`). Copy the **pooled** connection string
-   (`postgresql://…-pooler.…neon.tech/…?sslmode=require`).
-2. **Render** — Dashboard → **New → Blueprint** → pick this repo. Render reads
+   web service in `virginia`). Copy **both** connection strings (§1): the
+   **pooled** one (`-pooler.` in the host) for `DATABASE_URL`, and the
+   **direct** one for migrations.
+2. **Render** — Dashboard → **New → Blueprint** → pick your fork. Render reads
    `render.yaml` and creates 4 services: `socialcrm` (web) +
    `socialcrm-cron-followup`, `socialcrm-cron-reconcile-scan`,
    `socialcrm-cron-reconcile-sweep`. Fill the prompted env vars (table below)
    → **Apply**.
-3. **Migrate** — while the first build runs, apply the schema from any machine
-   with the Neon URL (details in §3). The health check stays 500 until the
-   `users` table exists, so doing this during the first build makes the deploy
-   go green on the first try.
-4. **/setup** — open `https://<app>.onrender.com/setup`, create the first
-   admin. The page self-locks once a user exists.
+3. **Migrate** — while the first build runs, run `npm run db:migrate` from a
+   local clone against the **direct** Neon URL (details in §3). The health
+   check stays 500 until the `users` table exists, so doing this during the
+   first build makes the deploy go green on the first try. If the deploy was
+   already cancelled, see "First-deploy recovery" (§4).
+4. **First admin** — `ADMIN_EMAIL=… ADMIN_PASSWORD=… npm run db:seed` from the
+   same local clone (§5). This is the supported path today; the `/setup` UI
+   flow depends on a bootstrap fix that is still in flight.
 5. **/admin/agent** — log in and configure business identity, AI provider,
-   YCloud credentials, Cloudinary (sections 4–5).
+   YCloud credentials, Cloudinary (§6).
 6. **YCloud console** — paste `https://<app>.onrender.com/api/whatsapp/webhook`
    as the webhook URL and set the same webhook secret you entered in
-   `/admin/agent` (§6).
-7. **Verify** — run the post-install checklist (§7).
+   `/admin/agent` (§7).
+7. **Verify** — run the post-install checklist (§8).
 
 ## 1. Provision Neon
 
 1. Neon console → **New project** → pick a region near `virginia` (e.g.
    `us-east-1`) so query latency stays low.
 2. On the project dashboard, copy the connection string for the default
-   database — prefer the **pooled** host (`-pooler.` in the hostname).
-3. Keep it handy: it goes into the `DATABASE_URL` prompt at blueprint deploy.
+   database. Neon shows the **pooled** endpoint by default — its hostname
+   contains `-pooler.`. The **direct** endpoint is the same string without
+   `-pooler` in the host.
+3. You need both:
+   - **Pooled** (`…-pooler.…`) → `DATABASE_URL` at blueprint deploy (runtime).
+   - **Direct** (no `-pooler`) → migrations (§3). Pooled connections run in
+     transaction mode and do not support the session-level state migration
+     tooling expects — use direct for schema work, pooled for the app.
 
 > No `databases:` entry exists in `render.yaml` by design — Render Postgres is
 > not supported by the DB driver in use.
@@ -60,13 +77,13 @@ Dashboard → **New → Blueprint** → select the repo (Render detects
 
 | Var | Required | Purpose | Where to get it |
 |---|---|---|---|
-| `DATABASE_URL` | ✅ | Postgres connection (Neon, neon-http driver) | Neon dashboard → pooled connection string |
+| `DATABASE_URL` | ✅ | Postgres connection (Neon, neon-http driver) | Neon dashboard → **pooled** connection string |
 | `AUTH_SECRET` | ✅ | NextAuth sessions + AES-256-GCM key for all stored credentials + attribution signing | `openssl rand -base64 32` |
 | `AUTH_URL` | ✅ | Auth callbacks + origin checks | `https://<app>.onrender.com` (or your custom domain) |
 | `NEXT_PUBLIC_APP_URL` | ✅ | Checkout origin allowlist + generated links | Same public URL as `AUTH_URL` |
 | `NODE_VERSION` | preset | Node runtime version | `20` (blueprint sets it — repo has no `engines`/`.nvmrc`) |
 | `NODE_OPTIONS` | preset | Build heap headroom | `--max-old-space-size=8192` (blueprint sets it) |
-| `CRON_SECRET` | auto | Gates `GET /api/cron/*` | Generated by the blueprint; cron services copy it |
+| `CRON_SECRET` | auto | Gates `GET /api/cron/*` | Generated by the blueprint; cron services copy it and URL-encode it when calling |
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | optional | Durable agent buffer, DLQ, rate-limit | Upstash console → DB → REST API section. Env-only (not UI-settable). Without it these run in-memory and reset on redeploy. |
 | `CLOUDINARY_*` (3 vars) | optional | Durable image/media uploads | Cloudinary dashboard → API keys. Also settable in `/admin/agent`. |
 | `YCLOUD_API_KEY` / `YCLOUD_WEBHOOK_SECRET` / `WHATSAPP_PHONE_NUMBER` | optional | WhatsApp provider bootstrap | YCloud console. Also settable in `/admin/agent` (DB wins). |
@@ -81,36 +98,113 @@ Leave optional prompts blank if you don't have the service yet.
 ## 3. Apply the schema (canonical step)
 
 ```bash
-DATABASE_URL="postgresql://…" npm run db:migrate   # drizzle-kit migrate
+# Use the DIRECT Neon URL (no "-pooler" in the host)
+DATABASE_URL="postgresql://…direct-host…?sslmode=require" npm run db:migrate
 ```
 
-Run it from a local clone after `npm install`, **or** from the Render Shell of
-the `socialcrm` service (paid plans), where `DATABASE_URL` is already set.
+Run it from a local clone after `npm install` — `db:migrate` wraps
+`drizzle-kit migrate` and reads `DATABASE_URL` from the environment (or
+`.env`/`.env.local` via dotenv). A Render Shell of the `socialcrm` service
+(paid plans) also works, but the env `DATABASE_URL` there is the pooled URL —
+override it with the direct one for the migration run.
 
 - `db:migrate` is the only supported path for installs and upgrades.
   **`db:push` is dev-only** — never run it against a real database.
 - Time it during/right after the first build: `/api/health` queries `users`
   and returns 500 until the tables exist.
-- **Known issue (roadmap G3):** the migration journal is damaged — a fresh-DB
-  `db:migrate` may fail on missing/mismatched entries. Until the journal is
-  repaired, apply the SQL files directly in filename order:
+- **Known issue (roadmap G3):** the migration journal is damaged — a journaled
+  entry (`0001_handy_tombstone`) has no SQL file, and an unjournaled orphan
+  (`0002_unique_phone.sql`) sits next to the journaled `0002_woozy_valkyrie`.
+  A journal-repair slice (S6) is fixing this in parallel. Until it lands,
+  `db:migrate` may fail on a fresh database — if it does, use the emergency
+  sequence below.
 
-  ```bash
-  for f in drizzle/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"; done
-  ```
+### Emergency: fresh-database-only SQL sequence
 
-## 4. First admin via /setup
+> **Use only on a database that has never had the schema applied, and only
+> while the journal is being repaired.** This is not an upgrade path — never
+> run it against a database that already contains data, and stop using it
+> once `db:migrate` works on a fresh database.
 
-Open `https://<app>.onrender.com/setup`. It creates the first admin account
-(race-safe advisory lock) and **only works while the `users` table is empty** —
-afterwards it redirects to `/login` permanently.
+Apply the journaled SQL files in journal order, skipping the missing
+`0001_handy_tombstone` and **excluding `0002_unique_phone.sql`** — it is an
+unjournaled orphan that deletes duplicate `leads`, rewrites `orders.lead_id`,
+and re-adds a unique constraint that `0002_woozy_valkyrie.sql` already adds:
 
-- If `/setup` says the tables are missing → step 3 wasn't applied yet.
-- Scripted alternative (needs a shell): `ADMIN_EMAIL=you@example.com
-  ADMIN_PASSWORD="strong-password" npm run db:seed`. No default credentials
-  are ever created.
+```bash
+for f in \
+  drizzle/0000_peaceful_chamber.sql \
+  drizzle/0002_woozy_valkyrie.sql \
+  drizzle/0003_session_memory.sql \
+  drizzle/0004_business_ai_config.sql \
+  drizzle/0005_integration_secrets.sql \
+  drizzle/0006_catalog_alcohol_empanadas.sql \
+  drizzle/0007_web_order_redirect.sql \
+  drizzle/0008_lame_lord_tyger.sql \
+  drizzle/0009_needy_pestilence.sql \
+  drizzle/0010_peaceful_rocket_racer.sql \
+  drizzle/0011_add_pizzas_category.sql \
+  drizzle/0012_drop_product_line.sql; do
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f" || exit 1
+done
+```
 
-## 5. Configure the instance — /admin/agent
+Requires the `psql` client and the **direct** Neon URL. Do **not** use a
+`drizzle/*.sql` glob — alphabetical order puts `0002_unique_phone.sql` before
+`0002_woozy_valkyrie.sql`, so it fails on `orders.lead_id` and would be
+destructive on any non-empty database.
+
+Files applied this way are not recorded in Drizzle's migrations table, so a
+later `db:migrate` may re-attempt them. The journal-repair work (S6) covers
+reconciling manually-applied state; until then treat the manual sequence as a
+one-way bootstrap for fresh databases.
+
+## 4. First-deploy recovery
+
+`/api/health` queries the `users` table and returns **500 until the schema
+exists**. Render cancels a deploy whose health check does not pass within
+roughly 15 minutes — so if §3 didn't run during the first build, the first
+deploy may show **failed/cancelled**. That is expected, not a bug:
+
+1. Apply the schema (§3) from your local clone with the direct Neon URL.
+2. In the Render dashboard → the `socialcrm` service → **Manual Deploy →
+   Deploy latest commit**.
+3. The service now passes `/api/health` and goes live.
+
+The same applies after a Neon project auto-suspends: wake it (any query does),
+then redeploy.
+
+## 5. First admin
+
+**Working path today — `npm run db:seed`.** `/setup` is currently **not
+usable**: it wraps first-admin creation in `db.transaction(...)`, and the
+`neon-http` driver has no transaction support — the action throws. A parallel
+slice (S7/G4) rewrites it without a transaction; once that lands, `/setup`
+becomes the UI path below. Do not wait on it — seed works now.
+
+From a local clone with `npm install` done:
+
+```bash
+DATABASE_URL="postgresql://…" \
+ADMIN_EMAIL=you@example.com \
+ADMIN_PASSWORD="strong-password" \
+npm run db:seed
+```
+
+- No default credentials are ever created — both vars are required, and the
+  password must be ≥ 8 chars. The insert is idempotent (`ON CONFLICT DO
+  NOTHING` on the email).
+- `DATABASE_URL` for seeding can be the pooled or direct URL — it is a plain
+  insert through the app's own driver.
+- `SEED_DEMO=1` additionally loads the demo product catalog; skip it for a
+  real install.
+
+**Once the bootstrap fix lands — `/setup`:** open
+`https://<app>.onrender.com/setup`; it creates the first admin account and
+only works while the `users` table is empty, then locks itself permanently.
+If it says the tables are missing → §3 wasn't applied yet.
+
+## 6. Configure the instance — /admin/agent
 
 Log in at `/login`, then `/admin/agent` covers the whole instance:
 
@@ -128,7 +222,7 @@ submit keeps it, `CLEAR` removes it. Values are AES-256-GCM encrypted with a
 key derived from `AUTH_SECRET` and never return to the browser. DB values take
 precedence over env vars.
 
-## 6. Wire the webhooks
+## 7. Wire the webhooks
 
 | Provider | URL to paste in the provider console | Notes |
 |---|---|---|
@@ -136,10 +230,10 @@ precedence over env vars.
 | **Telegram** | `https://<app>.onrender.com/api/telegram/webhook/<token>` | Token is shown in `/admin/telegram` (or set `TELEGRAM_WEBHOOK_TOKEN`). |
 | **Meta** | `https://<app>.onrender.com/api/meta/webhook` | Verify token = `META_WEBHOOK_VERIFY_TOKEN`. |
 
-## 7. Post-install checklist
+## 8. Post-install checklist
 
 - [ ] `curl https://<app>.onrender.com/api/health` → `200` with `"db": "connected"`
-- [ ] `/setup` → `/login` → admin session works
+- [ ] `db:seed` ran (or `/setup` once the fix lands) → `/login` → admin session works
 - [ ] Send a WhatsApp message to the YCloud number → it lands in `/admin/conversations`
 - [ ] Reply from the conversation view → the reply is actually sent
 - [ ] Upload an image in `/admin` → works (requires `CLOUDINARY_*` configured)
@@ -150,10 +244,13 @@ precedence over env vars.
 | Symptom | Cause / fix |
 |---|---|
 | Health check 500 on first deploy | Tables don't exist yet — apply §3. If it stays 500, `DATABASE_URL` is wrong, Neon is suspended, or the URL isn't the Neon endpoint (non-Neon drivers unsupported). |
-| `/setup` shows "tables missing" | `db:migrate` hasn't run — see §3. |
-| `/setup` redirects to `/login` | A user already exists — the page locked itself as designed. |
-| `db:migrate` errors on `0001_handy_tombstone` / journal mismatch | Known journal defect (G3). Use the `psql` fallback in §3. |
-| Cron runs fail with 401 | The secret the job sends ≠ the app's secret. The blueprint copies the web service's `CRON_SECRET`; if you later set a different one in `/admin/agent` (DB wins over env), update the web `CRON_SECRET` env var to match — the cron jobs inherit it. |
+| First deploy cancelled / "deploy failed" | Health check timed out (~15 min) before migrations ran. Run §3, then Manual Deploy → Deploy latest commit (§4). |
+| `/setup` errors or throws | Known defect: `neon-http` has no transaction support (G4/S7 pending). Use `db:seed` (§5). |
+| `/setup` says tables missing | `db:migrate` hasn't run — see §3. |
+| `/setup` redirects to `/login` | A user already exists — the page locked itself as designed (once the fix lands). |
+| `db:migrate` errors on `0001_handy_tombstone` / journal mismatch | Known journal defect (G3; repair in flight as S6). Use the fresh-DB-only emergency sequence in §3 — never the `drizzle/*.sql` glob. |
+| `db:migrate` or `psql` fails on the pooled URL | Pooled connections lack session state — switch to the direct (non-`-pooler`) Neon URL for migrations. |
+| Cron runs fail with 401 | The secret the job sends ≠ the app's secret. The blueprint copies the web service's `CRON_SECRET` and URL-encodes it; if you later set a different one in `/admin/agent` (DB wins over env), update the web `CRON_SECRET` env var to match — the cron jobs inherit it. |
 | Webhook 401 / signature errors | `YCLOUD_WEBHOOK_SECRET` must match the value in the YCloud console and `/admin/agent`. |
 | Service sleeps / slow first webhook | `plan: free` spins down. Upgrade the web service to `starter`. |
 | Build OOM during `next build` | Blueprint already sets `NODE_OPTIONS=--max-old-space-size=8192`; raise it or use a larger plan if it persists. |
@@ -176,5 +273,6 @@ admin/outbound media is persistent.
 
 ## Next step
 
-Provider setup details live in `/admin/agent`; upgrade and rotation runbooks
-are planned in `docs/socialcrm/self-hosted-product-roadmap.md` (Phase 5).
+Provider setup details live in `/admin/agent`; the full operator runbook is
+`docs/socialcrm/implementer-onboarding.md`. Upgrade and rotation runbooks are
+planned in `docs/socialcrm/self-hosted-product-roadmap.md` (Phase 5).
