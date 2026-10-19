@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/auth";
 import fs from "fs/promises";
 import path from "path";
 
@@ -15,6 +16,20 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ) {
+  // public/uploads only holds INBOUND customer media (WhatsApp/Telegram voice
+  // notes, photos, docs saved by saveMediaLocally) — product images go to
+  // Cloudinary. Nothing here is meant to be public: require a session.
+  // auth() throwing (no request scope, misconfigured secret) fails closed.
+  let session;
+  try {
+    session = await auth();
+  } catch {
+    session = null;
+  }
+  if (!session) {
+    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+  }
+
   const segments = (await params).path;
   if (!segments || segments.length === 0) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
