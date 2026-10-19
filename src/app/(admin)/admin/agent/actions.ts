@@ -171,10 +171,6 @@ export async function saveAgentConfig(
     whatsappZonasDelivery = [];
   }
 
-  // Debug: log de los campos clave
-  console.log("[agent-config] sellerPhoneIds raw:", formData.get("sellerPhoneIds"));
-  console.log("[agent-config] allowedPhoneIds raw:", formData.get("allowedPhoneIds"));
-
   const raw = {
     systemPrompt: formData.get("systemPrompt") || "",
     phoneNumber: formData.get("phoneNumber"),
@@ -365,8 +361,9 @@ export async function saveAgentConfig(
     revalidatePath("/admin/agent");
     return { success: true, message: "Configuración guardada" };
   } catch (e) {
+    // Detalle solo en el log del servidor — nunca DB internals al cliente.
     console.error("[agent-config] Error saving:", e);
-    return { success: false, message: `Error al guardar: ${e instanceof Error ? e.message : "desconocido"}` };
+    return { success: false, message: "Error al guardar la configuración" };
   }
 }
 
@@ -427,7 +424,7 @@ export async function copyAgentConfig(
     console.error("[agent-config] Error copying scope:", e);
     return {
       success: false,
-      message: `Error al copiar: ${e instanceof Error ? e.message : "desconocido"}`,
+      message: "Error al copiar la configuración",
     };
   }
 }
@@ -475,9 +472,10 @@ export async function testAgentConnection(scopeKey?: string): Promise<{
       message: checks.join(" · "),
     };
   } catch (e) {
+    console.error("[agent-config] testAgentConnection failed:", e);
     return {
       success: false,
-      message: `Error al leer configuración: ${e instanceof Error ? e.message : "desconocido"}`,
+      message: "Error al leer la configuración",
     };
   }
 }

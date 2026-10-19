@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { db } from "@/db";
 import { users } from "@/db/schema";
+import { findProvisionedUser } from "./oauth-allowlist";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -80,6 +81,27 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       : []),
   ],
   callbacks: {
+    // A-03: OAuth providers are open registries of identities — without a
+    // gate, any Facebook account would mint a session that passes bare
+    // auth() checks (all leads/PII, /admin pages). Admit only emails already
+    // provisioned in `users`, and attach the real id + role so the JWT
+    // session reflects the account's actual permissions.
+    async signIn({ user, account }) {
+      if (account?.provider === "credentials") return true;
+      const email = user.email;
+      if (!email) return false;
+      try {
+        const provisioned = await findProvisionedUser(email);
+        if (!provisioned) return false;
+        user.id = String(provisioned.id);
+        user.role = provisioned.role;
+        return true;
+      } catch (err) {
+        // Fail closed: a broken lookup denies the sign-in, never opens it.
+        console.error("[auth] OAuth allowlist lookup failed:", err);
+        return false;
+      }
+    },
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
