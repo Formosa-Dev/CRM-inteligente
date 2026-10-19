@@ -41,15 +41,24 @@ export function LandingProductCard({
   product: LandingProduct;
   categoryKey: string;
 }) {
-  const { addItem } = useCart();
+  const { addItem, items: cartItems } = useCart();
   const { reveal } = useEditorialMotion();
   const href = `/carta-digital?category=${categoryKey}`;
   const price = product.price;
   const canOrder =
     !product.comingSoon && price !== null && price > 0 && product.stock !== 0;
+  // stock === null means unlimited; otherwise the cart can never hold more
+  // units than the catalog can fulfill (checkout's 99 per-line cap applies too).
+  const maxQuantity =
+    product.stock == null ? 99 : Math.min(99, Math.max(0, product.stock));
+  const inCart =
+    cartItems.find(
+      (line) => line.type === "product" && line.product.id === String(product.id),
+    )?.quantity ?? 0;
+  const atMax = canOrder && inCart >= maxQuantity;
 
   function handleAdd() {
-    if (price === null || price <= 0) return;
+    if (price === null || price <= 0 || atMax) return;
     addItem(
       {
         id: String(product.id),
@@ -103,10 +112,11 @@ export function LandingProductCard({
             <button
               type="button"
               onClick={handleAdd}
-              className="btn-gold inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-wider"
+              disabled={atMax}
+              className="btn-gold inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-wider disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus size={14} aria-hidden="true" />
-              Agregar
+              {atMax ? "En tu pedido" : "Agregar"}
             </button>
           ) : (
             <span className="text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">

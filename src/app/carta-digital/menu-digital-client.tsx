@@ -49,7 +49,6 @@ function priceOf(item: Selection) {
   const value = item.type === "promo" ? item.data.customPrice : item.data.isPromo && item.data.promoPrice != null ? item.data.promoPrice : item.data.price;
   const price = Number(value); return Number.isFinite(price) && price > 0 ? price : 0;
 }
-function available(item: Selection) { return priceOf(item) > 0 && (item.type === "promo" || (!item.data.comingSoon && item.data.stock !== 0)); }
 function imageOf(item: Selection) { return item.type === "product" ? getCatalogProductImage(item.data) : item.data.imageUrl; }
 
 function QuantityControl({ quantity, onAdd, onRemove, max = 99 }: { quantity: number; onAdd: () => void; onRemove: () => void; max?: number }) {
@@ -105,13 +104,19 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
   const hasBlocked = reconciled.hasBlocked;
   const total = reconciled.total;
   const count = cartItems.reduce((sum, line) => sum + line.quantity, 0);
+  // Availability and quantity caps come from the catalog index — a promo is
+  // only orderable while every component can still be fulfilled, matching the
+  // checks the server runs in priceCheckout.
+  const entryOf = (item: Selection) => catalogIndex.get(cartKey(item.type, item.data.id)) ?? null;
+  const canOrder = (item: Selection) => entryOf(item)?.available ?? false;
+  const maxOf = (item: Selection) => entryOf(item)?.maxQuantity ?? 99;
   const quantity = (item: Selection) => cartItems.find(line => line.type === item.type && line.product.id === String(item.data.id))?.quantity ?? 0;
   function updateItem(item: Selection, delta: number) {
     const current = quantity(item);
-    const max = item.type === "product" ? Math.min(99, item.data.stock ?? 99) : 99;
+    const max = maxOf(item);
     const key = cartKey(item.type, item.data.id);
     if (delta > 0) {
-      if (!available(item) || current >= max) return;
+      if (!canOrder(item) || current >= max) return;
       addItem({ id: String(item.data.id), name: item.data.name.trim(), price: priceOf(item) }, 1, { type: item.type, imageUrl: imageOf(item), toast: false });
     } else if (current > 1) {
       updateQuantity(key, current - 1);
@@ -119,7 +124,7 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
       removeItem(key);
     }
   }
-  const controls = (item: Selection) => available(item) ? <QuantityControl quantity={quantity(item)} onAdd={() => updateItem(item, 1)} onRemove={() => updateItem(item, -1)} max={item.type === "product" ? Math.min(99, item.data.stock ?? 99) : 99} /> : <span className="menu-unavailable">{item.type === "product" && item.data.comingSoon ? "Próximamente" : priceOf(item) ? "No disponible" : "Precio a consultar"}</span>;
+  const controls = (item: Selection) => canOrder(item) ? <QuantityControl quantity={quantity(item)} onAdd={() => updateItem(item, 1)} onRemove={() => updateItem(item, -1)} max={maxOf(item)} /> : <span className="menu-unavailable">{item.type === "product" && item.data.comingSoon ? "Próximamente" : priceOf(item) ? "No disponible" : "Precio a consultar"}</span>;
   const heading = query.trim() ? "Tu búsqueda" : CATEGORIES.find(c => c.key === activeCategory)?.label ?? "La carta";
   // Hero carousel: rotates through a randomized pool of products with photos.
   // First paint is deterministic (index 0) so SSR/CSR match; the first tick
@@ -214,7 +219,7 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
             return <motion.div layout={!reduced} key={key} className="menu-cart-line" exit={{ opacity: 0, height: 0, margin: 0, paddingTop: 0, paddingBottom: 0 }} transition={{ duration: reduced ? 0 : .2 }}>
               <div className="menu-cart-thumb"><CatalogImage src={selected ? imageOf(selected) : (line.item.imageUrl ?? null)} alt={line.item.product.name} sizes="64px" /></div>
               <div className="menu-cart-line-copy"><h3>{line.item.product.name}</h3>{line.orderable ? <p>{money(line.effectivePrice * line.item.quantity)}</p> : <p>{line.status === "out_of_range" ? `Quedan ${line.entry?.maxQuantity ?? 0} disponibles` : "Ya no está disponible"}</p>}</div>
-              {line.orderable && selected ? <QuantityControl quantity={line.item.quantity} onAdd={() => updateItem(selected, 1)} onRemove={() => updateItem(selected, -1)} /> : <button type="button" style={{ flexShrink: 0, fontSize: ".68rem", letterSpacing: ".14em", textTransform: "uppercase", color: "#c8b899", borderBottom: "1px solid #8b806d", paddingBottom: ".15rem" }} onClick={() => line.status === "out_of_range" && line.entry ? updateQuantity(key, line.entry.maxQuantity) : removeItem(key)}>{line.status === "out_of_range" ? "Ajustar" : "Quitar"}</button>}
+              {line.orderable && selected ? <QuantityControl quantity={line.item.quantity} onAdd={() => updateItem(selected, 1)} onRemove={() => updateItem(selected, -1)} max={maxOf(selected)} /> : <button type="button" style={{ flexShrink: 0, fontSize: ".68rem", letterSpacing: ".14em", textTransform: "uppercase", color: "#c8b899", borderBottom: "1px solid #8b806d", paddingBottom: ".15rem" }} onClick={() => line.status === "out_of_range" && line.entry ? updateQuantity(key, line.entry.maxQuantity) : removeItem(key)}>{line.status === "out_of_range" ? "Ajustar" : "Quitar"}</button>}
             </motion.div>;
           })}</AnimatePresence></div>
           {hasBlocked && <p role="alert" className="checkout-error">Hay productos que ya no están disponibles. <button type="button" onClick={fixBlocked}>Quitarlos del pedido</button></p>}
