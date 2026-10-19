@@ -7,7 +7,7 @@ import { db } from "@/db";
 import { channelAccounts } from "@/db/schema";
 import { isChannelKind } from "@/lib/messaging/registry";
 import {
-  ZERNIO_CONNECT_STATE_COOKIE,
+  connectStateCookieName,
   fetchZernioAccount,
 } from "@/lib/messaging/providers/zernio-connect";
 
@@ -47,18 +47,25 @@ export async function GET(req: NextRequest) {
   const username = sp.get("username") ?? "";
   const state = sp.get("state") ?? "";
 
+  // Platform first: it names the per-platform state cookie below.
+  if (!isChannelKind(platform)) {
+    return backToChannels(req, { error: "connect-params" });
+  }
+
   // CSRF: the state issued by startZernioConnect must match — Zernio keeps
-  // our query string through the OAuth roundtrip. One-shot cookie.
+  // our query string through the OAuth roundtrip. One-shot cookie, keyed
+  // per platform so parallel connects don't overwrite each other.
+  const cookieName = connectStateCookieName(platform);
   const cookieStore = await cookies();
-  const expected = cookieStore.get(ZERNIO_CONNECT_STATE_COOKIE)?.value ?? "";
-  cookieStore.delete(ZERNIO_CONNECT_STATE_COOKIE);
+  const expected = cookieStore.get(cookieName)?.value ?? "";
+  cookieStore.delete(cookieName);
   const a = Buffer.from(state);
   const b = Buffer.from(expected);
   if (!expected || a.length !== b.length || !timingSafeEqual(a, b)) {
     return backToChannels(req, { error: "oauth-state" });
   }
 
-  if (!isChannelKind(platform) || !accountId) {
+  if (!accountId) {
     return backToChannels(req, { error: "connect-params" });
   }
 

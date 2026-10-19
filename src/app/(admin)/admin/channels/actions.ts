@@ -15,7 +15,7 @@ import {
   PROVIDER_IDS,
 } from "@/lib/messaging/registry";
 import {
-  ZERNIO_CONNECT_STATE_COOKIE,
+  connectStateCookieName,
   getZernioConnectUrl,
   isZernioConnectPlatform,
   registerZernioWebhook,
@@ -172,9 +172,11 @@ export async function startZernioConnect(
 
   // CSRF nonce rides inside our own redirect_url — Zernio preserves the
   // query string through the OAuth roundtrip (connecting-accounts.mdx).
+  // The cookie is keyed per platform: starting a second connect (another
+  // tab, another platform) must not clobber the first one's state.
   const state = randomBytes(16).toString("hex");
   const cookieStore = await cookies();
-  cookieStore.set(ZERNIO_CONNECT_STATE_COOKIE, state, {
+  cookieStore.set(connectStateCookieName(platform), state, {
     httpOnly: true,
     sameSite: "lax",
     secure: baseUrl.startsWith("https"),

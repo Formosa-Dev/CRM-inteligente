@@ -3,6 +3,8 @@ import test, { describe, mock } from "node:test";
 
 import {
   ZERNIO_CONNECT_PLATFORMS,
+  ZERNIO_CONNECT_STATE_COOKIE,
+  connectStateCookieName,
   getZernioConnectUrl,
   isZernioConnectPlatform,
   registerZernioWebhook,
@@ -22,6 +24,22 @@ describe("zernio-connect platform set", () => {
     assert.ok(isZernioConnectPlatform("instagram"));
     assert.ok(!isZernioConnectPlatform("telegram"));
     assert.ok(!isZernioConnectPlatform("sms"));
+  });
+});
+
+describe("connectStateCookieName", () => {
+  test("keys the state cookie per platform so parallel connects don't collide", () => {
+    assert.equal(
+      connectStateCookieName("whatsapp"),
+      `${ZERNIO_CONNECT_STATE_COOKIE}_whatsapp`
+    );
+    assert.notEqual(
+      connectStateCookieName("whatsapp"),
+      connectStateCookieName("instagram")
+    );
+    for (const p of ZERNIO_CONNECT_PLATFORMS) {
+      assert.match(connectStateCookieName(p), /^zernio_connect_state_[a-z]+$/);
+    }
   });
 });
 

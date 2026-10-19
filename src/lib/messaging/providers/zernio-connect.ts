@@ -29,6 +29,14 @@ const CONNECT_TIMEOUT_MS = 15_000;
 export const ZERNIO_CONNECT_STATE_COOKIE = "zernio_connect_state";
 
 /**
+ * Cookie name carrying the connect nonce — keyed per platform so starting
+ * a second connect (other tab, other platform) can't clobber the first.
+ */
+export function connectStateCookieName(platform: string): string {
+  return `${ZERNIO_CONNECT_STATE_COOKIE}_${platform}`;
+}
+
+/**
  * Platforms offered a one-click connect button. Telegram/Bluesky etc. are
  * credential-connect platforms (bot token), not OAuth — they stay on the
  * manual form. Reddit is OAuth-capable per the scopes table.
