@@ -3,7 +3,7 @@
 import { db } from "@/db";
 import { chatMessages, conversations } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { auth } from "@/auth";
+import { requireAdmin } from "@/lib/auth/require-admin";
 import { revalidatePath } from "next/cache";
 import {
   messenger,
@@ -29,11 +29,52 @@ export async function triggerAgentForConversation(
   conversationId: number,
   customerPhone: string
 ): Promise<{ success: boolean; message: string }> {
-  const session = await auth();
-  if (!session) return { success: false, message: "No autorizado" };
+  // Mutación con envío real de mensajes — exige rol admin, no solo sesión.
+  if (!(await requireAdmin())) {
+    return { success: false, message: "No autorizado" };
+  }
 
   try {
-    // 1. Cargar historial (últimos 20 mensajes)
+    // 1. Cargar la conversación y resolver el destinatario DESDE la fila —
+    //    el `customerPhone` que llega del cliente nunca se confía: un viewer
+    //    podría apuntar el envío a un número arbitrario (A-02).
+    const [conv] = await db
+      .select({
+        channel: conversations.channel,
+        channelAccountId: conversations.channelAccountId,
+        customerPhone: conversations.customerPhone,
+        externalUserId: conversations.externalUserId,
+        whatsappId: conversations.whatsappId,
+      })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+
+    if (!conv) {
+      return { success: false, message: "Conversación no encontrada" };
+    }
+
+    // Mismo orden de resolución que el router de envíos:
+    // customerPhone ?? externalUserId ?? whatsappId.
+    const recipientPhone =
+      conv.customerPhone ?? conv.externalUserId ?? conv.whatsappId ?? "";
+    if (!recipientPhone) {
+      return {
+        success: false,
+        message: "La conversación no tiene un destinatario resoluble",
+      };
+    }
+    if (
+      customerPhone &&
+      customerPhone.replace(/\D/g, "") !== recipientPhone.replace(/\D/g, "")
+    ) {
+      // Sin PII en logs: solo la conversación y el hecho del mismatch.
+      console.warn(
+        `[dashboard-actions] triggerAgent phone mismatch on conversation ${conversationId} — using stored recipient`
+      );
+    }
+
+    // 2. Cargar historial (últimos 20 mensajes)
     const history = await db
       .select({ role: chatMessages.role, content: chatMessages.content })
       .from(chatMessages)
@@ -45,7 +86,7 @@ export async function triggerAgentForConversation(
       return { success: false, message: "La conversación no tiene mensajes" };
     }
 
-    // 2. Mapear roles para OpenAI
+    // 3. Mapear roles para OpenAI
     const aiMessages = history.map((m) => {
       if (m.role === "system") {
         return { role: "system" as const, content: m.content };
@@ -56,26 +97,17 @@ export async function triggerAgentForConversation(
       };
     });
 
-    // 3. Resolver la identidad de envío (S15):
+    // 4. Resolver la identidad de envío (S15):
     //    - conversación con channelAccountId → esa channel_account
     //    - canal no-whatsapp sin binding → resolución por canal (fail closed)
     //    - whatsapp sin binding → la misma decisión de send-account que
     //      sendOutboundMessage: binding por teléfono, después la única cuenta
     //      activa; las credenciales legacy solo aplican a un canal realmente
     //      unprovisioned y jamás rescatan una resolución ambigua/fallida.
-    const [conv] = await db
-      .select({
-        channel: conversations.channel,
-        channelAccountId: conversations.channelAccountId,
-      })
-      .from(conversations)
-      .where(eq(conversations.id, conversationId))
-      .limit(1);
-
-    const channel = conv?.channel || "whatsapp";
+    const channel = conv.channel || "whatsapp";
     let account: ChannelAccount | undefined;
     let legacyCredentials: { apiKey: string; senderAddress: string } | undefined;
-    if (conv?.channelAccountId != null) {
+    if (conv.channelAccountId != null) {
       account = await resolveChannelAccountById(conv.channelAccountId);
       if (!account) {
         return {
@@ -92,7 +124,7 @@ export async function triggerAgentForConversation(
         };
       }
     } else {
-      const decision = await resolveUnboundWhatsAppSend(customerPhone, {
+      const decision = await resolveUnboundWhatsAppSend(recipientPhone, {
         resolveBinding: resolveConversationAccountForPhone,
         resolveDefaultAccount: resolveDefaultWhatsAppAccount,
         resolveLegacyCredentials: resolveLegacyWhatsAppCredentials,
@@ -110,30 +142,30 @@ export async function triggerAgentForConversation(
       }
     }
 
-    // 4. Ejecutar agente
+    // 5. Ejecutar agente
     const { text: responseText, pendingMedia } = await runWhatsAppAgent({
       conversationId,
-      customerPhone,
+      customerPhone: recipientPhone,
       messages: aiMessages,
     });
 
-    // 5. Guardar respuesta en DB
+    // 6. Guardar respuesta en DB
     const { id: msgId } = await insertMessage(conversationId, "assistant", responseText);
 
-    // 6. Enviar por el canal de la conversación — como la cuenta resuelta,
+    // 7. Enviar por el canal de la conversación — como la cuenta resuelta,
     //    o con las credenciales legacy cuando el canal está unprovisioned.
     const ycloudResult = await sendWhatsAppBubbles(
       account
-        ? { to: customerPhone, text: responseText, apiKey: "", from: "", channel, account }
+        ? { to: recipientPhone, text: responseText, apiKey: "", from: "", channel, account }
         : {
-            to: customerPhone,
+            to: recipientPhone,
             text: responseText,
             apiKey: legacyCredentials?.apiKey ?? "",
             from: legacyCredentials?.senderAddress ?? "",
           }
     );
 
-    // 7. Guardar wamid
+    // 8. Guardar wamid
     if (ycloudResult?.id) {
       await db
         .update(chatMessages)
@@ -141,13 +173,13 @@ export async function triggerAgentForConversation(
         .where(eq(chatMessages.id, msgId));
     }
 
-    // 8. Media pendiente
+    // 9. Media pendiente
     if (pendingMedia.length > 0) {
       for (const media of pendingMedia) {
         if (media.type === "image" || media.type === "sticker") {
           await messenger.send(
             {
-              to: customerPhone,
+              to: recipientPhone,
               type: "image",
               mediaUrl: media.url,
               text: media.caption,

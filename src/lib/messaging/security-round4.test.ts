@@ -36,7 +36,8 @@ const warns: string[] = [];
 const sends: { to: string; options: unknown }[] = [];
 Module._load = function (request, parent, isMain): unknown {
   if (request === "@/auth") {
-    return { auth: async () => ({ user: { id: "admin-1" } }) };
+    // A-02: triggerAgentForConversation now requires the admin role.
+    return { auth: async () => ({ user: { id: "admin-1", role: "admin" } }) };
   }
   if (request === "next/cache") {
     return { revalidatePath: () => undefined };
