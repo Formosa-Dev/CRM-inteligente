@@ -91,7 +91,7 @@ export function Navbar() {
             </span>
           </Link>
 
-          <nav className="hidden md:flex items-center gap-1" aria-label="Navegación principal">
+          <nav className="hidden xl:flex items-center gap-1" aria-label="Navegación principal">
             {NAV_LINKS.map((link) => (
               <Link
                 key={link.href}
@@ -136,7 +136,7 @@ export function Navbar() {
             </button>
           </div>
 
-          <div className="md:hidden">
+          <div className="xl:hidden">
             <Sheet open={open} onOpenChange={setOpen}>
               <SheetTrigger
                 className="p-2 text-foreground/80 hover:text-primary transition-colors bg-transparent border-none cursor-pointer"
