@@ -5,8 +5,6 @@ import {
   providerForChannel,
   resolveChannelAccount,
   resolveChannelAccountStrict,
-  type NormalizedInboundEvent,
-  type ProviderId,
 } from "@/lib/messaging";
 import {
   handleNormalizedEvent,
