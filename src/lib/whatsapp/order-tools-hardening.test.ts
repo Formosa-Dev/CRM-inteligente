@@ -42,6 +42,14 @@ const orderUtilsSource = readFileSync(
   new URL("../order-utils.ts", import.meta.url),
   "utf8",
 );
+const escalationSource = readFileSync(
+  new URL("./tools/escalation-email.ts", import.meta.url),
+  "utf8",
+);
+const transferSource = readFileSync(
+  new URL("./tools/transfer-to-human.ts", import.meta.url),
+  "utf8",
+);
 
 function section(source: string, startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
@@ -310,6 +318,26 @@ describe("A-26 cancel restores stock idempotently", () => {
 
   test("stale-order auto-close also restores stock", () => {
     assert.match(lifecycleSource, /restoreOrderStockBestEffort\(orderId\)/);
+  });
+});
+
+// A-43: the Telegram owner notification must run even when escalationEmail
+// is unset — email is optional/best-effort, never a gate.
+describe("A-43 Telegram escalation is not gated by email config", () => {
+  test("Telegram block runs before/independently of the email check", () => {
+    const tgIdx = escalationSource.indexOf("getTelegramConfigFromDB");
+    const emailGateIdx = escalationSource.indexOf("if (!to)");
+    assert.ok(tgIdx > 0, "telegram block exists");
+    assert.ok(emailGateIdx > tgIdx, "missing-email check must not precede the telegram send");
+    // no early return on missing email
+    assert.doesNotMatch(escalationSource, /if \(!to\) \{\s*[^}]*return/);
+    // result reflects actual telegram delivery, not just config presence
+    assert.match(escalationSource, /if \(telegramDelivered\) return \{ ok: true \}/);
+  });
+
+  test("transferToHuman does not claim owner notification on failure", () => {
+    assert.match(transferSource, /notified\.ok/);
+    assert.match(transferSource, /no está configurado — NO le confirmes/);
   });
 });
 

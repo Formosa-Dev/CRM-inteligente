@@ -81,8 +81,11 @@ export function createTransferToHumanTool(conversationId: number) {
         .map((m) => `${m.role === "user" ? "Cliente" : "Bot"}: ${m.content.slice(0, 120)}`);
 
       // 4. Send escalation notification (only on first claim — retries stay silent)
+      //    A-43: never tell the customer the owner was notified when no
+      //    notification channel actually delivered.
+      let ownerNotified = false;
       if (claims.ownerNotificationDeliverable) {
-        await sendEscalationEmail({
+        const notified = await sendEscalationEmail({
           customerName: conv?.customerName || "Desconocido",
           customerPhone: conv?.customerPhone || "N/A",
           reason,
@@ -90,9 +93,15 @@ export function createTransferToHumanTool(conversationId: number) {
           conversationSummary,
           lastMessages,
         });
+        ownerNotified = notified.ok;
+        if (!notified.ok) {
+          console.warn(`[transferToHuman] owner notification NOT delivered: ${notified.error}`);
+        }
       }
 
-      return "Te paso con el dueño, él se va a encargar personalmente. Gracias por esperar.";
+      return ownerNotified
+        ? "Te paso con el dueño, él se va a encargar personalmente. Gracias por esperar."
+        : "Anoté tu caso para que te atienda una persona del equipo. (IMPORTANTE: el canal de aviso al equipo no está configurado — NO le confirmes al cliente que el dueño ya fue notificado; decile que lo van a contactar a la brevedad.)";
     },
   });
 }
