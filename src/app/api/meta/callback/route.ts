@@ -26,7 +26,10 @@ export async function GET(req: NextRequest) {
   // admin session that started the OAuth flow. One-shot — clear it on use.
   const cookieStore = await cookies();
   const expectedState = cookieStore.get(META_OAUTH_STATE_COOKIE)?.value ?? "";
-  cookieStore.delete(META_OAUTH_STATE_COOKIE);
+  // The state cookie is set with path "/api/meta" (generateMetaOAuthState) —
+  // the delete must use the SAME path or the browser keeps the nonce alive
+  // for its whole TTL and the "one-shot" CSRF check stays replayable.
+  cookieStore.delete({ name: META_OAUTH_STATE_COOKIE, path: "/api/meta" });
   const a = Buffer.from(state ?? "");
   const b = Buffer.from(expectedState);
   if (!expectedState || a.length !== b.length || !timingSafeEqual(a, b)) {
