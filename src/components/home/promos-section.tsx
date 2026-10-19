@@ -162,7 +162,7 @@ export function PromosSection({ promos }: { promos: LandingPromo[] }) {
                             ? `${promo.name} ya está en tu pedido`
                             : `Agregar ${promo.name}`
                         }
-                        className="btn-gold inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-wider disabled:cursor-not-allowed disabled:opacity-50"
+                        className="btn-gold inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-wider disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Plus size={14} aria-hidden="true" />
                         {atMax ? "En tu pedido" : "Agregar"}
