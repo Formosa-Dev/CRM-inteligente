@@ -148,6 +148,13 @@
       "when": 1792417107340,
       "tag": "0020_dapper_zombie",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792442890957,
+      "tag": "0022_hot_path_indexes",
+      "breakpoints": true
     }
   ]
 }

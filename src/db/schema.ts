@@ -328,6 +328,8 @@ export const conversations = pgTable("conversations", {
     .where(sql`external_user_id_normalized is not null and channel_account_id is null`),
   channelIdentityLookupIdx: index("conversations_channel_identity_idx")
     .on(table.channel, table.externalUserIdNormalized),
+  channelAccountIdx: index("conversations_channel_account_idx")
+    .on(table.channel, table.channelAccountId),
 }));
 
 // Durable boundary state only: business entities remain authoritative in their own tables.
@@ -401,6 +403,10 @@ export const chatMessages = pgTable("chat_messages", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   platformMsgUq: uniqueIndex("idx_chat_messages_platform_id").on(table.platformMessageId),
+  convCreatedIdx: index("chat_messages_conversation_created_idx").on(
+    table.conversationId,
+    table.createdAt
+  ),
 }));
 
 export const leads = pgTable("leads", {
@@ -435,6 +441,8 @@ export const leads = pgTable("leads", {
   channelExternalUserUq: uniqueIndex("leads_channel_external_user_uq")
     .on(table.channel, table.externalUserId)
     .where(sql`external_user_id is not null`),
+  channelAccountIdx: index("leads_channel_account_idx").on(table.channelAccountId),
+  conversationIdx: index("leads_conversation_idx").on(table.conversationId),
 }));
 
 // ─── Lead identities (one lead ↔ N channel identities) ─────────────────────
@@ -471,7 +479,11 @@ export const attachments = pgTable("attachments", {
   description: text("description"),
   documentType: varchar("document_type", { length: 50 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => ({
+  leadIdx: index("attachments_lead_idx").on(table.leadId),
+  conversationIdx: index("attachments_conversation_idx").on(table.conversationId),
+  messageIdx: index("attachments_message_idx").on(table.messageId),
+}));
 
 // ─── Orders / Kitchen ──────────────────────────────────────────────────────────
 
@@ -510,7 +522,15 @@ export const orders = pgTable("orders", {
     .defaultNow(),
   deliveredAt: timestamp("delivered_at", { withTimezone: true }),
   followupSent: boolean("followup_sent").notNull().default(false),
-});
+}, (table) => ({
+  phoneNumberIdx: index("orders_phone_number_idx").on(table.phoneNumber),
+  leadIdIdx: index("orders_lead_id_idx").on(table.leadId),
+  followupDueIdx: index("orders_followup_due_idx")
+    .on(table.deliveredAt)
+    .where(sql`status = 'delivered' AND followup_sent = false`),
+  statusCreatedIdx: index("orders_status_created_idx").on(table.status, table.createdAt),
+  createdIdx: index("orders_created_idx").on(table.createdAt),
+}));
 
 // ─── Order Context (items temporales del pedido actual) ─────────────────────────
 
@@ -528,7 +548,10 @@ export const orderContextItems = pgTable("order_context_items", {
   status: orderContextEnum("status").notNull().default("active"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-});
+}, (table) => ({
+  convStatusIdx: index("order_context_items_conversation_status_idx")
+    .on(table.conversationId, table.status),
+}));
 
 // ─── Addresses (ubicaciones guardadas de clientes) ──────────────────────────────
 
