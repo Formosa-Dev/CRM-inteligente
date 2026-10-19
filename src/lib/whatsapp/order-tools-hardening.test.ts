@@ -50,6 +50,14 @@ const transferSource = readFileSync(
   new URL("./tools/transfer-to-human.ts", import.meta.url),
   "utf8",
 );
+const antiLoopSource = readFileSync(
+  new URL("./anti-loop.ts", import.meta.url),
+  "utf8",
+);
+const casSource = readFileSync(
+  new URL("./conversation-metadata.ts", import.meta.url),
+  "utf8",
+);
 
 function section(source: string, startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
@@ -338,6 +346,32 @@ describe("A-43 Telegram escalation is not gated by email config", () => {
   test("transferToHuman does not claim owner notification on failure", () => {
     assert.match(transferSource, /notified\.ok/);
     assert.match(transferSource, /no está configurado — NO le confirmes/);
+  });
+});
+
+// A-48: conversations.conversation_metadata was written by unconditional
+// read-modify-write in three places — concurrent writers silently dropped
+// each other's fields. All writes now go through an optimistic CAS on the
+// jsonb value with bounded retry.
+describe("A-48 conversation_metadata writes are CAS-guarded", () => {
+  test("the CAS helper guards on the previous jsonb value and retries", () => {
+    assert.match(casSource, /IS NOT DISTINCT FROM/);
+    assert.match(casSource, /METADATA_CAS_MAX_RETRIES/);
+    assert.match(casSource, /for \(let attempt = 0; attempt <= METADATA_CAS_MAX_RETRIES/);
+  });
+
+  test("anti-loop and lifecycle write metadata only through the CAS helper", () => {
+    for (const [name, src] of [
+      ["anti-loop", antiLoopSource],
+      ["order-lifecycle", lifecycleSource],
+    ] as const) {
+      assert.match(src, /updateConversationMetadataCAS\(/, `${name} must use the CAS helper`);
+      assert.doesNotMatch(
+        src,
+        /\.set\(\{ conversationMetadata:/,
+        `${name} must not write metadata with an unconditional update`,
+      );
+    }
   });
 });
 
