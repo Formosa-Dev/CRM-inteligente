@@ -82,6 +82,7 @@ function OrderCard({
   const [notifying, setNotifying] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const statusCfg = STATUSES[order.status] ?? STATUSES.pending;
   const typeBadge = orderTypeBadge(order.orderType);
@@ -103,7 +104,10 @@ function OrderCard({
     setChanging(true);
     const result = await updateOrderStatus(order.id, "cancelled");
     notifyResult(result);
-    if (result.success) onStatusChange(order.id, "cancelled");
+    if (result.success) {
+      setConfirmCancel(false);
+      onStatusChange(order.id, "cancelled");
+    }
     setChanging(false);
   }, [order.id, onStatusChange]);
 
@@ -240,18 +244,44 @@ function OrderCard({
             </Button>
           )}
           {order.status === "pending" && (
-            <Button
-              type="button"
-              size="sm"
-              disabled={changing}
-              onClick={(e) => { e.stopPropagation(); handleCancel(); }}
-              variant="ghost"
-              className="h-8 sm:h-7 w-8 sm:w-7 text-xs flex items-center justify-center text-red-400/50 hover:text-red-400"
-              title="Cancelar pedido"
-              aria-label="Cancelar pedido"
-            >
-              <X size={14} aria-hidden="true" />
-            </Button>
+            confirmCancel ? (
+              <div className="flex gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={changing}
+                  onClick={(e) => { e.stopPropagation(); handleCancel(); }}
+                  className="h-8 sm:h-7 text-xs px-2.5 sm:px-2 bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                  title="Cancelar pedido — notifica al cliente por WhatsApp"
+                >
+                  {changing ? "..." : "Cancelar"}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={(e) => { e.stopPropagation(); setConfirmCancel(false); }}
+                  variant="ghost"
+                  className="h-8 sm:h-7 text-xs px-2 text-foreground/30"
+                  title="No cancelar"
+                  aria-label="No cancelar el pedido"
+                >
+                  <X size={13} aria-hidden="true" />
+                </Button>
+              </div>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                disabled={changing}
+                onClick={(e) => { e.stopPropagation(); setConfirmCancel(true); }}
+                variant="ghost"
+                className="h-8 sm:h-7 w-8 sm:w-7 text-xs flex items-center justify-center text-red-400/50 hover:text-red-400"
+                title="Cancelar pedido — notifica al cliente por WhatsApp"
+                aria-label="Cancelar pedido"
+              >
+                <X size={14} aria-hidden="true" />
+              </Button>
+            )
           )}
           {/* Delete button - visible on delivered/cancelled or always with confirm */}
           {confirmDelete ? (
