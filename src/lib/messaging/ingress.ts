@@ -46,6 +46,8 @@ import {
   resolveChannelAccount,
   resolveChannelAccountStrict,
 } from "./accounts";
+import { MAX_WEBHOOK_EVENTS } from "@/lib/infra/webhook-guard";
+
 import { persistChannelEvent } from "./channel-events";
 import { classifyError } from "./errors";
 import { channelForProvider, isChannelKind } from "./registry";
@@ -84,6 +86,104 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Per-account signature verification (F7). One install-wide provider secret
+ * alone lets a secret holder forge events naming ANOTHER provisioned account
+ * — a cross-account injection inside the same provider. The envelope is
+ * parsed and each event's channel account resolved BEFORE processing, so the
+ * signature is checked against the secret the named account actually owns:
+ * an event bound to a real account with its own `credentials.webhookSecret`
+ * is processed only when THAT secret verifies; events resolving to the
+ * secret-less legacy placeholder (or no account at all) keep the
+ * install-wide provider secret as their expected signer. Nothing is
+ * processed while unresolved — a resolution failure propagates so the route
+ * stays retryable, never an acked drop.
+ */
+export type VerifiedIngress =
+  | { kind: "unauthorized" }
+  /** Signature verified but the body parses to no events (see route contract). */
+  | { kind: "empty" }
+  | {
+      kind: "ok";
+      events: { event: NormalizedInboundEvent; ctx: IngressContext | undefined }[];
+      /** Events dropped because no secret they may be signed with verified. */
+      rejected: number;
+    };
+
+export async function verifyAndResolveEvents(
+  provider: MessagingProvider,
+  input: { headers: Record<string, string>; rawBody: string }
+): Promise<VerifiedIngress> {
+  const providerSecret = await resolveWebhookSecret(provider.id);
+  const providerVerified =
+    providerSecret.length > 0 &&
+    provider.verifyWebhook({ ...input, secret: providerSecret }).ok;
+
+  const parsed = provider.parseWebhook(input);
+  if (parsed.length === 0) {
+    return providerVerified ? { kind: "empty" } : { kind: "unauthorized" };
+  }
+
+  // Cap BEFORE resolution — each event's account lookup costs a query, so an
+  // over-stuffed envelope must not fan out into unbounded DB work (F8).
+  // Excess events are dropped with a warning: re-delivering the same signed
+  // envelope can't save them, so the route still acks.
+  const events = parsed.slice(0, MAX_WEBHOOK_EVENTS);
+  if (events.length < parsed.length) {
+    console.warn(
+      `[ingress] ${provider.id} envelope carried ${parsed.length} events — ` +
+        `capped at ${MAX_WEBHOOK_EVENTS}`
+    );
+  }
+
+  // Expected signer per event: the account's own webhook secret when the
+  // account carries one, else the provider-level secret.
+  const expectedSecret = (ctx: IngressContext | undefined): string =>
+    ctx?.account.credentials.webhookSecret || providerSecret;
+
+  const resolved: { event: NormalizedInboundEvent; ctx: IngressContext | undefined }[] = [];
+  try {
+    for (const event of events) {
+      resolved.push({
+        event,
+        ctx: await resolveIngressContext(provider, event),
+      });
+    }
+  } catch (error) {
+    // Verified provider signature but account resolution is down → retryable
+    // (drop nothing). An UNVERIFIED signature whose account secrets can't be
+    // enumerated is simply unauthenticated junk — reject it instead of
+    // paying a retryable response for traffic that was never signed.
+    if (
+      error instanceof ChannelAccountResolutionError &&
+      !providerVerified
+    ) {
+      return { kind: "unauthorized" };
+    }
+    throw error;
+  }
+
+  const verified = new Set<string>();
+  if (providerVerified) verified.add(providerSecret);
+  for (const secret of new Set(resolved.map((r) => expectedSecret(r.ctx)))) {
+    if (secret && !verified.has(secret)) {
+      if (provider.verifyWebhook({ ...input, secret }).ok) verified.add(secret);
+    }
+  }
+
+  const accepted = resolved.filter((r) => verified.has(expectedSecret(r.ctx)));
+  if (accepted.length === 0) return { kind: "unauthorized" };
+
+  const rejected = resolved.length - accepted.length;
+  if (rejected > 0) {
+    console.warn(
+      `[ingress] ${provider.id} — dropped ${rejected}/${resolved.length} events: ` +
+        `no verified secret covers the account they name (cross-account forgery guard)`
+    );
+  }
+  return { kind: "ok", events: accepted, rejected };
 }
 
 /**
