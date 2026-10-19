@@ -134,7 +134,7 @@ export function PromosSection({ promos }: { promos: LandingPromo[] }) {
                   </p>
                 )}
                 {promo.items.length > 0 && (
-                  <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-foreground/45">
+                  <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-foreground/50">
                     {promo.items.map((item) => (
                       <li key={`${promo.id}-${item.productId}`}>
                         <span className="tabular-nums text-foreground/70">
