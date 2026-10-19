@@ -7,7 +7,6 @@ import {
   analyzeTone,
   argentinaDayWindow,
   buildGuidanceProposal,
-  classifyOrder,
   normalizeGuidanceKey,
   redactPII,
   summarizeOutcomes,
