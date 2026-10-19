@@ -73,7 +73,7 @@ Fresh database (new install / ephemeral Neon branch):
 DATABASE_URL=... npm run db:migrate   # drizzle-kit migrate
 ```
 
-Replays `0000` → `0012` and produces exactly the schema in
+Replays `0000` → `0017` and produces exactly the schema in
 `src/db/schema.ts`. The app never migrates at boot (`src/db/index.ts` is a
 lazy query proxy); migration is always an ops step.
 
@@ -155,6 +155,12 @@ Then `npm run db:migrate` is a no-op until the next generated migration.
 - A database that ran *part* of the old chain but is not at the schema
   end-state has no automated path: reconcile to `src/db/schema.ts` manually,
   then seed per §4.
+- `0015_account_aware_conversations.sql` aborts (before DDL) when existing
+  conversations collide under `+/digits` canonicalization; resolve the listed
+  duplicates and re-run `db:migrate`.
+- `0016_account_config_cascade.sql` replaces the unsafe `SET NULL` FK with
+  `CASCADE` (account deletion removes its scoped config row).
+- `0017_channel_events.sql` adds durable, idempotent status/lifecycle events.
 - `src/lib/agent-consistency.test.ts` reads two migration files by name
   (`0003_session_memory.sql`, `0010_peaceful_rocket_racer.sql`) — future
   migration cleanup must keep those files or update the test (owned outside

@@ -71,5 +71,7 @@ creates a row; only save/copy does.
   account binding, but no UI sets it yet (account onboarding, S16).
 - `sendOutboundMessage` telegram branch keeps install-global bot creds (single
   internal bot by design).
-- Deleting a `channel_accounts` row detaches its config (`SET NULL`); a
-  detached row with `channel` set becomes channel-scoped.
+- Deleting a `channel_accounts` row now cascades its scoped config row
+  (`ON DELETE CASCADE`, migration `0016`); the old `SET NULL` could collide
+  with the channel-scope partial unique index. Runtime scope consumption and
+  fail-closed resolution are documented in `security-remediation.md`.
