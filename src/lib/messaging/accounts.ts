@@ -56,11 +56,27 @@ function toAccountStatus(value: string): ChannelAccount["status"] {
   return value === "disconnected" || value === "error" ? value : "active";
 }
 
-function credentialsFromEnv(ref: string): ChannelAccount["credentials"] {
+/**
+ * `env:PREFIX(*)` resolves API_KEY/ACCESS_TOKEN/WEBHOOK_SECRET from the
+ * environment. A ref that yields no send credential at all is a
+ * misconfigured account — fail closed instead of materializing empty
+ * credentials that would delegate to the install-global sender downstream.
+ */
+function credentialsFromEnv(
+  row: ChannelAccountRow,
+  ref: string
+): ChannelAccount["credentials"] {
   const prefix = ref.slice("env:".length).replace(/\*$/, "");
-  const accessToken = process.env[`${prefix}ACCESS_TOKEN`];
+  const apiKey = process.env[`${prefix}API_KEY`] ?? "";
+  const accessToken = process.env[`${prefix}ACCESS_TOKEN`] ?? "";
+  if (!apiKey && !accessToken) {
+    throw new MissingScopedCredentialError(
+      row.id,
+      `credentialsRef '${ref}' resolves to empty credentials`
+    );
+  }
   return {
-    apiKey: process.env[`${prefix}API_KEY`] ?? "",
+    apiKey,
     webhookSecret: process.env[`${prefix}WEBHOOK_SECRET`] ?? "",
     ...(accessToken ? { accessToken } : {}),
   };
@@ -126,11 +142,13 @@ async function resolveCredentials(
   if (!ref || ref === "agent_config") {
     return credentialsFromAgentConfig(row);
   }
-  if (ref.startsWith("env:")) return credentialsFromEnv(ref);
-  console.warn(
-    `[messaging] channel_accounts #${row.id} has unknown credentialsRef '${ref}' — credentials left empty`
+  if (ref.startsWith("env:")) return credentialsFromEnv(row, ref);
+  // Unknown refs (vault:, ssm:, typos) must NOT silently materialize an
+  // empty-credential account — that's a fail-open into the global sender.
+  throw new MissingScopedCredentialError(
+    row.id,
+    `unknown credentialsRef '${ref}'`
   );
-  return { apiKey: "", webhookSecret: "" };
 }
 
 async function rowToAccount(

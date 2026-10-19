@@ -719,6 +719,7 @@ export async function handleNormalizedEvent(
     const configScope: AgentConfigScope = {
       channel: effectiveCtx.channel,
       channelAccountId,
+      customerPhone: phone || undefined,
     };
     const configResolution = await resolveAgentConfigStrict(configScope);
     let config: Awaited<ReturnType<typeof resolveAgentConfig>>;

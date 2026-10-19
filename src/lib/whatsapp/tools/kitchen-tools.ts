@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { agentConfig, products } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
-import { resolveAgentConfigId } from "@/lib/agent-config-scope";
+import { resolveAgentConfigId, currentAgentConfigScope } from "@/lib/agent-config-scope";
 
 // ─── checkKitchenStatus ─────────────────────────────────────────────────────
 // Consulta si la cocina está operativa (is_cooking)
@@ -137,7 +137,10 @@ export const saveAddressTool = tool({
   execute: async ({ phone, address, mapsLink, label }) => {
     const { addresses } = await import("@/db/schema");
     const { normalizePhone } = await import("@/lib/phone-utils");
-    const cleanedPhone = normalizePhone(phone);
+    // The conversation's server-side customer phone wins over the model arg —
+    // a customer must never write an address under another phone.
+    const cleanedPhone =
+      currentAgentConfigScope().customerPhone ?? normalizePhone(phone);
 
     // Verificar si ya existe
     const [existing] = await db

@@ -433,6 +433,30 @@ function accountHasCredentials(account: ChannelAccount): boolean {
   return Boolean(account.credentials.apiKey || account.senderAddress);
 }
 
+/**
+ * Real `channel_accounts` rows materialize with a numeric string id;
+ * placeholder (`<channel>:agent-config`) and caller-resolved
+ * (`<channel>:caller-resolved`) accounts carry symbolic ids. Only the
+ * symbolic ones may delegate to the install-global senders — a real account
+ * must always send with its own scoped credentials.
+ */
+function isRealChannelAccount(account: ChannelAccount): boolean {
+  return /^\d+$/.test(account.id);
+}
+
+/**
+ * A real account with no scoped apiKey must fail closed — delegating to
+ * `src/lib/ycloud.ts` sendText/sendImage/sendDocument would silently send as
+ * the install-global sender (agent_config/env), i.e. another account.
+ */
+function scopedCredentialsFailure(account: ChannelAccount): SendResult {
+  return {
+    ok: false,
+    error: `channel account #${account.id} has no scoped ycloud apiKey — refusing global fallback`,
+    retryable: false,
+  };
+}
+
 function sendTextWithAccount(
   account: ChannelAccount,
   msg: OutboundMessage
@@ -507,7 +531,14 @@ export const ycloudProvider: MessagingProvider = {
   // caller-resolved apiKey/sender, text sends go through the folded
   // direct client above; otherwise the delegated senders keep resolving
   // agent_config → env until `channel_accounts` exists (§2.3).
+  //
+  // Real channel_accounts rows (numeric id) are the exception: they must
+  // ALWAYS send with their own scoped apiKey. An empty scoped key is a hard
+  // failure — never a delegation to the install-global senders.
   async sendMessage(account, msg) {
+    if (isRealChannelAccount(account) && !account.credentials.apiKey) {
+      return scopedCredentialsFailure(account);
+    }
     const externalId = msg.idempotencyKey; // → ycloud externalId
     switch (msg.type) {
       case "text": {

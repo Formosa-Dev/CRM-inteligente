@@ -64,14 +64,18 @@ export const suggestProductsTool = tool({
       }
     }
 
+    // The conversation's server-side customer phone wins over the model
+    // arg — history suggestions must never resolve another customer's data.
+    phone =
+      currentAgentConfigScope().customerPhone ??
+      (phone ? normalizePhone(phone) : undefined);
+
     if (!phone) {
       if (linea === "b2b") {
         return "Tenemos pan de lomito x4, prepizza x docena, pan de hamburguesa x4, pan de pancho x4. ¿Cuál te interesa y qué cantidad?";
       }
       return "Nuestros más pedidos: Bookbinder, Toro Asado y Classic Carne. ¿Querés que te recomiende algo en especial?";
     }
-
-    phone = normalizePhone(phone);
 
     // Si hay línea, filtrar pedidos por orderType
     const conditions = [eq(orders.phoneNumber, phone)];
@@ -134,7 +138,9 @@ export const getClientHistoryTool = tool({
     phone: z.string().describe("Teléfono del cliente"),
   }),
   execute: async ({ phone }) => {
-    phone = normalizePhone(phone);
+    // The conversation's server-side customer phone wins over the model
+    // arg — a customer must never fetch another lead's PII/history.
+    phone = currentAgentConfigScope().customerPhone ?? normalizePhone(phone);
     // Bound account: only the lead row owned by this account is visible, and
     // orders attribute through it. NULL scope keeps the legacy global reads.
     const scopeAccountId = currentAgentConfigScope().channelAccountId ?? null;

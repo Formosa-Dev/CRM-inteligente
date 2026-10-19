@@ -39,6 +39,7 @@ import {
   conversations,
 } from "@/db/schema";
 import { isSchemaNotReady } from "@/lib/messaging/errors";
+import { normalizePhone } from "@/lib/phone-utils";
 
 export type AgentConfigRow = typeof agentConfig.$inferSelect;
 export type AgentConfigChannel = (typeof channelEnum.enumValues)[number];
@@ -46,6 +47,14 @@ export type AgentConfigChannel = (typeof channelEnum.enumValues)[number];
 export interface AgentConfigScope {
   channel?: AgentConfigChannel | null;
   channelAccountId?: number | null;
+  /**
+   * Server-side conversation customer (canonical digits, `normalizePhone`).
+   * Set only by conversation-derived scopes — customer-facing tools MUST use
+   * it instead of model-supplied phone/orderId identity so one customer can
+   * never read or mutate another customer's objects. Internal/admin callers
+   * run without it and keep the legacy arg-driven behavior.
+   */
+  customerPhone?: string;
 }
 
 export type AgentConfigResolutionSource = "account" | "channel" | "global";
@@ -420,7 +429,11 @@ export async function scopeColumnsForInsert(
   return { channel, channelAccountId };
 }
 
-/** Derives the config scope from a conversation row (channel + account). */
+/**
+ * Derives the config scope from a conversation row (channel + account +
+ * normalized customer phone). `customerPhone` binds customer-facing tools to
+ * THIS conversation's customer — never a model-supplied phone.
+ */
 export async function resolveScopeForConversation(
   conversationId: number
 ): Promise<AgentConfigScope> {
@@ -429,6 +442,7 @@ export async function resolveScopeForConversation(
       .select({
         channel: conversations.channel,
         channelAccountId: conversations.channelAccountId,
+        customerPhone: conversations.customerPhone,
       })
       .from(conversations)
       .where(eq(conversations.id, conversationId))
@@ -437,6 +451,9 @@ export async function resolveScopeForConversation(
     return {
       channel: conv.channel ?? undefined,
       channelAccountId: conv.channelAccountId ?? undefined,
+      customerPhone: conv.customerPhone
+        ? normalizePhone(conv.customerPhone)
+        : undefined,
     };
   } catch (error) {
     if (isSchemaNotReady(error)) return {};

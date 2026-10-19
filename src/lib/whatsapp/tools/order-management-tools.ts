@@ -6,17 +6,29 @@ import { eq, and, desc } from "drizzle-orm";
 import { getStatusSemantic, isActiveStatus, getStatusNotificationMessage } from "@/lib/whatsapp/status-utils";
 import { currentAgentConfigScope } from "@/lib/agent-config-scope";
 import { isOrderVisibleToScope } from "@/lib/whatsapp/order-lifecycle";
+import { normalizePhone } from "@/lib/phone-utils";
 
-// The ambient scope carries the conversation's channelAccountId. A bound
-// scope only sees/mutates orders owned by its account's leads; NULL keeps
-// the legacy phone-global behavior. Post-fetch gating keeps the not-found
-// path identical (a foreign order is indistinguishable from a missing one).
-async function visibleOrderOrNull<T extends { id: number }>(
+// The ambient scope carries the conversation's channelAccountId AND its
+// server-side customerPhone. A bound scope only sees/mutates orders owned by
+// its account's leads; a customer-bound scope only sees ITS OWN orders —
+// model-supplied orderId/phone can never reach another customer's row. NULL
+// scope fields keep the legacy phone-global behavior (internal/admin tools).
+// Post-fetch gating keeps the not-found path identical (a foreign order is
+// indistinguishable from a missing one).
+async function visibleOrderOrNull<T extends { id: number; phoneNumber?: string | null }>(
   order: T | undefined
 ): Promise<T | undefined> {
   if (!order) return undefined;
-  const scopeAccountId = currentAgentConfigScope().channelAccountId ?? null;
-  if (!(await isOrderVisibleToScope(order.id, scopeAccountId))) return undefined;
+  const scope = currentAgentConfigScope();
+  if (!(await isOrderVisibleToScope(order.id, scope.channelAccountId ?? null))) {
+    return undefined;
+  }
+  if (
+    scope.customerPhone &&
+    normalizePhone(order.phoneNumber ?? "") !== scope.customerPhone
+  ) {
+    return undefined;
+  }
   return order;
 }
 
@@ -44,14 +56,21 @@ export const getOrderStatusTool = tool({
         .where(eq(orders.id, orderId))
         .limit(1);
       order = rows[0];
-    } else if (customerPhone) {
-      const rows = await db
-        .select()
-        .from(orders)
-        .where(eq(orders.phoneNumber, customerPhone))
-        .orderBy(desc(orders.createdAt))
-        .limit(1);
-      order = rows[0];
+    } else {
+      // The conversation's customer phone wins over the model-supplied one —
+      // a customer can only ever ask about their own last order.
+      const scopedPhone =
+        currentAgentConfigScope().customerPhone ??
+        (customerPhone ? normalizePhone(customerPhone) : undefined);
+      if (scopedPhone) {
+        const rows = await db
+          .select()
+          .from(orders)
+          .where(eq(orders.phoneNumber, scopedPhone))
+          .orderBy(desc(orders.createdAt))
+          .limit(1);
+        order = rows[0];
+      }
     }
 
     order = await visibleOrderOrNull(order);
