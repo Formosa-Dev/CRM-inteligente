@@ -25,6 +25,7 @@ import {
   resolveAgentConfig,
   resolveAgentConfigId,
 } from "@/lib/agent-config-scope";
+import { resolveDeliveryFee } from "./extended-tools";
 import { messenger, resolveChannelAccountByIdStrict } from "@/lib/messaging";
 import {
   resolveConversationAccountForPhone,
@@ -148,12 +149,11 @@ export function createCreateOrderTool(
     })).optional().describe("Items del pedido (opcional; el precio se resuelve desde la DB, nunca lo inventes)"),
     customerPhone: z.string().describe("Teléfono del cliente"),
     address: z.string().optional().describe("Dirección de entrega (si es delivery)"),
-    deliveryFee: z.number().min(0).optional().describe("Costo de delivery (0 si no aplica)"),
-    paymentStatus: z.enum(["pending", "paid"]).optional().describe("Estado de pago: pending (pendiente), paid (pagado)"),
-    paymentMethod: z.string().optional().describe("Método de pago: efectivo, alias, etc."),
+    paymentMethod: z.string().optional().describe("Método de pago declarado por el cliente: efectivo, transferencia, etc. Solo informativo — el pago queda pendiente hasta que el equipo lo confirme."),
+    paymentClaimed: z.boolean().optional().describe("true si el cliente afirma que ya pagó (ej: mandó comprobante). Registra la intención en notas; NUNCA marca el pedido como pagado."),
     notes: z.string().optional().describe("Notas adicionales del pedido"),
   }),
-  execute: async ({ customerName, orderType, items: explicitItems, customerPhone, address, deliveryFee, paymentStatus, paymentMethod, notes }) => {
+  execute: async ({ customerName, orderType, items: explicitItems, customerPhone, address, paymentMethod, paymentClaimed, notes }) => {
     if (referencedWebOrderId) return `El pedido web #${referencedWebOrderId} ya está registrado. Continuá sobre ese mismo pedido; no lo dupliques.`;
     // Bind creation to the actual conversation, never an LLM-supplied identity.
     const [conversation] = await db
@@ -288,7 +288,9 @@ export function createCreateOrderTool(
     const itemError = validateResolvedOrderItems(resolvedItems);
     if (itemError) return itemError;
     const subtotal = resolvedItems.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0);
-    const delivery = deliveryFee || 0;
+    // The delivery fee is resolved server-side from the configured zones —
+    // the model can never inject an arbitrary amount into the order total.
+    const delivery = await resolveDeliveryFee(address);
     const total = subtotal + delivery;
 
     // Find lead to link order + save address
@@ -330,6 +332,14 @@ export function createCreateOrderTool(
       // non-fatal
     }
 
+    // Payment is never settled by the agent: the order always starts
+    // "pending" and only an operator/admin path can mark it paid. A claimed
+    // payment is recorded as intent in notes so the team can verify it.
+    const intentNotes = [
+      notes?.trim(),
+      paymentClaimed ? "[PAGO DECLARADO por el cliente — verificar comprobante antes de marcar pagado]" : null,
+    ].filter(Boolean).join(" ");
+
     const [order] = await db.insert(orders).values({
       leadId,
       phoneNumber: customerPhone,
@@ -338,9 +348,9 @@ export function createCreateOrderTool(
       orderType,
       items: resolvedItems,
       deliveryFee: delivery ? String(delivery) : "0",
-      paymentStatus: paymentStatus || "pending",
+      paymentStatus: "pending",
       paymentMethod: paymentMethod || null,
-      notes: notes || null,
+      notes: intentNotes || null,
       status: "pending",
     }).returning({ id: orders.id });
 

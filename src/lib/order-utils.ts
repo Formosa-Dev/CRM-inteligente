@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { products, promotions } from "@/db/schema";
+import { orders, products, promotions } from "@/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { normalizePhone, isValidPhone as normalizedIsValid } from "@/lib/phone-utils";
 
@@ -128,5 +128,59 @@ export async function decrementStockBestEffort(items: { productId?: number; quan
     }
   } catch (err) {
     console.warn("[decrementStock] Failed (non-fatal):", err);
+  }
+}
+
+export const STOCK_RESTORED_MARKER = "[STOCK_DEVUELTO]";
+
+/**
+ * Best-effort stock restore for a cancelled order — the mirror of
+ * decrementStockBestEffort.
+ *
+ * Idempotency without schema changes: the right to restore is claimed by a
+ * conditional UPDATE that atomically appends STOCK_RESTORED_MARKER to
+ * orders.notes, restricted to status='cancelled' rows where the marker is
+ * absent. Only the call whose UPDATE lands (rowCount > 0) restores, so
+ * concurrent cancels, retries, or a second cancel request can never
+ * double-restore. Never throws — a bookkeeping failure must not fail a
+ * cancellation that already happened.
+ */
+export async function restoreOrderStockBestEffort(orderId: number): Promise<void> {
+  try {
+    const claimed = await db
+      .update(orders)
+      .set({
+        notes: sql`COALESCE(${orders.notes}, '') || ' ${STOCK_RESTORED_MARKER}'`,
+      })
+      .where(
+        and(
+          eq(orders.id, orderId),
+          eq(orders.status, "cancelled"),
+          sql`(${orders.notes} IS NULL OR ${orders.notes} NOT LIKE '%STOCK_DEVUELTO%')`,
+        ),
+      );
+    // neon-http returns {rowCount}; test fakes return the updated rows array.
+    const claimedRows = Array.isArray(claimed)
+      ? claimed.length
+      : ((claimed as unknown as { rowCount?: number }).rowCount ?? 0);
+    if (claimedRows === 0) return; // not cancelled, or stock already restored
+
+    const [row] = await db
+      .select({ items: orders.items })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1);
+    const items = Array.isArray(row?.items)
+      ? (row.items as { productId?: number; quantity?: number }[])
+      : [];
+    for (const item of items) {
+      const qty = item.quantity;
+      if (!item.productId || !Number.isSafeInteger(qty) || (qty ?? 0) <= 0) continue;
+      await db.execute(
+        sql`UPDATE products SET stock = stock + ${qty} WHERE id = ${item.productId} AND stock IS NOT NULL`,
+      );
+    }
+  } catch (err) {
+    console.warn("[restoreStock] Failed (non-fatal):", err);
   }
 }

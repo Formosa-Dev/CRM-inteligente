@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import {
   shouldBlockDuplicateBroadcast,
   formatBroadcastPreview,
+  claimBroadcastRun,
+  _resetInFlightBroadcasts,
   DUPLICATE_BROADCAST_THRESHOLD,
   DUPLICATE_BROADCAST_WINDOW_MINUTES,
   BROADCAST_HARD_LIMIT,
@@ -101,5 +103,37 @@ describe("safety constants", () => {
     assert.ok(BROADCAST_HARD_LIMIT >= 100);
     assert.ok(DUPLICATE_BROADCAST_WINDOW_MINUTES >= 5);
     assert.ok(DUPLICATE_BROADCAST_THRESHOLD >= 2);
+  });
+});
+
+// A-45: the check-then-act DB count raced for concurrent sends, and
+// broadcasts of 1–2 recipients never reached the threshold. broadcastText
+// now claims the run in-process and dedupes per recipient.
+describe("A-45 concurrent + small-recipient duplicate hardening", () => {
+  test("in-flight claim rejects a concurrent identical broadcast", () => {
+    _resetInFlightBroadcasts();
+    const release = claimBroadcastRun("promo del sábado");
+    assert.ok(release, "first claim wins");
+    assert.equal(claimBroadcastRun("promo del sábado"), null, "concurrent same text blocked");
+    assert.ok(claimBroadcastRun("otro texto") !== null, "different text not blocked");
+    release!();
+    assert.ok(claimBroadcastRun("promo del sábado") !== null, "released claim allows a later run");
+    _resetInFlightBroadcasts();
+  });
+
+  test("broadcastText applies the claim and per-recipient dedup", () => {
+    const body = broadcastSource.slice(broadcastSource.indexOf("export async function broadcastText"));
+    assert.match(body, /claimBroadcastRun\(text\)/);
+    assert.match(body, /phonesAlreadySentBroadcast\(text,/);
+    assert.match(body, /skippedDuplicates/);
+    assert.match(body, /omitido — ya recibió este texto/);
+    assert.match(body, /finally \{\s*release\(\)/, "claim is always released");
+  });
+
+  test("per-recipient dedup joins conversations via chat_messages", () => {
+    const fn = broadcastSource.slice(broadcastSource.indexOf("phonesAlreadySentBroadcast"));
+    assert.match(fn, /innerJoin\(conversations/);
+    assert.match(fn, /eq\(chatMessages\.role, "assistant"\)/);
+    assert.match(fn, /eq\(chatMessages\.content, text\)/);
   });
 });

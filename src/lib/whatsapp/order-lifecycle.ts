@@ -6,13 +6,17 @@
  * production, and so it stays consolidated on the shared `@/db` client.
  *
  * Requirement: an open order (pending/preparing/ready) younger than 4 hours
- * stays active; at/over 4 hours it is idempotently auto-closed as delivered and
- * paid (deliveredAt/updatedAt set) with structured, privacy-safe audit logging.
+ * stays active; at/over 4 hours it is idempotently auto-closed as CANCELLED
+ * with structured, privacy-safe audit logging. An abandoned order must never
+ * be marked delivered+paid — there is no delivery or payment evidence, and a
+ * phantom paid row inflates cash session totals (src/lib/cash/session.ts).
  */
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { conversations, leads, orders } from "@/db/schema";
 import { logger } from "@/lib/logger";
+import { restoreOrderStockBestEffort } from "@/lib/order-utils";
+import { updateConversationMetadataCAS } from "./conversation-metadata";
 import {
   ACTIVE_ORDER_STATUSES,
   ageInHours,
@@ -34,8 +38,12 @@ export interface OrderLifecycleRepository {
     phoneNumber: string,
     channelAccountId?: number | null
   ): Promise<ActiveOrderSnapshot | null>;
-  /** Conditional close: returns true only when this call transitioned the row. */
-  closeOrderAsDeliveredPaid(orderId: number, at: Date): Promise<boolean>;
+  /**
+   * Conditional close: returns true only when this call transitioned the row.
+   * The stale order is marked `cancelled` — never delivered/paid, since no
+   * delivery or payment evidence exists for an abandoned order.
+   */
+  closeStaleOrder(orderId: number, at: Date): Promise<boolean>;
 }
 
 export class DrizzleOrderLifecycleRepository implements OrderLifecycleRepository {
@@ -73,18 +81,24 @@ export class DrizzleOrderLifecycleRepository implements OrderLifecycleRepository
     return row ?? null;
   }
 
-  async closeOrderAsDeliveredPaid(orderId: number, at: Date): Promise<boolean> {
+  async closeStaleOrder(orderId: number, at: Date): Promise<boolean> {
     const updated = await db
       .update(orders)
       .set({
-        status: "delivered",
-        paymentStatus: "paid",
-        deliveredAt: at,
+        status: "cancelled",
         updatedAt: at,
       })
       .where(and(eq(orders.id, orderId), inArray(orders.status, ACTIVE_STATUS_LIST)));
-    const rowCount = (updated as unknown as { rowCount?: number }).rowCount ?? 0;
-    return rowCount > 0;
+    const rowCount = Array.isArray(updated)
+      ? updated.length
+      : ((updated as unknown as { rowCount?: number }).rowCount ?? 0);
+    if (rowCount > 0) {
+      // A-26: creation decremented stock — the auto-cancel gives it back.
+      // Marker-claimed in restoreOrderStockBestEffort so it cannot run twice.
+      await restoreOrderStockBestEffort(orderId);
+      return true;
+    }
+    return false;
   }
 }
 
@@ -136,8 +150,6 @@ export interface KeepActiveConfirmation {
   askedAt: string;
 }
 
-type ConversationMetadataShape = (typeof conversations.$inferSelect)["conversationMetadata"];
-
 async function readConversationMetadata(conversationId: number): Promise<Record<string, unknown>> {
   const [row] = await db
     .select({ metadata: conversations.conversationMetadata })
@@ -162,27 +174,22 @@ export async function readKeepActiveConfirmation(conversationId: number): Promis
 
 /** Marks that the same/new question was asked for a given active order. */
 export async function setKeepActiveConfirmation(conversationId: number, activeOrderId: number): Promise<void> {
-  const metadata = await readConversationMetadata(conversationId);
-  const next = {
+  // A-48: optimistic CAS — the marker merges over the freshest metadata, and
+  // a lost race retries instead of clobbering another writer's fields.
+  await updateConversationMetadataCAS(conversationId, (metadata) => ({
     ...metadata,
     keepActiveConfirmation: { activeOrderId, askedAt: new Date().toISOString() } satisfies KeepActiveConfirmation,
-  };
-  await db
-    .update(conversations)
-    .set({ conversationMetadata: next as ConversationMetadataShape })
-    .where(eq(conversations.id, conversationId));
+  }));
 }
 
 /** Clears the marker once the clarification no longer applies. */
 export async function clearKeepActiveConfirmation(conversationId: number): Promise<void> {
-  const metadata = await readConversationMetadata(conversationId);
-  if (!("keepActiveConfirmation" in metadata)) return;
-  const { keepActiveConfirmation: _drop, ...rest } = metadata;
-  void _drop;
-  await db
-    .update(conversations)
-    .set({ conversationMetadata: rest as ConversationMetadataShape })
-    .where(eq(conversations.id, conversationId));
+  await updateConversationMetadataCAS(conversationId, (metadata) => {
+    if (!("keepActiveConfirmation" in metadata)) return metadata;
+    const { keepActiveConfirmation: _drop, ...rest } = metadata;
+    void _drop;
+    return rest;
+  });
 }
 
 // ─── Privacy-safe structured audit ──────────────────────────────────────────
@@ -225,7 +232,7 @@ export async function autoCloseStaleOrder(
   const ageHours = ageInHours(order.createdAt, now);
   let closed = false;
   try {
-    closed = await repository.closeOrderAsDeliveredPaid(order.id, now);
+    closed = await repository.closeStaleOrder(order.id, now);
   } catch (error) {
     logger.error(
       { event: "order_auto_close_failed", scope: "whatsapp-order-lifecycle", orderId: order.id, ...audit, error: (error as Error)?.message },

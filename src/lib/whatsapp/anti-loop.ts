@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { conversations } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { updateConversationMetadataCAS } from "./conversation-metadata";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -110,12 +111,23 @@ export async function analyzeConversationState(
     lastTools: lastToolCalls,
   };
 
-  // Persistir metadata en DB
+  // Persistir metadata en DB — A-48: optimistic CAS. The merge re-applies on
+  // top of the freshest row on conflict, so a concurrent lifecycle/tool write
+  // is never silently lost (unconditional RMW used to drop fields).
   try {
-    await db
-      .update(conversations)
-      .set({ conversationMetadata: newMeta as (typeof conversations.$inferSelect)["conversationMetadata"] })
-      .where(eq(conversations.id, conversationId));
+    await updateConversationMetadataCAS(conversationId, (current) => {
+      const cur = current as Partial<ConversationMetadata>;
+      const reprompt = messageType === cur.lastUserMessageType;
+      return {
+        ...cur,
+        repromptCount: reprompt
+          ? (typeof cur.repromptCount === "number" ? cur.repromptCount : 0) + 1
+          : 0,
+        lastUserMessageType: messageType,
+        lastSuggestedProducts: Array.isArray(cur.lastSuggestedProducts) ? cur.lastSuggestedProducts : [],
+        lastTools: lastToolCalls,
+      };
+    });
   } catch {
     // non-fatal
   }
