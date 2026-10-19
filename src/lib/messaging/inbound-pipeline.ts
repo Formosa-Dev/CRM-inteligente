@@ -1346,11 +1346,16 @@ export async function handleNormalizedEvent(
         .select({
           channel: conversations.channel,
           channelAccountId: conversations.channelAccountId,
+          externalThreadId: conversations.externalThreadId,
         })
         .from(conversations)
         .where(eq(conversations.id, conversationId))
         .limit(1);
       const replyChannel = convBinding?.channel ?? "whatsapp";
+      // A-14 — provider-native thread id. Conversation-scoped providers
+      // (zernio) cannot send to `to` directly: every outbound send below
+      // must carry this as providerConversationId.
+      const replyThreadId = convBinding?.externalThreadId ?? undefined;
       let replyAccount: ChannelAccount | undefined;
       if (convBinding?.channelAccountId != null) {
         const { resolveChannelAccountById } = await import("./accounts");
@@ -1391,7 +1396,7 @@ export async function handleNormalizedEvent(
         });
         const reply = result.text || "Disculpá, no pude procesar eso.";
         await insertMessage(conversationId, "assistant", reply, undefined, undefined, channelAccountId);
-        const r = await sendWhatsAppBubbles({ to: customerPhone, text: reply, apiKey, from: botNumber, channel: replyChannel, account: replyAccount });
+        const r = await sendWhatsAppBubbles({ to: customerPhone, text: reply, apiKey, from: botNumber, channel: replyChannel, account: replyAccount, providerConversationId: replyThreadId });
         if (r?.id) {
           try {
             const { chatMessages } = await import("@/db/schema");
@@ -1496,6 +1501,7 @@ export async function handleNormalizedEvent(
         from: botNumber,
         channel: replyChannel,
         account: replyAccount,
+        providerConversationId: replyThreadId,
       });
 
       // 1c. Guardar wamid en el texto de la DB
@@ -1526,6 +1532,9 @@ export async function handleNormalizedEvent(
                 type: "image",
                 mediaUrl: media.url,
                 text: media.caption,
+                ...(replyThreadId
+                  ? { providerConversationId: replyThreadId }
+                  : {}),
               },
               replyAccount
                 ? { channel: replyChannel, account: replyAccount }

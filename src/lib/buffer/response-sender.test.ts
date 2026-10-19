@@ -47,6 +47,33 @@ describe("matchesAssistantBubble — multi-bubble own-echo detection (A-04)", ()
   });
 });
 
+describe("providerConversationId threading (A-14)", () => {
+  it("sendWhatsAppBubbles accepts providerConversationId and forwards it on every bubble", () => {
+    const sender = readFileSync("src/lib/buffer/response-sender.ts", "utf8");
+    const fn = sender.slice(sender.indexOf("export async function sendWhatsAppBubbles"));
+    assert.match(fn, /providerConversationId\?: string;/);
+    const sendCall = fn.slice(fn.indexOf("messenger.send"));
+    assert.match(sendCall, /providerConversationId: params\.providerConversationId/);
+  });
+
+  it("every send in the buffer callback carries the stored externalThreadId", () => {
+    const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
+    const cbStart = pipeline.indexOf("scheduleBufferProcessing(");
+    const cb = pipeline.slice(cbStart, pipeline.indexOf("}).catch(", cbStart));
+    // The callback re-reads the persisted provider thread id...
+    assert.match(cb, /externalThreadId: conversations\.externalThreadId/);
+    assert.match(cb, /replyThreadId = convBinding\?\.externalThreadId/);
+    // ...and every outbound send (text bubbles + pending media) uses it.
+    const bubbleCalls = cb.match(/sendWhatsAppBubbles\({[^}]*}/g) ?? [];
+    assert.ok(bubbleCalls.length >= 2, "expected seller + customer bubble sends");
+    for (const call of bubbleCalls) {
+      assert.match(call, /providerConversationId: replyThreadId/);
+    }
+    const mediaCall = cb.slice(cb.indexOf("messenger.send"));
+    assert.match(mediaCall, /providerConversationId: replyThreadId/);
+  });
+});
+
 describe("handleEcho wires the fragment check (A-04)", () => {
   it("the echo handler matches against assistant bubbles, not only the whole row", () => {
     const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");

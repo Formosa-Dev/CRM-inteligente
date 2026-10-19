@@ -113,6 +113,14 @@ export async function sendWhatsAppBubbles(params: {
   from: string;
   channel?: ChannelKind;
   account?: ChannelAccount;
+  /**
+   * Provider-native thread (zernio conversationId, from
+   * conversations.external_thread_id). Conversation-scoped providers
+   * cannot send to `to` directly — they reply into this thread; absent,
+   * they fall back to opening a new conversation (and may fail with
+   * PLATFORM_NOT_SUPPORTED / TEMPLATE_REQUIRED).
+   */
+  providerConversationId?: string;
 }): Promise<YCloudResponse | null> {
   const bubbles = splitIntoBubbles(params.text);
   let lastResult: YCloudResponse | null = null;
@@ -130,7 +138,14 @@ export async function sendWhatsAppBubbles(params: {
     }
 
     const res = await messenger.send(
-      { to: params.to, type: "text", text: bubbles[i] },
+      {
+        to: params.to,
+        type: "text",
+        text: bubbles[i],
+        ...(params.providerConversationId
+          ? { providerConversationId: params.providerConversationId }
+          : {}),
+      },
       params.account
         ? { channel: params.channel ?? params.account.channel, account: params.account }
         : { credentials: { apiKey: params.apiKey, senderAddress: params.from } },
