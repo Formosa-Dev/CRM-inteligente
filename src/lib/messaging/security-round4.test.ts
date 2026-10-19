@@ -326,9 +326,19 @@ describe("H3 — conversation-context writes stamp leads.channel_account_id", ()
     assert.equal(lead?.channelAccountId, 7);
   });
 
-  it("a re-contact through a different account moves the ownership", async () => {
+  it("a re-contact through a different account does NOT move the ownership", async () => {
+    // A-15: arbitrary inbound on account B must not migrate a lead owned by
+    // account A — scoped order lookups would silently follow the wrong
+    // account. Only first attribution (NULL column) or order paths stamp.
     await captureLeadIfNew("+15550777", "Nuevo", "otra vez", 8);
     const lead = fake.rows("leads").find((row) => row.phone === "15550777");
+    assert.equal(lead?.channelAccountId, 7);
+  });
+
+  it("an unowned lead takes its first account attribution on re-contact", async () => {
+    fake.rows("leads").push({ id: 31, phone: "15550780", channelAccountId: null });
+    await captureLeadIfNew("+15550780", "Libre", "hola de nuevo", 8);
+    const lead = fake.rows("leads").find((row) => row.phone === "15550780");
     assert.equal(lead?.channelAccountId, 8);
   });
 
@@ -355,6 +365,27 @@ describe("H3 — conversation-context writes stamp leads.channel_account_id", ()
     const lead = fake.rows("leads").find((row) => row.id === 30);
     assert.equal(lead?.conversationId, conv.id);
     assert.equal(lead?.channelAccountId, 9);
+  });
+
+  it("conversation auto-link keeps an already-owned lead on its account", async () => {
+    // A-15: the link still fills conversationId, but account B's first
+    // conversation must not steal account A's lead.
+    fake.rows("leads").push({
+      id: 32,
+      phone: "15550781",
+      channelAccountId: 7,
+      conversationId: null,
+    });
+    const conv = await router.findOrCreateConversation(
+      "whatsapp",
+      "+15550781",
+      "X",
+      "+15550781",
+      10
+    );
+    const lead = fake.rows("leads").find((row) => row.id === 32);
+    assert.equal(lead?.conversationId, conv.id);
+    assert.equal(lead?.channelAccountId, 7);
   });
 
   it("a captured lead makes its order visible only to the owning account", async () => {

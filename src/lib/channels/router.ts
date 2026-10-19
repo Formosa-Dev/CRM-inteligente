@@ -234,16 +234,25 @@ async function autoLinkLeadToConversation(
 ): Promise<void> {
   try {
     const [lead] = await db
-      .select({ id: leads.id, conversationId: leads.conversationId })
+      .select({
+        id: leads.id,
+        conversationId: leads.conversationId,
+        channelAccountId: leads.channelAccountId,
+      })
       .from(leads)
       .where(eq(leads.phone, phone))
       .limit(1);
 
     if (lead && !lead.conversationId) {
+      // First account attribution only: a lead already owned by account A
+      // must never migrate to account B on an arbitrary inbound — that moves
+      // account-scoped order lookups with it. Order paths stamp explicitly.
+      const stampAccount =
+        channelAccountId != null && lead.channelAccountId == null;
       await db
         .update(leads)
         .set(
-          channelAccountId != null
+          stampAccount
             ? { conversationId, channelAccountId }
             : { conversationId }
         )
