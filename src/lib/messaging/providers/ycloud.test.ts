@@ -301,6 +301,24 @@ describe("ycloud parseWebhook — NormalizedInboundEvent fixtures", () => {
     }
   });
 
+  test("id-less status transitions get distinct delivery ids", () => {
+    const make = (status: string) =>
+      JSON.stringify({
+        type: "whatsapp.message.updated",
+        createTime: "2026-01-01T00:00:00.000Z",
+        whatsappMessage: {
+          wamid: "wamid.status.same",
+          status,
+          updateTime: "2026-01-01T00:00:00.000Z",
+        },
+      });
+    const [delivered] = provider.parseWebhook({ headers: {}, rawBody: make("delivered") });
+    const [read] = provider.parseWebhook({ headers: {}, rawBody: make("read") });
+    assert.notEqual(delivered.deliveryId, read.deliveryId);
+    assert.match(delivered.deliveryId, /^ycloud:synth:/);
+    assert.match(read.deliveryId, /^ycloud:synth:/);
+  });
+
   test("envelope without any id gets a deterministic ycloud:synth deliveryId", () => {
     const idLess = JSON.stringify({
       type: "whatsapp.inbound_message.received",

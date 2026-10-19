@@ -4,6 +4,8 @@ import { messenger } from "@/lib/messaging";
 const QUEUE_KEY = "queue:messages";
 const DLQ_KEY = "queue:dlq";
 
+type ProcessOutcome = "ok" | "retry" | "dlq";
+
 const redisUrl = process.env.UPSTASH_REDIS_REST_URL;
 const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
 const hasRedis = !!(redisUrl && redisToken && redisUrl.startsWith("https://"));
@@ -35,7 +37,7 @@ interface QueuePayload {
   [key: string]: unknown;
 }
 
-async function processWhatsApp(payload: QueuePayload): Promise<boolean> {
+async function processWhatsApp(payload: QueuePayload): Promise<ProcessOutcome> {
   const to = payload.to as string | undefined;
   const text = payload.text as string | undefined;
 
@@ -43,48 +45,60 @@ async function processWhatsApp(payload: QueuePayload): Promise<boolean> {
     console.log("[queue] invalid whatsapp payload — missing to/text", {
       chatId: payload.chatId,
     });
-    return false;
+    return "dlq";
   }
 
-  // S15 — send as the conversation's bound channel_account when one exists;
-  // an unresolvable binding retries then DLQs instead of wrong-sender sends.
-  const { resolveConversationAccountForPhone } = await import(
-    "@/lib/channels/router"
-  );
-  const binding = await resolveConversationAccountForPhone(to);
-  if (binding.kind === "unresolvable") {
-    console.log("[queue] sendText failed — unresolvable channel binding", {
+  const {
+    resolveConversationAccountForPhone,
+    resolveDefaultWhatsAppAccount,
+  } = await import("@/lib/channels/router");
+  const { decideSendAccount } = await import("@/lib/messaging/send-account");
+  const decision = await decideSendAccount(to, {
+    resolveBinding: resolveConversationAccountForPhone,
+    resolveDefaultAccount: resolveDefaultWhatsAppAccount,
+  });
+
+  if (decision.kind === "retry") {
+    console.log("[queue] account lookup transient — retrying", {
       chatId: payload.chatId,
-      accountId: binding.accountId,
+      reason: decision.reason,
     });
-    return false;
+    return "retry";
+  }
+  if (decision.kind === "drop") {
+    console.log("[queue] no safe sender — DLQ", {
+      chatId: payload.chatId,
+      reason: decision.reason,
+    });
+    return "dlq";
   }
 
   const result = await messenger.send(
     { to, type: "text", text },
-    binding.kind === "resolved"
-      ? { channel: "whatsapp", account: binding.account }
+    decision.account
+      ? { channel: "whatsapp", account: decision.account }
       : {}
   );
   if (!result.ok) {
     console.log("[queue] sendText failed", {
       chatId: payload.chatId,
       error: result.error,
+      retryable: result.retryable,
     });
-    return false;
+    return result.retryable ? "retry" : "dlq";
   }
 
-  return true;
+  return "ok";
 }
 
-async function processTelegram(_payload: QueuePayload): Promise<boolean> {
+async function processTelegram(_payload: QueuePayload): Promise<ProcessOutcome> {
   console.warn("[queue] telegram processing not implemented — skipping", {
     chatId: _payload.chatId,
   });
-  return true;
+  return "ok";
 }
 
-async function processMessage(payload: QueuePayload): Promise<boolean> {
+async function processMessage(payload: QueuePayload): Promise<ProcessOutcome> {
   switch (payload.type) {
     case "whatsapp":
       return processWhatsApp(payload);
@@ -92,7 +106,7 @@ async function processMessage(payload: QueuePayload): Promise<boolean> {
       return processTelegram(payload);
     default:
       console.log("[queue] unknown message type", { type: payload.type });
-      return false;
+      return "dlq";
   }
 }
 
@@ -124,10 +138,18 @@ export async function processNextMessage(): Promise<boolean> {
       retryCount: payload.retryCount,
     });
 
-    const ok = await processMessage(payload);
+    const outcome = await processMessage(payload);
 
-    if (ok) {
+    if (outcome === "ok") {
       console.log("[queue] processed successfully", { chatId: payload.chatId });
+      return true;
+    }
+
+    if (outcome === "dlq") {
+      await redis.lpush(DLQ_KEY, JSON.stringify(payload));
+      console.log("[queue] moved to DLQ (non-retryable)", {
+        chatId: payload.chatId,
+      });
       return true;
     }
 

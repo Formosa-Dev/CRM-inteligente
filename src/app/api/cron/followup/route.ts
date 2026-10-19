@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { db } from "@/db";
-import { orders, conversations } from "@/db/schema";
+import { orders } from "@/db/schema";
 import { eq, and, lte } from "drizzle-orm";
 import { getArgentinaHour } from "@/lib/argentina-time";
 
@@ -60,6 +60,8 @@ export async function GET(request: Request) {
       .limit(20);
 
     let processed = 0;
+    let retryableFailures = 0;
+    let dropped = 0;
 
     for (const order of pendingFollowups) {
       if (!order.phoneNumber) continue;
@@ -75,68 +77,143 @@ export async function GET(request: Request) {
 
       const followupText = `Holaa, ¿todo bien con el pedido? No te olvides de etiquetarnos en ig porfa 🙌`;
 
+      let decision;
       try {
-        // S15 — honor the conversation's channel_account binding when one
-        // exists; unbound → placeholder (identical legacy behavior). An
-        // unresolvable binding stays claimed for manual review.
         const { messenger } = await import("@/lib/messaging");
-        const { resolveConversationAccountForPhone } = await import(
-          "@/lib/channels/router"
+        const {
+          resolveConversationAccountForPhone,
+          resolveDefaultWhatsAppAccount,
+        } = await import("@/lib/channels/router");
+        const { decideSendAccount } = await import(
+          "@/lib/messaging/send-account"
         );
         const phoneNorm = order.phoneNumber.startsWith("+")
           ? order.phoneNumber
           : `+${order.phoneNumber}`;
-        const binding = await resolveConversationAccountForPhone(phoneNorm);
-        if (binding.kind === "unresolvable") {
+
+        decision = await decideSendAccount(phoneNorm, {
+          resolveBinding: resolveConversationAccountForPhone,
+          resolveDefaultAccount: resolveDefaultWhatsAppAccount,
+        });
+
+        if (decision.kind === "retry") {
+          // Transient account lookup failure: release the claim so the next
+          // cron tick retries. Never fall back to a global sender.
+          await db
+            .update(orders)
+            .set({ followupSent: false, updatedAt: new Date() })
+            .where(eq(orders.id, order.id));
+          retryableFailures++;
           console.warn(
-            `[followup] Order #${order.id} bound to unresolvable channel_account #${binding.accountId}; claimed for manual review`
+            `[followup] Order #${order.id} retryable account failure (${decision.reason}) — claim released`
           );
           continue;
         }
+        if (decision.kind === "drop") {
+          dropped++;
+          console.warn(
+            `[followup] Order #${order.id} no safe sender (${decision.reason}) — claimed for manual review`
+          );
+          continue;
+        }
+
         const result = await messenger.send(
           {
             to: order.phoneNumber,
             type: "text",
             text: followupText,
           },
-          binding.kind === "resolved"
-            ? { channel: "whatsapp", account: binding.account }
+          decision.account
+            ? { channel: "whatsapp", account: decision.account }
             : {}
         );
 
-        if (result.ok) {
-          processed++;
-          console.log(`[followup] Sent for order #${order.id} to ${order.phoneNumber}`);
-
-          try {
-            // Save follow-up in conversation history so AI has context (role "system")
-            const { insertMessage } = await import("@/lib/channels/router");
-            const phone = order.phoneNumber.startsWith("+") ? order.phoneNumber : `+${order.phoneNumber}`;
-            const conv = await db
-              .select({ id: conversations.id })
-              .from(conversations)
-              .where(eq(conversations.whatsappId, phone))
-              .limit(1);
-            if (conv[0]) {
-              await insertMessage(conv[0].id, "system", followupText, undefined, result.providerMessageId || undefined);
-              console.log(`[followup] Follow-up saved to conversation #${conv[0].id} (role=system, wamid=${result.providerMessageId})`);
-            }
-          } catch (historyError) {
-            console.warn(`[followup] Sent order #${order.id}, but could not save conversation history:`, historyError);
+        if (!result.ok) {
+          if (result.retryable) {
+            await db
+              .update(orders)
+              .set({ followupSent: false, updatedAt: new Date() })
+              .where(eq(orders.id, order.id));
+            retryableFailures++;
+            console.warn(
+              `[followup] Order #${order.id} retryable send failure — claim released: ${result.error}`
+            );
+          } else {
+            dropped++;
+            console.warn(
+              `[followup] Provider rejected order #${order.id}; claimed for manual review: ${result.error}`
+            );
           }
-        } else {
-          console.warn(`[followup] Provider rejected order #${order.id}; claimed for manual review: ${result.error}`);
+          continue;
+        }
+
+        processed++;
+        console.log(`[followup] Sent for order #${order.id} to ${order.phoneNumber}`);
+
+        try {
+          // Persist using the SAME account-scoped conversation identity —
+          // never a phone-only legacy row.
+          const { findOrCreateConversation, insertMessage } = await import(
+            "@/lib/channels/router"
+          );
+          const conv = await findOrCreateConversation(
+            "whatsapp",
+            phoneNorm,
+            order.customerName ?? undefined,
+            phoneNorm,
+            decision.channelAccountId
+          );
+          await insertMessage(
+            conv.id,
+            "system",
+            followupText,
+            undefined,
+            result.providerMessageId || undefined,
+            decision.channelAccountId
+          );
+          console.log(
+            `[followup] Follow-up saved to conversation #${conv.id} (role=system, wamid=${result.providerMessageId})`
+          );
+        } catch (historyError) {
+          console.warn(
+            `[followup] Sent order #${order.id}, but could not save conversation history:`,
+            historyError
+          );
         }
       } catch (e) {
-        console.warn(`[followup] Ambiguous send for order #${order.id}; claimed for manual review:`, e);
+        // Any unexpected failure is ambiguous at-most-once: keep the claim
+        // only when it is permanent; transient errors release it.
+        const { classifyError } = await import("@/lib/messaging/errors");
+        if (classifyError(e) === "retryable-db") {
+          await db
+            .update(orders)
+            .set({ followupSent: false, updatedAt: new Date() })
+            .where(eq(orders.id, order.id));
+          retryableFailures++;
+          console.warn(
+            `[followup] Retryable failure for order #${order.id}; claim released:`,
+            e
+          );
+        } else {
+          dropped++;
+          console.warn(
+            `[followup] Permanent failure for order #${order.id}; claimed for manual review:`,
+            e
+          );
+        }
       }
     }
 
-    return NextResponse.json({
-      message: `Procesados ${processed} de ${pendingFollowups.length} follow-ups`,
-      processed,
-      total: pendingFollowups.length,
-    });
+    return NextResponse.json(
+      {
+        message: `Procesados ${processed} de ${pendingFollowups.length} follow-ups`,
+        processed,
+        total: pendingFollowups.length,
+        retryableFailures,
+        dropped,
+      },
+      { status: retryableFailures > 0 ? 503 : 200 }
+    );
   } catch (e) {
     console.error("[followup] Error:", e);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });

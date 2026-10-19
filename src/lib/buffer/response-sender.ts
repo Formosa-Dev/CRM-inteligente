@@ -110,7 +110,11 @@ export async function sendWhatsAppBubbles(params: {
         ? { channel: params.channel ?? params.account.channel, account: params.account }
         : { credentials: { apiKey: params.apiKey, senderAddress: params.from } },
     );
-    if (!res.ok) throw new Error(res.error);
+    if (!res.ok) {
+      const error = new Error(res.error) as Error & { retryable?: boolean };
+      error.retryable = res.retryable;
+      throw error;
+    }
     lastResult = { id: res.providerMessageId, status: res.status };
   }
 

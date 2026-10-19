@@ -58,6 +58,9 @@ export const sendWhatsAppMessage = tool({
       if (fallback.kind === "ambiguous") {
         return `Error al enviar WhatsApp a ${to}: hay varias cuentas activas y ninguna vinculada (${fallback.reason}).`;
       }
+      if (fallback.kind === "not-found") {
+        return `Error al enviar WhatsApp a ${to}: el canal está provisionado pero no tiene cuenta activa (${fallback.reason}).`;
+      }
       if (fallback.kind === "resolved") account = fallback.account;
     }
 

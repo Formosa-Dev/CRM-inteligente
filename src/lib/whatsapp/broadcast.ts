@@ -301,6 +301,14 @@ export async function broadcastText(
           await sleep(DELAY_BETWEEN_MS);
           continue;
         }
+        if (fallback.kind === "not-found") {
+          result.error = `canal provisionado sin cuenta activa (${fallback.reason})`;
+          results.push(result);
+          failed++;
+          onProgress?.(i + 1, recipients.length, result);
+          await sleep(DELAY_BETWEEN_MS);
+          continue;
+        }
         if (fallback.kind === "resolved") account = fallback.account;
       }
 

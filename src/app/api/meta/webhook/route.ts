@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { findOrCreateConversation, insertMessage } from "@/lib/channels/router";
+import {
+  ChannelAccountResolutionError,
+  resolveChannelAccountStrict,
+} from "@/lib/messaging";
 
 // Meta signs webhook payloads with X-Hub-Signature-256: sha256=<hmac>
 // computed over the raw body using the app secret.
@@ -57,14 +61,49 @@ export async function POST(req: NextRequest) {
 
           if (!from || !text) continue;
 
+          // Account-aware attribution from the Meta routing keys. A
+          // provisioned channel with no match is skipped (no null-account
+          // row); only a genuinely unprovisioned install keeps legacy nulls.
+          const candidates = [
+            value?.metadata?.phone_number_id,
+            value?.metadata?.display_phone_number,
+          ].filter(
+            (candidate: unknown): candidate is string =>
+              typeof candidate === "string" && candidate.length > 0
+          );
+          const resolution = await resolveChannelAccountStrict(
+            "whatsapp",
+            candidates
+          );
+          if (resolution.kind === "db-error") {
+            throw new ChannelAccountResolutionError(resolution);
+          }
+          if (resolution.kind === "not-found" || resolution.kind === "mismatch") {
+            console.warn(
+              "[meta/webhook] no matching channel account — skipping message",
+              from
+            );
+            continue;
+          }
+          const channelAccountId =
+            resolution.kind === "resolved" ? resolution.rowId : null;
+
           const { id: conversationId } = await findOrCreateConversation(
             "whatsapp",
             from,
             value?.contacts?.[0]?.profile?.name,
-            from
+            from,
+            channelAccountId
           );
 
-          await insertMessage(conversationId, "user", text, undefined, msg.id);
+          await insertMessage(
+            conversationId,
+            "user",
+            text,
+            undefined,
+            msg.id,
+            channelAccountId
+          );
 
           // TODO: Process with agent and respond
         }
@@ -72,6 +111,11 @@ export async function POST(req: NextRequest) {
     }
   } catch (error) {
     console.error("[meta/webhook] Error:", error);
+    const { classifyError } = await import("@/lib/messaging/errors");
+    return NextResponse.json(
+      { error: "meta-webhook-failed" },
+      { status: classifyError(error) === "retryable-db" ? 503 : 500 }
+    );
   }
 
   return NextResponse.json({ status: "ok" });

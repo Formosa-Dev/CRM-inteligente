@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { orders, conversations } from "@/db/schema";
+import { orders } from "@/db/schema";
 import { eq, desc, and, count, ilike, or } from "drizzle-orm";
 import { auth } from "@/auth";
 import { requireAdmin } from "@/lib/auth/require-admin";
@@ -212,31 +212,33 @@ export async function updateOrderStatus(
           };
         }
 
-        // Save the outgoing message in chat_messages so AI has context.
-        const { insertMessage } = await import("@/lib/channels/router");
+        // Save the outgoing message in the SAME account-scoped conversation
+        // identity used for the send — never a phone-only limit(1).
+        const { findOrCreateConversation, insertMessage } = await import(
+          "@/lib/channels/router"
+        );
         const phone = order.phoneNumber.startsWith("+")
           ? order.phoneNumber
           : `+${order.phoneNumber}`;
-        const { normalizePhone } = await import("@/lib/phone-utils");
-        const conv = await db
-          .select({ id: conversations.id })
-          .from(conversations)
-          .where(
-            or(
-              eq(conversations.whatsappId, phone),
-              eq(conversations.externalUserIdNormalized, normalizePhone(phone))
+        const conversationId =
+          notified.conversationId ??
+          (
+            await findOrCreateConversation(
+              "whatsapp",
+              phone,
+              order.customerName ?? undefined,
+              phone,
+              notified.channelAccountId
             )
-          )
-          .limit(1);
-        if (conv[0]) {
-          await insertMessage(
-            conv[0].id,
-            "system",
-            message,
-            undefined,
-            notified.providerMessageId
-          );
-        }
+          ).id;
+        await insertMessage(
+          conversationId,
+          "system",
+          message,
+          undefined,
+          notified.providerMessageId,
+          notified.channelAccountId
+        );
       } catch (e) {
         revalidatePath("/admin/orders");
         return {
@@ -301,31 +303,33 @@ export async function notifyCustomer(
       };
     }
 
-    // Save notification in conversation history so AI has context (role "system")
-    const { insertMessage } = await import("@/lib/channels/router");
+    // Save notification in the account-scoped conversation identity used for
+    // the send, not an arbitrary phone-only row.
+    const { findOrCreateConversation, insertMessage } = await import(
+      "@/lib/channels/router"
+    );
     const phone = order.phoneNumber.startsWith("+")
       ? order.phoneNumber
       : `+${order.phoneNumber}`;
-    const { normalizePhone } = await import("@/lib/phone-utils");
-    const conv = await db
-      .select({ id: conversations.id })
-      .from(conversations)
-      .where(
-        or(
-          eq(conversations.whatsappId, phone),
-          eq(conversations.externalUserIdNormalized, normalizePhone(phone))
+    const conversationId =
+      notified.conversationId ??
+      (
+        await findOrCreateConversation(
+          "whatsapp",
+          phone,
+          order.customerName ?? undefined,
+          phone,
+          notified.channelAccountId
         )
-      )
-      .limit(1);
-    if (conv[0]) {
-      await insertMessage(
-        conv[0].id,
-        "system",
-        msg,
-        undefined,
-        notified.providerMessageId
-      );
-    }
+      ).id;
+    await insertMessage(
+      conversationId,
+      "system",
+      msg,
+      undefined,
+      notified.providerMessageId,
+      notified.channelAccountId
+    );
 
     return { success: true, message: "Notificación enviada" };
   } catch (e) {

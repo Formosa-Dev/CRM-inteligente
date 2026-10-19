@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mergeBufferedTurn } from "./whatsapp/buffered-history";
-import { phoneInList, phoneMatches } from "./phone-utils";
+import { looksLikePhone, phoneInList, phoneMatches } from "./phone-utils";
 import { resolveWhatsAppActor, shouldCaptureLead } from "./whatsapp/actor";
 import { matchCatalog, validateResolvedOrderItems } from "./order-utils";
 import { internalSellerTools } from "./whatsapp/seller-prompt";
@@ -61,6 +61,9 @@ function makeSessionContext(overrides: Partial<SessionContext>): SessionContext 
 test("configured seller and allowlist phones match canonical digits", () => {
   assert.equal(phoneMatches("+54 9 3704 868421", "5493704868421"), true);
   assert.equal(phoneMatches("", ""), false);
+  assert.equal(phoneMatches("waba-2", "1555000002"), false);
+  assert.equal(phoneMatches("acc-123", "123"), false);
+  assert.equal(looksLikePhone("waba-2"), false);
   assert.equal(phoneInList("+54 9 3704 868421", [{ phone: "5493704868421" }]), true);
 });
 

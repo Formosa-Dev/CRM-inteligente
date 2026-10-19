@@ -7,6 +7,8 @@ import {
   type ConversationIdentityRepository,
 } from "@/lib/messaging/conversation-identity";
 import { isSchemaNotReady } from "@/lib/messaging/errors";
+import { notifyDeliveryArrived } from "@/lib/whatsapp/delivery-notify";
+import type { DeliveryNotifyResult } from "@/lib/whatsapp/delivery-notify";
 import type { ChannelAccount, ChannelKind, OutboundMessage } from "@/lib/messaging/types";
 
 // Full channel universe (parity with schema channelEnum / ChannelKind).
@@ -375,7 +377,17 @@ export type DefaultAccountResolution =
   | { kind: "unprovisioned" }
   | { kind: "resolved"; account: ChannelAccount }
   | { kind: "ambiguous"; reason: string }
+  /** Rows exist but no active provider account — hard fail, not legacy. */
+  | { kind: "not-found"; reason: string }
   | { kind: "db-error"; error: unknown };
+
+/** Prefer the row actually bound to the selected account over a legacy row. */
+export function selectBoundConversationId(
+  rows: readonly { id: number; channelAccountId: number | null }[],
+  accountId: number
+): number | undefined {
+  return rows.find((row) => row.channelAccountId === accountId)?.id;
+}
 
 /**
  * Resolve the channel_account bound to an existing WhatsApp conversation
@@ -406,7 +418,8 @@ export async function resolveConversationAccountForPhone(
             eq(conversations.whatsappId, phone)
           )
         )
-      );
+      )
+      .orderBy(desc(conversations.id));
   } catch (error) {
     // Positively identified un-migrated install: legacy phone lookup is the
     // only available behavior. Any other DB error is surfaced.
@@ -430,10 +443,14 @@ export async function resolveConversationAccountForPhone(
   const { resolveChannelAccountByIdStrict } = await import("@/lib/messaging");
   const resolution = await resolveChannelAccountByIdStrict(accountId, "ycloud");
   if (resolution.kind === "resolved") {
+    const conversationId = selectBoundConversationId(rows, accountId);
+    if (conversationId === undefined) {
+      return { kind: "unbound" };
+    }
     return {
       kind: "resolved",
       account: resolution.account,
-      conversationId: rows[0].id,
+      conversationId,
     };
   }
   if (resolution.kind === "db-error") {
@@ -459,8 +476,12 @@ export async function resolveDefaultWhatsAppAccount(): Promise<DefaultAccountRes
       return { kind: "resolved", account: resolution.account };
     case "unprovisioned":
     case "schema-not-ready":
-    case "not-found":
       return { kind: "unprovisioned" };
+    case "not-found":
+      return {
+        kind: "not-found",
+        reason: "provisioned channel has no active matching account",
+      };
     case "mismatch":
       return { kind: "ambiguous", reason: resolution.reason };
     case "db-error":
@@ -605,71 +626,65 @@ export async function sendOutboundMessage(
 
 /**
  * Notifica al cliente que el delivery ya llegó.
- * Busca el último pedido pendiente/preparando y le manda WhatsApp.
+ * Usa la cuenta/config resuelta para el evento (nunca agent_config id=1) y
+ * devuelve un resultado explícito para que el webhook pueda reintentar.
  */
+export interface DeliveryNotifyContext {
+  account?: ChannelAccount;
+  channelAccountId?: number | null;
+  apiKey?: string;
+  senderAddress?: string;
+}
+
 export async function notifyCustomerDeliveryArrived(
-  deliveryPhone: string
-): Promise<string | null> {
-  try {
-    const { orders, agentConfig } = await import("@/db/schema");
-    const { desc, and, inArray } = await import("drizzle-orm");
-    
-    // Buscar el último pedido pendiente o en preparación
-    const [order] = await db
-      .select({
-        id: orders.id,
-        phoneNumber: orders.phoneNumber,
-        customerName: orders.customerName,
-      })
-      .from(orders)
-      .where(
-        and(
-          inArray(orders.status, ["pending", "preparing"]),
-        )
-      )
-      .orderBy(desc(orders.createdAt))
-      .limit(1);
+  deliveryPhone: string,
+  ctx: DeliveryNotifyContext = {}
+): Promise<DeliveryNotifyResult> {
+  const { orders } = await import("@/db/schema");
+  const { desc, and, inArray } = await import("drizzle-orm");
+  const { messenger } = await import("@/lib/messaging");
 
-    if (!order?.phoneNumber) {
-      // No hay pedidos pendientes — avisar al delivery
-      const { messenger } = await import("@/lib/messaging");
-      const [cfg] = await db.select().from(agentConfig).where(eq(agentConfig.id, 1)).limit(1);
-      const { decryptIfEncrypted } = await import("@/lib/encryption");
-      const apiKey = decryptIfEncrypted(cfg?.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
-      const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
-      if (apiKey && from) {
-        const res = await messenger.send(
-          { to: deliveryPhone, type: "text", text: "Gracias, no hay pedidos pendientes." },
-          { credentials: { apiKey, senderAddress: from } },
-        );
-        if (!res.ok) throw new Error(res.error);
+  const account =
+    ctx.account && (ctx.account.credentials.apiKey || ctx.account.senderAddress)
+      ? ctx.account
+      : undefined;
+
+  return notifyDeliveryArrived(deliveryPhone, {
+    async findPendingOrder() {
+      const [order] = await db
+        .select({
+          phoneNumber: orders.phoneNumber,
+          customerName: orders.customerName,
+        })
+        .from(orders)
+        .where(and(inArray(orders.status, ["pending", "preparing"])))
+        .orderBy(desc(orders.createdAt))
+        .limit(1);
+      return order?.phoneNumber
+        ? { phoneNumber: order.phoneNumber, customerName: order.customerName }
+        : null;
+    },
+    async send(to, text) {
+      const credentials =
+        !account && ctx.apiKey && ctx.senderAddress
+          ? { apiKey: ctx.apiKey, senderAddress: ctx.senderAddress }
+          : undefined;
+      if (!account && !credentials) {
+        return {
+          ok: false,
+          error:
+            "delivery notification has no resolved account or scoped credentials",
+          retryable: false,
+        };
       }
-      return null;
-    }
-
-    // Enviar WhatsApp al cliente
-    const { messenger } = await import("@/lib/messaging");
-    const [cfg] = await db.select().from(agentConfig).where(eq(agentConfig.id, 1)).limit(1);
-    const { decryptIfEncrypted } = await import("@/lib/encryption");
-    const apiKey = decryptIfEncrypted(cfg?.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
-    const from = process.env.WHATSAPP_PHONE_NUMBER || cfg?.phoneNumber || "";
-
-    const customerMsg = `¡Hola ${order.customerName || ""}! El delivery ya está afuera con tu pedido. Que lo disfrutes 🍔`.trim();
-
-    if (apiKey && from) {
-      const res = await messenger.send(
-        { to: order.phoneNumber, type: "text", text: customerMsg },
-        { credentials: { apiKey, senderAddress: from } },
+      return messenger.send(
+        { to, type: "text", text },
+        account
+          ? { channel: "whatsapp", account }
+          : { credentials: credentials! }
       );
-      if (!res.ok) throw new Error(res.error);
-      console.log(`[delivery] Notified customer ${order.phoneNumber} about delivery arrival`);
-    }
-
-    return order.phoneNumber;
-  } catch (error) {
-    console.error("[delivery] Error notifying customer:", error);
-    return null;
-  }
+    },
+  });
 }
 
 /**

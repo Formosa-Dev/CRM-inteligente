@@ -44,4 +44,10 @@ describe("retryable database failures", () => {
   it("reads nested cause codes", () => {
     assert.equal(errorCode({ cause: { code: "ETIMEDOUT" } }), "ETIMEDOUT");
   });
+
+  it("honors an explicit retryable marker without a SQLSTATE", () => {
+    assert.equal(classifyError({ retryable: true }), "retryable-db");
+    assert.equal(shouldRetryError({ retryable: true }), true);
+    assert.equal(classifyError({ retryable: false }), "unknown");
+  });
 });

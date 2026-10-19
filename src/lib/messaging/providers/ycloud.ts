@@ -196,6 +196,10 @@ function syntheticDeliveryId(payload: Record<string, unknown>): string {
     asString(message.wamid) ?? asString(message.id),
     asString(message.from),
     asString(message.to),
+    // Status/lifecycle transitions can share the message id and timestamp;
+    // include the status so distinct transitions never collapse into one
+    // provider+delivery_id key.
+    asString(message.status) ?? asString(message.event),
   ]);
   return `ycloud:synth:${createHash("sha256").update(basis).digest("hex").slice(0, 16)}`;
 }
@@ -356,9 +360,9 @@ export function toSendResult(
  * caller's `from`, no externalId, no internal retry — the wire shape stays
  * identical to the previous client, including its success log line.
  */
-async function sendTextWithAccount(
+async function sendDirectlyWithAccount(
   account: ChannelAccount,
-  msg: OutboundMessage
+  body: Record<string, unknown>
 ): Promise<SendResult> {
   let response: Response;
   try {
@@ -370,9 +374,7 @@ async function sendTextWithAccount(
       },
       body: JSON.stringify({
         from: account.senderAddress,
-        to: msg.to,
-        type: "text",
-        text: { body: msg.text },
+        ...body,
       }),
     });
   } catch (err) {
@@ -391,13 +393,54 @@ async function sendTextWithAccount(
 
   const result = (await response.json()) as { id?: string; status?: string };
   console.log(
-    `[ycloud] Message sent to ${msg.to} — id:${result.id} status:${result.status}`
+    `[ycloud] Message sent — id:${result?.id} status:${result?.status}`
   );
   return {
     ok: true,
-    providerMessageId: result.id ?? "",
-    status: result.status ?? "sent",
+    providerMessageId: result?.id ?? "",
+    status: result?.status ?? "sent",
   };
+}
+
+function accountHasCredentials(account: ChannelAccount): boolean {
+  return Boolean(account.credentials.apiKey || account.senderAddress);
+}
+
+function sendTextWithAccount(
+  account: ChannelAccount,
+  msg: OutboundMessage
+): Promise<SendResult> {
+  return sendDirectlyWithAccount(account, {
+    to: msg.to,
+    type: "text",
+    text: { body: msg.text },
+  });
+}
+
+function sendImageWithAccount(
+  account: ChannelAccount,
+  msg: OutboundMessage
+): Promise<SendResult> {
+  return sendDirectlyWithAccount(account, {
+    to: msg.to,
+    type: "image",
+    image: { link: msg.mediaUrl, caption: msg.text || "" },
+  });
+}
+
+function sendDocumentWithAccount(
+  account: ChannelAccount,
+  msg: OutboundMessage
+): Promise<SendResult> {
+  return sendDirectlyWithAccount(account, {
+    to: msg.to,
+    type: "document",
+    document: {
+      link: msg.mediaUrl,
+      caption: msg.text || "",
+      filename: "documento.pdf",
+    },
+  });
 }
 
 export const ycloudProvider: MessagingProvider = {
@@ -448,7 +491,7 @@ export const ycloudProvider: MessagingProvider = {
         // Caller-resolved credentials (legacy ycloud-client sites): the
         // account carries them, so send with exactly those — the delegated
         // sendText would re-resolve agent_config → env differently.
-        if (account.credentials.apiKey || account.senderAddress) {
+        if (accountHasCredentials(account)) {
           return sendTextWithAccount(account, msg);
         }
         return toSendResult(
@@ -463,6 +506,9 @@ export const ycloudProvider: MessagingProvider = {
             retryable: false,
           };
         }
+        if (accountHasCredentials(account)) {
+          return sendImageWithAccount(account, msg);
+        }
         return toSendResult(
           await sendImage(msg.to, msg.mediaUrl, msg.text, externalId)
         );
@@ -474,6 +520,9 @@ export const ycloudProvider: MessagingProvider = {
             error: "document message requires msg.mediaUrl",
             retryable: false,
           };
+        }
+        if (accountHasCredentials(account)) {
+          return sendDocumentWithAccount(account, msg);
         }
         return toSendResult(
           await sendDocument(

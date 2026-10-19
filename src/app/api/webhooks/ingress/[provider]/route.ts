@@ -7,6 +7,7 @@ import {
   resolveWebhookSecret,
 } from "@/lib/messaging/ingress";
 import { handleNormalizedEvent } from "@/lib/messaging/inbound-pipeline";
+import { aggregateWebhookStatuses } from "@/lib/messaging/webhook-response";
 
 /**
  * POST /api/webhooks/ingress/<provider> — unified inbound entry point (S12).
@@ -57,7 +58,7 @@ export async function POST(
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 
-  let response: NextResponse = NextResponse.json({ ok: true }, { status: 200 });
+  const statuses: number[] = [];
   for (const event of events) {
     let ctx;
     try {
@@ -73,10 +74,15 @@ export async function POST(
       );
     }
     if (!ctx) continue; // fail-closed — reason already logged
-    response =
+    const response =
       provider.id === "ycloud" && ctx.channel === "whatsapp"
         ? await handleNormalizedEvent(event, ctx)
         : await handlePassiveChannelEvent(event, ctx);
+    statuses.push(response.status);
   }
-  return response;
+  const aggregate = aggregateWebhookStatuses(statuses);
+  return NextResponse.json(
+    { ok: aggregate.ok, processed: events.length },
+    { status: aggregate.status }
+  );
 }

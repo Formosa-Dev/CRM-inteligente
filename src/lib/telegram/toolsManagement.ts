@@ -1069,6 +1069,8 @@ export const sendMessageAsOperatorTool = tool({
         return "Error al enviar mensaje: no se pudo resolver la cuenta (error transitorio).";
       if (fallback.kind === "ambiguous")
         return `Error al enviar mensaje: hay varias cuentas activas y ninguna vinculada (${fallback.reason}).`;
+      if (fallback.kind === "not-found")
+        return `Error al enviar mensaje: el canal está provisionado pero no tiene cuenta activa (${fallback.reason}).`;
       result = await messenger.send(
         { to: conv.customerPhone, type: "text", text },
         fallback.kind === "resolved"

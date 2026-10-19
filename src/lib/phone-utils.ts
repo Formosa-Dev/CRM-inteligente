@@ -24,8 +24,23 @@ export function isValidPhone(phone: string): boolean {
   return /^549\d{7,11}$/.test(phone);
 }
 
+/**
+ * A value is phone-like only when it is composed of phone punctuation/digits
+ * and has a plausible length. Provider IDs such as `waba-2` or `acc-123` are
+ * NOT phone-like, so they are never matched by digit suffix.
+ */
+export function looksLikePhone(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    trimmed.length > 0 &&
+    /^[+\d\s().-]+$/.test(trimmed) &&
+    normalizePhone(trimmed).length >= 7
+  );
+}
+
 /** Compare configured identities using the same canonical digits on both sides. */
 export function phoneMatches(a: string, b: string): boolean {
+  if (!looksLikePhone(a) || !looksLikePhone(b)) return false;
   const left = normalizePhone(a);
   return left.length > 0 && left === normalizePhone(b);
 }

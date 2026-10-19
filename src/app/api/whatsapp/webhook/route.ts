@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { providerForChannel } from "@/lib/messaging";
 import { resolveWebhookSecret } from "@/lib/messaging/ingress";
 import { handleNormalizedEvent } from "@/lib/messaging/inbound-pipeline";
+import { aggregateWebhookStatuses } from "@/lib/messaging/webhook-response";
 
 /**
  * GET — Webhook verification (YCloud sends a challenge token)
@@ -56,9 +57,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 
-  let response: NextResponse = NextResponse.json({ ok: true }, { status: 200 });
+  const statuses: number[] = [];
   for (const event of events) {
-    response = await handleNormalizedEvent(event);
+    const response = await handleNormalizedEvent(event);
+    statuses.push(response.status);
   }
-  return response;
+  const aggregate = aggregateWebhookStatuses(statuses);
+  return NextResponse.json(
+    { ok: aggregate.ok, processed: events.length },
+    { status: aggregate.status }
+  );
 }

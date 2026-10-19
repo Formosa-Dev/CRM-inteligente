@@ -56,6 +56,7 @@ type ErrorLike = {
   name?: unknown;
   message?: unknown;
   cause?: unknown;
+  retryable?: unknown;
 };
 
 function readError(error: unknown): ErrorLike {
@@ -97,6 +98,9 @@ export function isRetryableDbError(error: unknown): boolean {
 export function classifyError(error: unknown): ErrorClass {
   if (isSchemaNotReady(error)) return "schema-not-ready";
   if (isRetryableDbError(error)) return "retryable-db";
+  // Custom resolution/send errors carry an explicit retryable flag even when
+  // they have no SQLSTATE/code (e.g. ChannelAccountResolutionError).
+  if (readError(error).retryable === true) return "retryable-db";
   if (error instanceof TypeError) return "permanent";
   return "unknown";
 }

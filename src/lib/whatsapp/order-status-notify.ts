@@ -6,15 +6,13 @@
  * ambiguous/missing account -> explicit failure (never a global send).
  */
 
-import type {
-  BoundAccountResolution,
-  DefaultAccountResolution,
-} from "@/lib/channels/router";
+import {
+  decideSendAccount,
+  type SendAccountDeps,
+} from "@/lib/messaging/send-account";
 import type { ChannelAccount, SendResult } from "@/lib/messaging/types";
 
-export interface OrderStatusNotifyDeps {
-  resolveBinding(phone: string): Promise<BoundAccountResolution>;
-  resolveDefaultAccount(): Promise<DefaultAccountResolution>;
+export interface OrderStatusNotifyDeps extends SendAccountDeps {
   send(
     message: { to: string; type: "text"; text: string },
     options: { channel?: "whatsapp"; account?: ChannelAccount }
@@ -22,7 +20,12 @@ export interface OrderStatusNotifyDeps {
 }
 
 export type OrderStatusNotifyResult =
-  | { ok: true; providerMessageId?: string }
+  | {
+      ok: true;
+      providerMessageId?: string;
+      conversationId?: number;
+      channelAccountId: number | null;
+    }
   | { ok: false; error: string; retryable: boolean };
 
 export async function sendOrderStatusNotification(
@@ -33,56 +36,30 @@ export async function sendOrderStatusNotification(
     ? input.phoneNumber
     : `+${input.phoneNumber}`;
 
-  const binding = await deps.resolveBinding(to);
-  if (binding.kind === "error") {
+  const decision = await decideSendAccount(to, deps);
+  if (decision.kind === "retry") {
     return {
       ok: false,
-      error: "no se pudo resolver la cuenta del canal (error transitorio)",
-      retryable: binding.retryable,
+      error: `no se pudo resolver la cuenta del canal (${decision.reason})`,
+      retryable: true,
     };
   }
-  if (binding.kind === "ambiguous") {
-    return {
-      ok: false,
-      error: `el teléfono está vinculado a varias cuentas (${binding.accountIds.join(", ")})`,
-      retryable: false,
-    };
-  }
-  if (binding.kind === "unresolvable") {
-    return {
-      ok: false,
-      error: `la cuenta de canal #${binding.accountId} no es resoluble (${binding.reason})`,
-      retryable: false,
-    };
-  }
-
-  let account: ChannelAccount | undefined;
-  if (binding.kind === "resolved") {
-    account = binding.account;
-  } else {
-    const fallback = await deps.resolveDefaultAccount();
-    if (fallback.kind === "db-error") {
-      return {
-        ok: false,
-        error: "no se pudo resolver la cuenta por defecto (error transitorio)",
-        retryable: true,
-      };
-    }
-    if (fallback.kind === "ambiguous") {
-      return {
-        ok: false,
-        error: `hay varias cuentas activas y ninguna vinculada al teléfono (${fallback.reason})`,
-        retryable: false,
-      };
-    }
-    if (fallback.kind === "resolved") account = fallback.account;
+  if (decision.kind === "drop") {
+    return { ok: false, error: decision.reason, retryable: false };
   }
 
   const result = await deps.send(
     { to, type: "text", text: input.message },
-    account ? { channel: "whatsapp", account } : {}
+    decision.account
+      ? { channel: "whatsapp", account: decision.account }
+      : {}
   );
   return result.ok
-    ? { ok: true, providerMessageId: result.providerMessageId || undefined }
+    ? {
+        ok: true,
+        providerMessageId: result.providerMessageId || undefined,
+        conversationId: decision.conversationId,
+        channelAccountId: decision.channelAccountId,
+      }
     : { ok: false, error: result.error, retryable: result.retryable };
 }

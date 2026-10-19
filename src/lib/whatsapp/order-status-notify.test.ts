@@ -45,7 +45,12 @@ describe("sendOrderStatusNotification", () => {
         },
       })
     );
-    assert.deepEqual(res, { ok: true, providerMessageId: "wamid.b" });
+    assert.equal(res.ok, true);
+    if (res.ok) {
+      assert.equal(res.providerMessageId, "wamid.b");
+      assert.equal(res.conversationId, 7);
+      assert.equal(res.channelAccountId, 2);
+    }
     assert.equal(seen[0].account?.id, "2");
   });
 
@@ -91,6 +96,7 @@ describe("sendOrderStatusNotification", () => {
       })
     );
     assert.equal(res.ok, true);
+    if (res.ok) assert.equal(res.channelAccountId, 1);
     assert.equal(seen[0].account?.id, "1");
   });
 
@@ -108,7 +114,7 @@ describe("sendOrderStatusNotification", () => {
     );
     assert.equal(res.ok, false);
     assert.equal(sent, false);
-    if (!res.ok) assert.match(res.error, /varias cuentas/);
+    if (!res.ok) assert.match(res.error, /multiple accounts/);
   });
 
   it("surfaces bound-account and send failures to the caller", async () => {

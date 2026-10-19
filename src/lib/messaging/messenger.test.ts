@@ -133,6 +133,51 @@ describe("messenger.send — account-bound sends (S15)", () => {
     });
   });
 
+  for (const type of ["image", "document"] as const) {
+    test(`${type} sends use the account's apiKey and sender (A/B isolation)`, async () => {
+      const calls: { init?: RequestInit }[] = [];
+      mock.method(globalThis, "fetch", async (_url: string, init?: RequestInit) => {
+        calls.push({ init });
+        return new Response(JSON.stringify({ id: `wamid.${type}`, status: "sent" }));
+      });
+      try {
+        const accountB: ChannelAccount = {
+          ...ACCOUNT,
+          id: "8",
+          providerAccountId: "15550008888",
+          senderAddress: "+15550008888",
+          credentials: { apiKey: "account-b-key", webhookSecret: "" },
+        };
+        await messenger.send(
+          { to: "+15550001234", type, mediaUrl: "https://cdn.test/x", text: "hola" },
+          { channel: "whatsapp", account: ACCOUNT }
+        );
+        await messenger.send(
+          { to: "+15550001234", type, mediaUrl: "https://cdn.test/x", text: "hola" },
+          { channel: "whatsapp", account: accountB }
+        );
+      } finally {
+        mock.restoreAll();
+      }
+
+      assert.equal(calls.length, 2);
+      assert.deepEqual(calls[0].init?.headers, {
+        "Content-Type": "application/json",
+        "X-API-Key": "account-key",
+      });
+      assert.deepEqual(calls[1].init?.headers, {
+        "Content-Type": "application/json",
+        "X-API-Key": "account-b-key",
+      });
+      const first = JSON.parse(String(calls[0].init?.body));
+      const second = JSON.parse(String(calls[1].init?.body));
+      assert.equal(first.from, "+15550009999");
+      assert.equal(second.from, "+15550008888");
+      assert.equal(first.type, type);
+      assert.equal(second.type, type);
+    });
+  }
+
   test("an account whose provider is not registered fails closed — no channel fallback", async () => {
     let fetched = false;
     mock.method(globalThis, "fetch", async () => {

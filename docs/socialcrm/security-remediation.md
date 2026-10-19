@@ -23,7 +23,8 @@ error semantics, account-config FK safety, and durable status/lifecycle events.
    retryable HTTP (`503`) or explicit caller errors, never an ack/drop.
 5. **Durable normalized events.** Status/lifecycle/other events persist in
    `channel_events`, idempotent on the provider delivery id (plus a
-   platform-message/status key).
+   platform-message/status key). Id-less status events include the status in
+   the synthetic delivery id, so transitions never collapse.
 6. **Account deletion cascades its scoped config.** `ON DELETE SET NULL` was
    unsafe because clearing the account while keeping `channel` could collide
    with the channel-scope partial unique index.
@@ -94,6 +95,11 @@ cached. A chained global fallback is never cached as scoped config.
 | Ambiguous phone→account binding on send | explicit caller error, no send |
 | Bound account unresolvable / provider mismatch | explicit caller error, no send |
 | Provider send failure | surfaced (`SendResult`, tool error, action failure) |
+| YCloud image/document send | account `apiKey` + `senderAddress`; no global fallback when an account is bound |
+| Delivery-arrived notification | scoped account/config; explicit `ok` / retryable failure; no `id=1` |
+| Cron follow-up transient account/send failure | claim released + `503` so the next tick retries |
+| Cron/queue ambiguous or unresolvable account | no send; cron keeps claim for manual review / queue moves to DLQ |
+| Multi-event webhook | one retryable event makes the whole envelope `503` |
 | `updateOrderStatus` notification failure | status updated; action returns `success: false` with reason |
 
 `sendOutboundMessage` now throws on missing Telegram config/credentials and on
@@ -133,6 +139,13 @@ carry no `channel_account_id` and are unaffected.
   caching, cascade migration.
 - `order-status-notify.test.ts` — bound A/B routing, ambiguous/unresolvable
   failure, retryable send errors.
+- `send-account.test.ts` — shared cron/queue/admin decision: A/B, retry,
+  drop, ambiguous, not-found, legacy-only-when-unprovisioned.
+- `router-account.test.ts` — bound row selection never returns a legacy row.
+- `delivery-notify.test.ts` — delivery/customer notification, lookup failure,
+  retryable send failure.
+- `webhook-response.test.ts` — multi-event aggregation (`503` wins).
+- `messenger.test.ts` image/document — A/B account credentials and sender.
 - `channel-events.test.ts` — idempotency, status keys, schema classification,
   additive migration.
 - `ingress.test.ts` — passive echo identity uses `providerConversationId`,
@@ -148,3 +161,28 @@ carry no `channel_account_id` and are unaffected.
   preserved); this is safe because the table has no account-scoped uniqueness.
 - Non-YCloud providers remain passive-only until their adapters ship; the
   identity/account plumbing is provider-generic.
+- A retryable redirect/fixed-reply send returns `503`, but inbound dedup means
+  a provider replay will not resend that deterministic reply; the failure is
+  surfaced rather than silently acked.
+- Meta direct webhook resolves `metadata.phone_number_id` /
+  `display_phone_number`; installs that have not provisioned matching rows
+  continue with legacy null-account conversations by design.
+
+## 10. Corrective review (post-`db3659c`)
+
+The independent review findings were addressed in the corrective commit(s):
+
+| Finding | Fix |
+| --- | --- |
+| YCloud media ignored scoped credentials | image/document now use `sendDirectlyWithAccount` with the resolved `apiKey`/`senderAddress`; behavior tests cover A/B. |
+| Delivery arrived used `agent_config id=1` and swallowed errors | `delivery-notify.ts` + resolved context; failures return `502/503`. |
+| Cron/queue fail-open | shared `decideSendAccount`; cron releases claims on retryable failures and returns `503`; queue retries transient and DLQs permanent. |
+| Multi-event status kept only last | `aggregateWebhookStatuses`; any retryable event makes the envelope `503`. |
+| `not-found` mapped to legacy | `DefaultAccountResolution.not-found` is a hard fail; legacy only for `unprovisioned`/`schema-not-ready`. |
+| Order history used phone-only `limit(1)` | history uses the resolved conversation/account from `sendOrderStatusNotification` or account-scoped `findOrCreateConversation`. |
+| Retryable metadata ignored | `classifyError` honors explicit `retryable` flags (resolution/send errors). |
+| Redirect/fixed reply failures swallowed | send-then-persist, explicit `502/503`, never unconditional success. |
+| Status id-less collision | synthetic delivery id includes status. |
+| Legacy row chosen over bound row | `selectBoundConversationId` returns only the bound row. |
+| Meta webhook created null-account rows | resolves `metadata.phone_number_id`/display number; fail-closed skip or `503`. |
+| Provider IDs matched by digit suffix | `looksLikePhone` requires phone punctuation and >=7 digits; `phoneMatches` rejects `waba-2`/`acc-123`. |

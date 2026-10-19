@@ -382,7 +382,8 @@ async function handleEcho(
 // ─── Delivery handler ───────────────────────────────────────────────────────
 async function handleDeliveryNotification(
   payload: Record<string, unknown>,
-  config: typeof agentConfig.$inferSelect
+  config: typeof agentConfig.$inferSelect,
+  ctx: InboundContext
 ): Promise<NextResponse> {
   try {
     const message = payload.whatsappInboundMessage as Record<string, unknown> | undefined;
@@ -405,7 +406,22 @@ async function handleDeliveryNotification(
       const text = (message.text as Record<string, unknown> | undefined)?.body as string || "";
       console.log(`[delivery] Delivery says: "${text.slice(0, 80)}"`);
 
-      await notifyCustomerDeliveryArrived(deliveryPhone);
+      const result = await notifyCustomerDeliveryArrived(deliveryPhone, {
+        account: ctx.channelAccountId != null ? ctx.account : undefined,
+        channelAccountId: ctx.channelAccountId,
+        apiKey: config.ycloudApiKey || undefined,
+        senderAddress: config.phoneNumber || undefined,
+      });
+      if (!result.ok) {
+        console.error(
+          "[delivery] Notification failed — not acked",
+          result.error
+        );
+        return NextResponse.json(
+          { error: "delivery-notification-failed" },
+          { status: result.retryable ? 503 : 502 }
+        );
+      }
     }
 
     return NextResponse.json({ ok: true }, { status: 200 });
@@ -715,7 +731,7 @@ export async function handleNormalizedEvent(
     const sellerIds = (config.sellerPhoneIds ?? []) as { name: string; phone: string }[];
     const actor = resolveWhatsAppActor(customerPhone, { deliveryPhoneNumber: deliveryPhoneRaw, sellerPhoneIds: sellerIds });
     if (actor === "delivery") {
-      return handleDeliveryNotification(payload, config);
+      return handleDeliveryNotification(payload, config, effectiveCtx);
     }
 
     // Gate identities before creating a conversation or persisting a lead.
@@ -1054,22 +1070,40 @@ export async function handleNormalizedEvent(
     // subsequent questions and preserves the existing behavior when disabled.
     if (actor === "customer" && isNew && webOrderRedirectEnabled) {
       const redirectMessage = buildWebOrderRedirectMessage(config);
+      if (convAccountBroken) {
+        console.error(
+          "[webhook:wa] Web-order redirect blocked — channel account unresolvable"
+        );
+        return NextResponse.json(
+          { error: "channel-account-unresolvable" },
+          { status: 503 }
+        );
+      }
       try {
-        if (convAccountBroken) {
-          console.warn("[webhook:wa] Web-order redirect suppressed — channel account unresolvable");
-        } else {
-          await insertMessage(conversationId, "assistant", redirectMessage, undefined, undefined, channelAccountId);
-          await sendWhatsAppBubbles({
-            to: customerPhone,
-            text: redirectMessage,
-            apiKey: config.ycloudApiKey || "",
-            from: config.phoneNumber || "",
-            channel: convChannel,
-            account: convAccount,
-          });
-        }
+        // Send first; persist only on success so a failed redirect is not
+        // recorded as delivered.
+        await sendWhatsAppBubbles({
+          to: customerPhone,
+          text: redirectMessage,
+          apiKey: config.ycloudApiKey || "",
+          from: config.phoneNumber || "",
+          channel: convChannel,
+          account: convAccount,
+        });
+        await insertMessage(
+          conversationId,
+          "assistant",
+          redirectMessage,
+          undefined,
+          undefined,
+          channelAccountId
+        );
       } catch (redirectError) {
         console.error("[webhook:wa] Web-order redirect failed", redirectError);
+        return NextResponse.json(
+          { error: "web-order-redirect-failed" },
+          { status: classifyError(redirectError) === "retryable-db" ? 503 : 502 }
+        );
       }
       return NextResponse.json({ ok: true });
     }
@@ -1127,22 +1161,38 @@ export async function handleNormalizedEvent(
           return NextResponse.json({ ok: true }, { status: 200 });
         }
         const fixedReply = resolveAgentRouting(sessionDecision.kind).fixedReply ?? "";
+        if (convAccountBroken) {
+          console.error(
+            "[webhook:wa] Fixed reply blocked — channel account unresolvable"
+          );
+          return NextResponse.json(
+            { error: "channel-account-unresolvable" },
+            { status: 503 }
+          );
+        }
         try {
-          if (convAccountBroken) {
-            console.warn("[webhook:wa] Fixed reply suppressed — channel account unresolvable");
-          } else {
-            await insertMessage(conversationId, "assistant", fixedReply, undefined, undefined, channelAccountId);
-            await sendWhatsAppBubbles({
-              to: customerPhone,
-              text: fixedReply,
-              apiKey: config.ycloudApiKey || "",
-              from: config.phoneNumber || "",
-              channel: convChannel,
-              account: convAccount,
-            });
-          }
+          await sendWhatsAppBubbles({
+            to: customerPhone,
+            text: fixedReply,
+            apiKey: config.ycloudApiKey || "",
+            from: config.phoneNumber || "",
+            channel: convChannel,
+            account: convAccount,
+          });
+          await insertMessage(
+            conversationId,
+            "assistant",
+            fixedReply,
+            undefined,
+            undefined,
+            channelAccountId
+          );
         } catch (fixedError) {
-          console.error("[webhook:wa] Fixed reply failed — transition already durable, no retry", fixedError);
+          console.error("[webhook:wa] Fixed reply failed", fixedError);
+          return NextResponse.json(
+            { error: "fixed-reply-failed" },
+            { status: classifyError(fixedError) === "retryable-db" ? 503 : 502 }
+          );
         }
         return NextResponse.json({ ok: true }, { status: 200 });
       }
