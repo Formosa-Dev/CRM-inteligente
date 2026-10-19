@@ -3,10 +3,12 @@
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
+import { toast } from "sonner";
 import { fadeUpSmall, staggerContainer } from "@/lib/animation-variants";
 import { updateOrderStatus, notifyCustomer, deleteOrder, markPaidAndDelivered, type OrderRow, type OrderStatus } from "./actions";
 import { computeOrderTotal } from "@/lib/client-utils";
 import { OrderEditModal } from "./order-edit-modal";
+import { useIsAdmin } from "@/components/admin/role-context";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +36,11 @@ const NEXT_STATUS: Record<string, string> = {
   preparing: "ready",
   ready: "delivered",
 };
+
+function notifyResult(result: { success: boolean; message?: string; error?: string }) {
+  if (result.success) toast.success(result.message ?? "Listo");
+  else toast.error(result.message ?? result.error ?? "La acción falló");
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -65,6 +72,7 @@ function orderTypeBadge(type: string | null): { label: string; cls: string; Icon
 
 function OrderCard({
   order,
+  onStatusChange,
   onDelete,
 }: {
   order: OrderRow;
@@ -75,7 +83,9 @@ function OrderCard({
   const [notifying, setNotifying] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const isAdmin = useIsAdmin();
   const statusCfg = STATUSES[order.status] ?? STATUSES.pending;
   const typeBadge = orderTypeBadge(order.orderType);
   const items: Array<{ name?: string; quantity?: number; productName?: string; price?: number; unitPrice?: number }> =
@@ -86,15 +96,22 @@ function OrderCard({
     const next = NEXT_STATUS[order.status];
     if (!next) return;
     setChanging(true);
-    await updateOrderStatus(order.id, next as OrderStatus);
+    const result = await updateOrderStatus(order.id, next as OrderStatus);
+    notifyResult(result);
+    if (result.success) onStatusChange(order.id, next);
     setChanging(false);
-  }, [order.id, order.status]);
+  }, [order.id, order.status, onStatusChange]);
 
   const handleCancel = useCallback(async () => {
     setChanging(true);
-    await updateOrderStatus(order.id, "cancelled");
+    const result = await updateOrderStatus(order.id, "cancelled");
+    notifyResult(result);
+    if (result.success) {
+      setConfirmCancel(false);
+      onStatusChange(order.id, "cancelled");
+    }
     setChanging(false);
-  }, [order.id]);
+  }, [order.id, onStatusChange]);
 
   return (
     <>
@@ -102,8 +119,8 @@ function OrderCard({
       layout
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      onClick={() => setEditOpen(true)}
-      className={`rounded-xl border p-4 flex flex-col gap-3 bg-card transition-all duration-200 hover:border-primary/40 cursor-pointer ${
+      onClick={() => isAdmin && setEditOpen(true)}
+      className={`rounded-xl border p-4 flex flex-col gap-3 bg-card transition-all duration-200 hover:border-primary/40 ${isAdmin ? "cursor-pointer" : ""} ${
         order.status === "pending" ? "border-primary/30" : "border-border"
       }`}
     >
@@ -177,6 +194,7 @@ function OrderCard({
           </span>
         </div>
 
+        {isAdmin && (
         <div className="flex flex-wrap gap-1.5">
           {NEXT_STATUS[order.status] && (
             <Button
@@ -198,7 +216,9 @@ function OrderCard({
               onClick={async (e) => {
                 e.stopPropagation();
                 setChanging(true);
-                await markPaidAndDelivered(order.id);
+                const result = await markPaidAndDelivered(order.id);
+                notifyResult(result);
+                if (result.success) onStatusChange(order.id, "delivered");
                 setChanging(false);
               }}
               className="h-8 sm:h-7 text-xs px-2.5 sm:px-2 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/20"
@@ -215,7 +235,7 @@ function OrderCard({
               onClick={async (e) => {
                 e.stopPropagation();
                 setNotifying(true);
-                await notifyCustomer(order.id);
+                notifyResult(await notifyCustomer(order.id));
                 setNotifying(false);
               }}
               variant="ghost"
@@ -227,18 +247,44 @@ function OrderCard({
             </Button>
           )}
           {order.status === "pending" && (
-            <Button
-              type="button"
-              size="sm"
-              disabled={changing}
-              onClick={(e) => { e.stopPropagation(); handleCancel(); }}
-              variant="ghost"
-              className="h-8 sm:h-7 w-8 sm:w-7 text-xs flex items-center justify-center text-red-400/50 hover:text-red-400"
-              title="Cancelar pedido"
-              aria-label="Cancelar pedido"
-            >
-              <X size={14} aria-hidden="true" />
-            </Button>
+            confirmCancel ? (
+              <div className="flex gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={changing}
+                  onClick={(e) => { e.stopPropagation(); handleCancel(); }}
+                  className="h-8 sm:h-7 text-xs px-2.5 sm:px-2 bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                  title="Cancelar pedido — notifica al cliente por WhatsApp"
+                >
+                  {changing ? "..." : "Cancelar"}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={(e) => { e.stopPropagation(); setConfirmCancel(false); }}
+                  variant="ghost"
+                  className="h-8 sm:h-7 text-xs px-2 text-foreground/30"
+                  title="No cancelar"
+                  aria-label="No cancelar el pedido"
+                >
+                  <X size={13} aria-hidden="true" />
+                </Button>
+              </div>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                disabled={changing}
+                onClick={(e) => { e.stopPropagation(); setConfirmCancel(true); }}
+                variant="ghost"
+                className="h-8 sm:h-7 w-8 sm:w-7 text-xs flex items-center justify-center text-red-400/50 hover:text-red-400"
+                title="Cancelar pedido — notifica al cliente por WhatsApp"
+                aria-label="Cancelar pedido"
+              >
+                <X size={14} aria-hidden="true" />
+              </Button>
+            )
           )}
           {/* Delete button - visible on delivered/cancelled or always with confirm */}
           {confirmDelete ? (
@@ -250,8 +296,12 @@ function OrderCard({
                 onClick={async (e) => {
                   e.stopPropagation();
                   setDeleting(true);
-                  await deleteOrder(order.id);
-                  onDelete(order.id);
+                  const result = await deleteOrder(order.id);
+                  notifyResult(result);
+                  if (result.success) {
+                    setConfirmDelete(false);
+                    onDelete(order.id);
+                  }
                   setDeleting(false);
                 }}
                 className="h-8 sm:h-7 text-xs px-2.5 sm:px-2 bg-red-500/20 text-red-400 hover:bg-red-500/30"
@@ -296,6 +346,7 @@ function OrderCard({
             <Pencil size={14} aria-hidden="true" />
           </Button>
         </div>
+        )}
       </div>
     </motion.div>
     <OrderEditModal order={order} open={editOpen} onClose={() => setEditOpen(false)} />

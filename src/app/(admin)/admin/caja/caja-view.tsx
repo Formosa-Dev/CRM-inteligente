@@ -1,6 +1,8 @@
 "use client";
 
+import { useActionState, useEffect } from "react";
 import { motion } from "framer-motion";
+import { toast } from "sonner";
 import {
   AlertTriangleIcon,
   ArrowDownIcon,
@@ -20,6 +22,7 @@ import {
 import { cardEntrance, fadeUpSmall, staggerContainer } from "@/lib/animation-variants";
 import { formatCurrency } from "@/lib/client-utils";
 import { addCashMovementAction } from "./actions";
+import { useIsAdmin } from "@/components/admin/role-context";
 import type { ClosedSessionLine, OpenSessionView } from "./queries";
 
 interface CajaViewProps {
@@ -83,11 +86,20 @@ function StatCard({
 // ─── Movimientos ──────────────────────────────────────────────────────────────
 
 function MovementForm() {
+  const [state, formAction, isPending] = useActionState(
+    async (_prev: { error?: string; ok?: boolean } | null, formData: FormData) =>
+      addCashMovementAction(formData),
+    null
+  );
+
+  useEffect(() => {
+    if (state?.error) toast.error(state.error);
+    else if (state?.ok) toast.success("Movimiento cargado");
+  }, [state]);
+
   return (
     <form
-      action={async (formData) => {
-        await addCashMovementAction(formData);
-      }}
+      action={formAction}
       className="flex flex-wrap items-center gap-2 border-b border-border px-6 py-3"
     >
       <select
@@ -116,10 +128,14 @@ function MovementForm() {
       />
       <button
         type="submit"
-        className="h-9 rounded-lg border border-primary/30 bg-primary/10 px-4 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+        disabled={isPending}
+        className="h-9 rounded-lg border border-primary/30 bg-primary/10 px-4 text-sm font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        Cargar
+        {isPending ? "Cargando..." : "Cargar"}
       </button>
+      {state?.error && (
+        <span className="text-xs text-destructive">{state.error}</span>
+      )}
     </form>
   );
 }
@@ -287,6 +303,8 @@ function HistoryTable({ history }: { history: ClosedSessionLine[] }) {
 // ─── Vista principal ──────────────────────────────────────────────────────────
 
 export function CajaView({ open, history }: CajaViewProps) {
+  const isAdmin = useIsAdmin();
+
   return (
     <>
       {open ? (
@@ -347,7 +365,7 @@ export function CajaView({ open, history }: CajaViewProps) {
               </div>
             </div>
 
-            <MovementForm />
+            {isAdmin && <MovementForm />}
             <MovementsTable movements={open.movements} />
           </motion.div>
         </>

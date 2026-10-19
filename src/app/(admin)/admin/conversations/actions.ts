@@ -7,6 +7,7 @@ import { eq, desc, sql, count } from "drizzle-orm";
 import { resolveClientNamesBatch } from "@/lib/lead-utils";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { conversationListWhere } from "@/lib/conversations/filters";
+import type { CustomerProfile, OrderSummary } from "@/types/chat";
 
 const PAGE_SIZE = 50;
 
@@ -95,6 +96,10 @@ export async function getMessages(
   offset = 0
 ) {
   await requireSession();
+  // Client-controlled limit gets clamped — an unbounded value would dump
+  // the whole chat_messages table into the response.
+  const safeLimit = Math.min(Math.max(1, Math.floor(limit)), 200);
+  const safeOffset = Math.max(0, Math.floor(offset));
   // Fetch the LATEST `limit` messages (DESC) — offset paginates backwards
   // into older history — then restore chronological order for display.
   // Ordering ASC + LIMIT would return the first N messages forever, which
@@ -104,8 +109,8 @@ export async function getMessages(
     .from(chatMessages)
     .where(eq(chatMessages.conversationId, conversationId))
     .orderBy(desc(chatMessages.createdAt))
-    .limit(limit)
-    .offset(offset);
+    .limit(safeLimit)
+    .offset(safeOffset);
   return rows.reverse();
 }
 
@@ -133,27 +138,6 @@ export async function sendReply(
     // message itself carries no secrets.
     const detail = error instanceof Error ? error.message : "desconocido";
     return { success: false, error: `Error al enviar mensaje: ${detail}` };
-  }
-}
-
-/**
- * Actualiza el estado de una conversación (active / closed / archived).
- */
-export async function updateConversationStatus(
-  conversationId: number,
-  status: "active" | "closed" | "archived"
-): Promise<{ success: boolean }> {
-  if (!(await requireAdmin())) return { success: false };
-  if (!["active", "closed", "archived"].includes(status)) return { success: false };
-  try {
-    await db
-      .update(conversations)
-      .set({ status, updatedAt: new Date() })
-      .where(eq(conversations.id, conversationId));
-    return { success: true };
-  } catch (error) {
-    console.error("[updateConversationStatus] Error:", error);
-    return { success: false };
   }
 }
 
@@ -199,27 +183,91 @@ export async function getConversation(
 }
 
 /**
- * Obtiene el lead vinculado a una conversación.
+ * Perfil del cliente para el context panel del inbox.
+ * Lookup en dos pasos: lead vinculado a la conversación, o fallback por el
+ * teléfono de la conversación (mismo criterio que usaba el queryFn client-side
+ * que reemplaza — corre server-side porque el browser no tiene DATABASE_URL).
  */
-export async function getLeadByConversation(conversationId: number) {
+export async function getCustomerProfile(
+  conversationId: number
+): Promise<CustomerProfile | null> {
   await requireSession();
-  const [lead] = await db
+
+  // Try 1: lead auto-vinculado a la conversación
+  let [lead] = await db
     .select()
     .from(leads)
     .where(eq(leads.conversationId, conversationId))
     .limit(1);
-  return lead ?? null;
+
+  // Try 2: fallback — buscar por teléfono de la conversación
+  if (!lead) {
+    const [conv] = await db
+      .select({ phone: conversations.customerPhone })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+
+    if (conv?.phone) {
+      [lead] = await db
+        .select()
+        .from(leads)
+        .where(eq(leads.phone, conv.phone))
+        .limit(1);
+    }
+  }
+
+  if (!lead) return null;
+
+  return {
+    id: lead.id,
+    name: lead.name,
+    phone: lead.phone,
+    email: lead.email,
+    address: lead.address,
+    status: lead.status as CustomerProfile["status"],
+    tags: (lead.tags ?? []) as string[],
+    notes: lead.notes,
+    platform: lead.platform,
+    utmSource: lead.utmSource,
+    utmMedium: lead.utmMedium,
+    utmCampaign: lead.utmCampaign,
+    utmContent: lead.utmContent,
+    adId: lead.adId,
+    campaignId: lead.campaignId,
+    conversationId: lead.conversationId,
+    createdAt: lead.createdAt instanceof Date
+      ? lead.createdAt.toISOString()
+      : String(lead.createdAt),
+  };
 }
 
 /**
- * Obtiene las órdenes de un lead.
+ * Órdenes recientes de un lead para el context panel (más nuevas primero).
  */
-export async function getOrdersByLead(leadId: number) {
+export async function getCustomerOrders(
+  leadId: number
+): Promise<OrderSummary[]> {
   await requireSession();
-  return db
-    .select()
+  const rows = await db
+    .select({
+      id: orders.id,
+      orderType: orders.orderType,
+      status: orders.status,
+      createdAt: orders.createdAt,
+    })
     .from(orders)
     .where(eq(orders.leadId, leadId))
     .orderBy(desc(orders.createdAt))
     .limit(20);
+
+  return rows.map((r) => ({
+    id: r.id,
+    orderType: r.orderType,
+    status: r.status,
+    total: null,
+    createdAt: r.createdAt instanceof Date
+      ? r.createdAt.toISOString()
+      : String(r.createdAt),
+  }));
 }

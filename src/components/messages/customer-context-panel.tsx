@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Phone, Mail, MapPin, ShoppingBag, Calendar, UserPlus, Bot, Shield, ChevronDown } from "lucide-react";
+import { Phone, Mail, MapPin, ShoppingBag, UserPlus, Bot, Shield, ChevronDown } from "lucide-react";
 import { useCustomerProfile, useMessages } from "@/lib/conversations/queries";
 import { LeadStatusBadge } from "./lead-status-badge";
 import { TagList } from "./tag-list";
@@ -156,13 +156,6 @@ export function CustomerContextPanel({ conversationId, className, onNewOrder }: 
             Ir a pedidos
           </a>
         )}
-        <a
-          href="/admin/orders"
-          className="flex items-center justify-center gap-2 w-full rounded-lg bg-muted/40 hover:bg-muted border border-border px-4 py-2.5 text-xs font-medium text-foreground transition-colors"
-        >
-          <Calendar className="h-3.5 w-3.5" />
-          Agendar entrega
-        </a>
         <a
           href={`/admin/clients?search=${encodeURIComponent(profile.phone ?? "")}`}
           className="flex items-center justify-center gap-2 w-full rounded-lg bg-muted/40 hover:bg-muted border border-border px-4 py-2.5 text-xs font-medium text-foreground transition-colors"

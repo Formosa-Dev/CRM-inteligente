@@ -8,7 +8,10 @@ import { ChatPanel } from "@/components/messages/chat-panel";
 import { CustomerContextPanel } from "@/components/messages/customer-context-panel";
 import { CreateOrderModal } from "@/components/orders/create-order-modal";
 import { ChevronLeft } from "lucide-react";
+import { toast } from "sonner";
+import { useIsAdmin } from "@/components/admin/role-context";
 import {
+  useConversation,
   useConversations,
   useMessages,
   useSendReply,
@@ -34,12 +37,20 @@ interface Props {
 }
 
 function ConversationsInboxInner({ initialConversations, sellerPhones, channelAccounts }: Props) {
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [currentView, setCurrentView] = useState<"list" | "chat" | "context">("list");
-  const [orderModal, setOrderModal] = useState<{ phone: string; name: string } | null>(null);
-
   const router = useRouter();
   const searchParams = useSearchParams();
+
+  // Deep link: /admin/conversations?sel=<id> opens that conversation
+  // directly (redirección desde la ruta legacy /admin/conversations/[id]).
+  const selFromUrl = Number.parseInt(searchParams.get("sel") ?? "", 10);
+  const initialSel = Number.isFinite(selFromUrl) ? selFromUrl : null;
+
+  const [selectedId, setSelectedId] = useState<number | null>(initialSel);
+  const [currentView, setCurrentView] = useState<"list" | "chat" | "context">(
+    initialSel !== null ? "chat" : "list"
+  );
+  const [orderModal, setOrderModal] = useState<{ phone: string; name: string } | null>(null);
+  const isAdmin = useIsAdmin();
 
   // Channel/account filters live in the URL so a filtered inbox is shareable.
   const channelFilter = normalizeChannelParam(searchParams.get("channel"));
@@ -96,10 +107,15 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
   const handleSelect = useCallback((id: number) => {
     setSelectedId(id);
     setCurrentView("chat");
-  }, []);
+    // Sync ?sel= so the open chat survives refresh/share — preserves filters.
+    const next = new URLSearchParams(searchParams.toString());
+    next.set("sel", String(id));
+    router.replace(`/admin/conversations?${next.toString()}`);
+  }, [router, searchParams]);
 
   const handleSend = useCallback(
-    (content: string) => sendMutation.mutate(content),
+    // mutateAsync propaga el error al ReplyInput, que mantiene el borrador.
+    (content: string) => sendMutation.mutateAsync(content),
     [sendMutation]
   );
 
@@ -107,14 +123,28 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
   const handleBackToList = useCallback(() => setCurrentView("list"), []);
   const handleBackToChat = useCallback(() => setCurrentView("chat"), []);
 
-  const selectedConversation = conversations.find((c) => c.id === selectedId);
+  // The selected row may not be on the current page/filter — fetch it by id.
+  const listedConversation = conversations.find((c) => c.id === selectedId);
+  const { data: fetchedConversation } = useConversation(
+    selectedId,
+    !!selectedId && !listedConversation
+  );
+  const selectedConversation = listedConversation ?? fetchedConversation ?? undefined;
   const isHumanOverride = selectedConversation?.humanOverrideUntil
     ? new Date(selectedConversation.humanOverrideUntil) > new Date()
     : false;
 
   const handleHumanOverride = useCallback(async () => {
     if (!selectedId) return;
-    await toggleHumanOverride(selectedId, !isHumanOverride);
+    const result = await toggleHumanOverride(selectedId, !isHumanOverride);
+    if (!result.success) {
+      toast.error("No se pudo cambiar el modo manual");
+      return;
+    }
+    toast.success(
+      isHumanOverride ? "Bot reactivado" : "Control manual activado por 24h"
+    );
+    queryClient.invalidateQueries({ queryKey: ["conversations"] });
   }, [selectedId, isHumanOverride]);
 
   const handleNewOrder = useCallback((phone: string, name: string) => {
@@ -132,7 +162,10 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
         </button>
         <span className="text-sm font-medium text-foreground">Perfil del Cliente</span>
       </div>
-      <CustomerContextPanel conversationId={selectedId} onNewOrder={handleNewOrder} />
+      <CustomerContextPanel
+        conversationId={selectedId}
+        onNewOrder={isAdmin ? handleNewOrder : undefined}
+      />
     </div>
   ) : null;
 
@@ -174,8 +207,9 @@ function ConversationsInboxInner({ initialConversations, sellerPhones, channelAc
             onSend={handleSend}
             onBack={handleBackToList}
             onShowContext={handleOpenContext}
-            onHumanOverride={handleHumanOverride}
+            onHumanOverride={isAdmin ? handleHumanOverride : undefined}
             humanOverrideActive={isHumanOverride}
+            readOnly={!isAdmin}
           />
         )}
       </div>

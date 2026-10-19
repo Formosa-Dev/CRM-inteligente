@@ -1,8 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Edit, X, Save } from "lucide-react";
+import { toast } from "sonner";
 import { updateClient } from "../actions";
+import { useIsAdmin } from "@/components/admin/role-context";
 
 interface LeadData {
   id: number;
@@ -22,6 +25,8 @@ interface LeadData {
 }
 
 export function ClientEditForm({ lead }: { lead: LeadData | null }) {
+  const router = useRouter();
+  const isAdmin = useIsAdmin();
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -33,7 +38,7 @@ export function ClientEditForm({ lead }: { lead: LeadData | null }) {
   const [type, setType] = useState(lead?.type ?? "");
   const [tagsStr, setTagsStr] = useState((lead?.tags ?? []).join(", "));
 
-  if (!lead) return null;
+  if (!lead || !isAdmin) return null;
 
   const handleSave = async () => {
     setSaving(true);
@@ -52,12 +57,13 @@ export function ClientEditForm({ lead }: { lead: LeadData | null }) {
 
       if (result.success) {
         setOpen(false);
-        // Forzar recarga completa desde el servidor para que todos los datos
-        // (incluyendo cards, dashboard, etc) se actualicen
-        window.location.reload();
+        // Revalidar datos del servidor sin recargar la página entera
+        router.refresh();
+      } else {
+        toast.error(result.error ?? "No se pudo guardar el cliente");
       }
-    } catch (err) {
-      console.error(err);
+    } catch {
+      toast.error("No se pudo guardar el cliente");
     }
     setSaving(false);
   };

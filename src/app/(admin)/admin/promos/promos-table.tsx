@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { X } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useIsAdmin } from "@/components/admin/role-context";
 
 // El import de useRouter debe estar en el scope correcto
 import { motion } from "framer-motion";
@@ -124,6 +125,7 @@ function PromoForm({
 
 export function PromosTable({ promos }: { promos: PromoRow[] }) {
   const router = useRouter();
+  const isAdmin = useIsAdmin();
   const [editing, setEditing] = useState<PromoRow | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
@@ -138,13 +140,15 @@ export function PromosTable({ promos }: { promos: PromoRow[] }) {
     <div className="flex flex-col gap-4">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold tracking-tight text-gold-gradient">Promociones</h1>
-        <Button
-          type="button"
-          onClick={() => setShowCreate(true)}
-          className="bg-primary/15 text-gold-bright hover:bg-primary/25 border border-primary/30 h-8 text-xs"
-        >
-          + Nueva Promo
-        </Button>
+        {isAdmin && (
+          <Button
+            type="button"
+            onClick={() => setShowCreate(true)}
+            className="bg-primary/15 text-gold-bright hover:bg-primary/25 border border-primary/30 h-8 text-xs"
+          >
+            + Nueva Promo
+          </Button>
+        )}
       </div>
 
       {promos.length === 0 ? (
@@ -157,10 +161,10 @@ export function PromosTable({ promos }: { promos: PromoRow[] }) {
               layout
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className={`rounded-xl border p-4 flex flex-col gap-3 bg-card hover:border-primary/40 transition-all cursor-pointer ${
+              className={`rounded-xl border p-4 flex flex-col gap-3 bg-card hover:border-primary/40 transition-all ${isAdmin ? "cursor-pointer" : ""} ${
                 p.active ? "border-primary/30" : "border-border"
               }`}
-              onClick={() => setEditing(p)}
+              onClick={() => isAdmin && setEditing(p)}
             >
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-foreground/90">{p.name}</span>
@@ -174,6 +178,7 @@ export function PromosTable({ promos }: { promos: PromoRow[] }) {
                 {/* eslint-disable-next-line @next/next/no-img-element -- thumbnail de URL externa arbitraria; convertir a next/image exige remotePatterns y cambia el layout */}
                 {p.imageUrl && <img src={p.imageUrl} className="w-10 h-10 object-cover rounded" alt="" />}
               </div>
+              {isAdmin && (
               <div className="flex gap-2 justify-end">
                 <Button
                   type="button"
@@ -184,7 +189,8 @@ export function PromosTable({ promos }: { promos: PromoRow[] }) {
                   Eliminar
                 </Button>
               </div>
-              {deleting === p.id && (
+              )}
+              {isAdmin && deleting === p.id && (
                 <div className="flex gap-1 justify-end">
                   <Button type="button" size="sm" onClick={() => handleDelete(p.id)} className="h-6 text-[10px] px-2 bg-red-500/20 text-red-400">
                     Confirmar

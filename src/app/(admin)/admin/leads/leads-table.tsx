@@ -22,6 +22,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { ShoppingBag, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { useIsAdmin } from "@/components/admin/role-context";
 import { CreateOrderModal } from "@/components/orders/create-order-modal";
 import { deleteLead } from "@/app/(admin)/admin/clients/actions";
 
@@ -122,6 +124,7 @@ export default function LeadsTable({
   const [orderModalOpen, setOrderModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const isAdmin = useIsAdmin();
 
   const buildUrl = useCallback(
     (overrides: Record<string, string | undefined>) => {
@@ -366,7 +369,7 @@ export default function LeadsTable({
                 </section>
 
                 {/* Botón convertir a cliente */}
-                {selectedLead?.status !== "converted" && (
+                {isAdmin && selectedLead?.status !== "converted" && (
                   <div className="pt-2">
                     <button
                       onClick={() => { setSheetOpen(false); setOrderModalOpen(true); }}
@@ -379,17 +382,25 @@ export default function LeadsTable({
                 )}
 
                 {/* Botón eliminar lead */}
+                {isAdmin && (
                 <div className="pt-2 border-t border-border">
                   {confirmDelete ? (
                     <div className="flex gap-2">
                       <button
                         onClick={async () => {
                           setDeleting(true);
-                          if (selectedLead?.phone) await deleteLead(selectedLead.phone);
+                          const result = selectedLead?.phone
+                            ? await deleteLead(selectedLead.phone)
+                            : { success: false, error: "Este lead no tiene teléfono" };
+                          setDeleting(false);
+                          if (!result.success) {
+                            toast.error(result.error ?? "No se pudo eliminar el lead");
+                            return;
+                          }
+                          toast.success("Lead eliminado");
                           setSheetOpen(false);
                           setConfirmDelete(false);
-                          setDeleting(false);
-                          window.location.reload();
+                          router.refresh();
                         }}
                         disabled={deleting}
                         className="flex-1 rounded-lg bg-red-500/20 text-red-400 px-4 py-2.5 text-xs font-semibold hover:bg-red-500/30 transition-colors"
@@ -412,6 +423,7 @@ export default function LeadsTable({
                     </button>
                   )}
                 </div>
+                )}
               </div>
             </>
           )}

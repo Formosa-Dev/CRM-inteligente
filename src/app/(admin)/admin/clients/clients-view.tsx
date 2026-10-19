@@ -3,10 +3,12 @@
 import { useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { motion } from "framer-motion";
 import { fadeUpSmall, staggerContainer } from "@/lib/animation-variants";
 import type { ClientSummary } from "./actions";
 import { updateClient } from "./actions";
+import { useIsAdmin } from "@/components/admin/role-context";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { X, Save, User, Pencil, Sandwich, Wheat, Package } from "lucide-react";
@@ -67,6 +69,7 @@ export function ClientsView({
   const [editNotes, setEditNotes] = useState("");
   const [localClients, setLocalClients] = useState(clients);
   const [savingEdit, setSavingEdit] = useState(false);
+  const isAdmin = useIsAdmin();
 
   const navigate = useCallback(
     (params: Record<string, string>) => {
@@ -181,8 +184,10 @@ export function ClientsView({
                   <div className="flex items-center gap-1">
                     <Link href={`/admin/clients/${encodeURIComponent(client.phone)}`}
                       className="text-xs text-foreground/30 hover:text-primary transition-colors px-2.5 py-1.5 sm:px-1.5 sm:py-0.5" aria-label="Ver cliente"><User size={14} aria-hidden="true" /></Link>
-                    <button onClick={(e) => { e.preventDefault(); setEditClient(client); setEditName(client.name || ""); setEditType(client.type || ""); setEditNotes(""); }}
-                      className="text-xs text-foreground/20 hover:text-gold-bright transition-colors px-2.5 py-1.5 sm:px-1.5 sm:py-0.5" title="Editar cliente" aria-label="Editar cliente"><Pencil size={13} aria-hidden="true" /></button>
+                    {isAdmin && (
+                      <button onClick={(e) => { e.preventDefault(); setEditClient(client); setEditName(client.name || ""); setEditType(client.type || ""); setEditNotes(""); }}
+                        className="text-xs text-foreground/20 hover:text-gold-bright transition-colors px-2.5 py-1.5 sm:px-1.5 sm:py-0.5" title="Editar cliente" aria-label="Editar cliente"><Pencil size={13} aria-hidden="true" /></button>
+                    )}
                   </div>
                 </div>
               </motion.div>
@@ -302,8 +307,12 @@ export function ClientsView({
                       )
                     );
                     setEditClient(null);
+                  } else {
+                    toast.error(result.error ?? "No se pudo guardar el cliente");
                   }
-                } catch (e) { console.error(e); }
+                } catch {
+                  toast.error("No se pudo guardar el cliente");
+                }
                 setSavingEdit(false);
               }} disabled={savingEdit}
                 className="flex items-center gap-1.5 px-6 py-2.5 sm:px-5 sm:py-2 rounded-lg text-xs font-semibold bg-primary text-primary-foreground hover:bg-gold-bright disabled:opacity-40">

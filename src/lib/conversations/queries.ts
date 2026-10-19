@@ -5,15 +5,15 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import {
+  getConversation,
   getConversations,
+  getCustomerOrders,
+  getCustomerProfile,
   getMessages,
   sendReply,
   type GetConversationsParams,
 } from "@/app/(admin)/admin/conversations/actions";
-import type { ConversationSummary, ChatMessage, CustomerProfile, OrderSummary } from "@/types/chat";
-import { db } from "@/db";
-import { leads, orders } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import type { ConversationSummary, ChatMessage } from "@/types/chat";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -75,6 +75,25 @@ export function useConversations(params: GetConversationsParams) {
   });
 }
 
+// ─── Single Conversation ──────────────────────────────────────────────────────
+
+/**
+ * Fetches one conversation by id — used when ?sel=<id> points to a row that
+ * isn't on the current list page (older page, or filtered out by channel).
+ */
+export function useConversation(conversationId: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["conversation", conversationId],
+    queryFn: async () => {
+      if (!conversationId) return null;
+      const row = await getConversation(conversationId);
+      return row ? mapToSummary(row as unknown as Record<string, unknown>) : null;
+    },
+    enabled: enabled && !!conversationId,
+    staleTime: 10000,
+  });
+}
+
 // ─── Message Queries ─────────────────────────────────────────────────────────
 
 export function useMessages(conversationId: number | null) {
@@ -119,58 +138,10 @@ export function useSendReply(conversationId: number | null) {
 export function useCustomerProfile(conversationId: number | null) {
   return useQuery({
     queryKey: ["customer-profile", conversationId],
-    queryFn: async (): Promise<CustomerProfile | null> => {
-      if (!conversationId) return null;
-
-      // Try 1: Find lead by conversationId (auto-linked)
-      let [lead] = await db
-        .select()
-        .from(leads)
-        .where(eq(leads.conversationId, conversationId))
-        .limit(1);
-
-      // Try 2: Fallback — buscar por teléfono de la conversación
-      if (!lead) {
-        const { conversations: convTable } = await import("@/db/schema");
-        const [conv] = await db
-          .select({ phone: convTable.customerPhone })
-          .from(convTable)
-          .where(eq(convTable.id, conversationId))
-          .limit(1);
-
-        if (conv?.phone) {
-          [lead] = await db
-            .select()
-            .from(leads)
-            .where(eq(leads.phone, conv.phone))
-            .limit(1);
-        }
-      }
-
-      if (!lead) return null;
-
-      return {
-        id: lead.id,
-        name: lead.name,
-        phone: lead.phone,
-        email: lead.email,
-        address: lead.address,
-        status: lead.status as CustomerProfile["status"],
-        tags: (lead.tags ?? []) as string[],
-        notes: lead.notes,
-        platform: lead.platform,
-        utmSource: lead.utmSource,
-        utmMedium: lead.utmMedium,
-        utmCampaign: lead.utmCampaign,
-        utmContent: lead.utmContent,
-        adId: lead.adId,
-        campaignId: lead.campaignId,
-        conversationId: lead.conversationId,
-        createdAt: lead.createdAt instanceof Date
-          ? lead.createdAt.toISOString()
-          : String(lead.createdAt),
-      };
-    },
+    // Server action — la sesión se valida server-side; el browser no puede
+    // consultar Drizzle directamente (no hay DATABASE_URL en el bundle).
+    queryFn: () =>
+      conversationId ? getCustomerProfile(conversationId) : null,
     enabled: !!conversationId,
     staleTime: 30000, // 30s cache — no polling needed
   });
@@ -179,30 +150,8 @@ export function useCustomerProfile(conversationId: number | null) {
 export function useCustomerOrders(leadId: number | null, enabled: boolean) {
   return useQuery({
     queryKey: ["customer-orders", leadId],
-    queryFn: async (): Promise<OrderSummary[]> => {
-      if (!leadId) return [];
-
-      const rows = await db
-        .select({
-          id: orders.id,
-          orderType: orders.orderType,
-          status: orders.status,
-          total: orders.items,
-          createdAt: orders.createdAt,
-        })
-        .from(orders)
-        .where(eq(orders.leadId, leadId))
-        .orderBy(orders.createdAt)
-        .limit(20);
-
-      return rows.map((r) => ({
-        id: r.id,
-        orderType: r.orderType,
-        status: r.status,
-        total: null, // items is JSONB, extract total if needed
-        createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
-      }));
-    },
+    // Server action — devuelve las 20 órdenes más recientes (DESC).
+    queryFn: () => (leadId ? getCustomerOrders(leadId) : []),
     enabled: enabled && !!leadId,
     staleTime: 60000, // 1min cache
   });

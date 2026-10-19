@@ -3,11 +3,12 @@
 import { useState, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Send, Paperclip } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Channel } from "@/types/chat";
 
 interface ReplyInputProps {
-  onSend: (message: string) => void;
+  onSend: (message: string) => Promise<void>;
   channel: Channel;
   disabled?: boolean;
   placeholder?: string;
@@ -32,17 +33,25 @@ export function ReplyInput({
   const [isSending, setIsSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const trimmed = value.trim();
     if (!trimmed || disabled || isSending) return;
     setIsSending(true);
-    onSend(trimmed);
-    setValue("");
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
+    try {
+      await onSend(trimmed);
+      // Solo se limpia el borrador cuando el envío salió — si falla queda
+      // el texto para reintentar.
+      setValue("");
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+      }
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "No se pudo enviar el mensaje"
+      );
+    } finally {
+      setIsSending(false);
     }
-    // Reset sending state after brief delay
-    setTimeout(() => setIsSending(false), 500);
   }, [value, disabled, isSending, onSend]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

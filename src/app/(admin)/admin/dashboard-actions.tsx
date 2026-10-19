@@ -3,11 +3,13 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
+import { toast } from "sonner";
 import { CheckCircle, Clock, DollarSign, Inbox, MessageSquare, Target, Truck, UserPlus } from "lucide-react";
 import { fadeUpSmall, staggerContainer, cardEntrance } from "@/lib/animation-variants";
 import type { ActionCard } from "./page";
-import { updateOrderStatus } from "@/app/(admin)/admin/orders/actions";
+import { updateOrderStatus, markPaidAndDelivered } from "@/app/(admin)/admin/orders/actions";
 import { triggerAgentForConversation } from "./dashboard-actions-server";
+import { useIsAdmin } from "@/components/admin/role-context";
 
 // ─── Single gold accent (D8: oro, no multi-hue) ────────────────────────────
 
@@ -33,6 +35,21 @@ function CardIcon({ name }: { name: string }) {
   const Icon = ICON_MAP[name] ?? Inbox;
   return <Icon size={16} aria-hidden="true" />;
 }
+
+// Every server action answers {success,message} — surface it instead of
+// letting clicks die silently.
+function notifyResult(result: { success: boolean; message?: string }) {
+  if (result.success) toast.success(result.message ?? "Listo");
+  else toast.error(result.message ?? "La acción falló");
+}
+
+// Mutations hidden for viewer accounts; navigation actions stay.
+const MUTATION_ACTIONS = new Set([
+  "mark-delivered",
+  "mark-ready",
+  "mark-paid",
+  "trigger-agent",
+]);
 
 // ─── Action Button ────────────────────────────────────────────────────────
 
@@ -71,6 +88,10 @@ function ActionCardComponent({
   router: ReturnType<typeof useRouter>;
 }) {
   const [loadingItems, setLoadingItems] = useState<Record<string, Record<string, boolean>>>({});
+  const isAdmin = useIsAdmin();
+  const visibleActions = isAdmin
+    ? card.actions
+    : card.actions.filter((a) => !MUTATION_ACTIONS.has(a.action));
 
   const styles = GOLD_STYLE;
 
@@ -83,13 +104,13 @@ function ActionCardComponent({
     try {
       switch (action) {
         case "mark-delivered":
-          await updateOrderStatus(Number(itemId), "delivered");
+          notifyResult(await updateOrderStatus(Number(itemId), "delivered"));
           break;
         case "mark-ready":
-          await updateOrderStatus(Number(itemId), "ready");
+          notifyResult(await updateOrderStatus(Number(itemId), "ready"));
           break;
         case "mark-paid":
-          await updateOrderStatus(Number(itemId), "delivered");
+          notifyResult(await markPaidAndDelivered(Number(itemId)));
           break;
         case "open-chat":
           if (item.conversationId) {
@@ -98,10 +119,7 @@ function ActionCardComponent({
           break;
         case "trigger-agent":
           if (item.conversationId && item.phone) {
-            const result = await triggerAgentForConversation(item.conversationId, item.phone);
-            if (!result.success) {
-              console.warn("[dashboard] triggerAgent failed:", result.message);
-            }
+            notifyResult(await triggerAgentForConversation(item.conversationId, item.phone));
           }
           break;
         case "view-lead":
@@ -113,6 +131,7 @@ function ActionCardComponent({
       // Re-cargar la página para refrescar datos
       router.refresh();
     } catch (err) {
+      toast.error("La acción falló — reintentá");
       console.warn(`[dashboard] Action ${action} failed:`, err);
     } finally {
       setLoadingItems((prev) => ({
@@ -144,7 +163,7 @@ function ActionCardComponent({
                 <p className="text-[11px] text-foreground/30 truncate">{item.subtitle}</p>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                {card.actions.map((action) => (
+                {visibleActions.map((action) => (
                   <ActionButton
                     key={action.action}
                     label={action.label}

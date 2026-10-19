@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Plus, Minus, Trash2, ShoppingBag, Search, ChevronDown } from "lucide-react";
+import { toast } from "sonner";
 import { createManualOrder } from "@/app/(admin)/admin/orders/create-order-action";
 
 interface OrderItem {
@@ -70,13 +71,13 @@ export function CreateOrderModal({ open, onClose, clientName, clientPhone }: Cre
 
   useEffect(() => {
     fetch("/api/products?available=true")
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
       .then(setProducts)
-      .catch(() => {});
+      .catch(() => toast.error("No se pudieron cargar los productos"));
     fetch("/api/promotions?active=true")
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
       .then(setPromos)
-      .catch(() => {});
+      .catch(() => toast.error("No se pudieron cargar las promos"));
   }, []);
 
   // Buscar leads con search term (server-side, sin limite de 100)
@@ -152,11 +153,14 @@ export function CreateOrderModal({ open, onClose, clientName, clientPhone }: Cre
   };
 
   const addItem = (name: string, price: string | null) => {
-    const p = price ? parseFloat(price.replace(/[^0-9]/g, "")) : 0;
+    // El precio viene como numeric del DB ("4500.50") — nunca strippear el
+    // punto decimal: "4500.50" → 450050 rompía los totales.
+    const p = price ? Number(price) : 0;
+    const unitPrice = Number.isFinite(p) ? p : 0;
     setItems((prev) => {
       const ex = prev.find((i) => i.name === name);
       if (ex) return prev.map((i) => (i.name === name ? { ...i, quantity: i.quantity + 1 } : i));
-      return [...prev, { name, quantity: 1, unitPrice: p }];
+      return [...prev, { name, quantity: 1, unitPrice }];
     });
   };
 
@@ -187,10 +191,12 @@ export function CreateOrderModal({ open, onClose, clientName, clientPhone }: Cre
       deliveryFee: deliveryFee || 0,
     });
     setSaving(false);
-    if (result.success) {
-      setDone(true);
-      setTimeout(() => { onClose(); setDone(false); }, 1500);
+    if (!result.success) {
+      toast.error(result.error ?? "No se pudo crear el pedido");
+      return;
     }
+    setDone(true);
+    setTimeout(() => { onClose(); setDone(false); }, 1500);
   };
 
   return (

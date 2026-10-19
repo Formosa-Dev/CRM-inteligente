@@ -31,6 +31,7 @@ import type {
   TelegramStatus,
   WebhookInfo,
 } from "./actions";
+import { useIsAdmin } from "@/components/admin/role-context";
 
 type Props = {
   initialStatus: TelegramStatus;
@@ -40,10 +41,16 @@ export function TelegramConfigClient({ initialStatus }: Props) {
   const [status] = useState(initialStatus);
   const [webhookInfo, setWebhookInfo] = useState<WebhookInfo | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
+  const [confirmDeleteWebhook, setConfirmDeleteWebhook] = useState(false);
+  const isAdmin = useIsAdmin();
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`${label} copiado`);
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label} copiado`);
+    } catch {
+      toast.error("No se pudo copiar — seleccioná el texto a mano");
+    }
   };
 
   const handleSetWebhook = async () => {
@@ -71,6 +78,7 @@ export function TelegramConfigClient({ initialStatus }: Props) {
       if (result.success) {
         toast.success(result.message);
         setWebhookInfo(null);
+        setConfirmDeleteWebhook(false);
       } else {
         toast.error(result.message);
       }
@@ -317,6 +325,7 @@ export function TelegramConfigClient({ initialStatus }: Props) {
 
             {/* Acciones */}
             <div className="flex flex-wrap gap-3">
+              {isAdmin && (
               <Button
                 type="button"
                 variant="default"
@@ -331,6 +340,7 @@ export function TelegramConfigClient({ initialStatus }: Props) {
                   ? "Configurando..."
                   : "Configurar Webhook"}
               </Button>
+              )}
 
               <Button
                 type="button"
@@ -345,20 +355,47 @@ export function TelegramConfigClient({ initialStatus }: Props) {
                 Verificar estado
               </Button>
 
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={handleDeleteWebhook}
-                disabled={
-                  loading === "webhook-delete" || !status.configured
-                }
-                className="gap-2"
-              >
-                <Trash2Icon className="h-4 w-4" />
-                {loading === "webhook-delete"
-                  ? "Eliminando..."
-                  : "Eliminar Webhook"}
-              </Button>
+              {isAdmin && (confirmDeleteWebhook ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    Corta los mensajes entrantes hasta reconfigurar
+                  </span>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleDeleteWebhook}
+                    disabled={loading === "webhook-delete"}
+                    className="gap-2"
+                  >
+                    <Trash2Icon className="h-4 w-4" />
+                    {loading === "webhook-delete"
+                      ? "Eliminando..."
+                      : "Confirmar eliminación"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setConfirmDeleteWebhook(false)}
+                  >
+                    Volver
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={() => setConfirmDeleteWebhook(true)}
+                  disabled={
+                    loading === "webhook-delete" || !status.configured
+                  }
+                  className="gap-2"
+                >
+                  <Trash2Icon className="h-4 w-4" />
+                  Eliminar Webhook
+                </Button>
+              ))}
             </div>
 
             {/* Webhook info */}

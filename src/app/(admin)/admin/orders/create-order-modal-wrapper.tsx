@@ -3,9 +3,12 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { CreateOrderModal } from "@/components/orders/create-order-modal";
+import { useIsAdmin } from "@/components/admin/role-context";
 
 export function CreateOrderModalWrapper() {
+  const isAdmin = useIsAdmin();
   const [open, setOpen] = useState(false);
+  if (!isAdmin) return null;
   return (
     <>
       <button onClick={() => setOpen(true)}

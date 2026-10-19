@@ -13,6 +13,7 @@ import {
   type PhoneIdEntry,
 } from "./actions";
 import type { AgentConfigScopeOption } from "@/lib/agent-config-scope";
+import { useIsAdmin } from "@/components/admin/role-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -142,6 +143,7 @@ export default function AgentConfigForm({
   scopeExists: boolean;
 }) {
   const router = useRouter();
+  const isAdmin = useIsAdmin();
   const [state, formAction, isPending] = useActionState(
     saveAgentConfig,
     initialState
@@ -167,6 +169,8 @@ export default function AgentConfigForm({
   );
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
+  const [sellerNewName, setSellerNewName] = useState("");
+  const [sellerNewPhone, setSellerNewPhone] = useState("");
   const [autoReply24h, setAutoReply24h] = useState(config.autoReply24h);
   const [webOrderRedirectEnabled, setWebOrderRedirectEnabled] = useState(
     config.webOrderRedirectEnabled
@@ -226,6 +230,22 @@ export default function AgentConfigForm({
 
   const removePhoneId = (phone: string) => {
     setAllowedPhoneIds((prev) => prev.filter((e) => e.phone !== phone));
+  };
+
+  const addSeller = () => {
+    const name = sellerNewName.trim();
+    const phone = sellerNewPhone.trim();
+    if (!name || !phone) {
+      toast.error("Completá nombre y teléfono");
+      return;
+    }
+    if (sellerPhoneIds.some((e) => e.phone === phone)) {
+      toast.error("Ese teléfono ya está agregado");
+      return;
+    }
+    setSellerPhoneIds((prev) => [...prev, { name, phone }]);
+    setSellerNewName("");
+    setSellerNewPhone("");
   };
 
   // ─── Image upload helper ─────────────────────────────────────────────────────
@@ -297,6 +317,9 @@ export default function AgentConfigForm({
 
   return (
     <form action={formAction} className="flex flex-col gap-6">
+      {/* Viewers see the whole config but every control is inert — the
+          fieldset disables all descendant form controls at once. */}
+      <fieldset disabled={!isAdmin} className="m-0 min-w-0 border-0 p-0 flex flex-col gap-6">
       {/* Scope being edited — saveAgentConfig creates the row only on save. */}
       <input type="hidden" name="agentConfigScope" value={scopeKey} />
       <motion.div
@@ -967,11 +990,11 @@ export default function AgentConfigForm({
                   <Input
                     id="sellerNewName"
                     placeholder="Ej: Carla Pérez"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
+                    value={sellerNewName}
+                    onChange={(e) => setSellerNewName(e.target.value)}
                     onKeyDown={(e) =>
                       e.key === "Enter" &&
-                      (e.preventDefault(), addPhoneId())
+                      (e.preventDefault(), addSeller())
                     }
                   />
                 </div>
@@ -982,11 +1005,11 @@ export default function AgentConfigForm({
                   <Input
                     id="sellerNewPhone"
                     placeholder="5493700000000"
-                    value={newPhone}
-                    onChange={(e) => setNewPhone(e.target.value)}
+                    value={sellerNewPhone}
+                    onChange={(e) => setSellerNewPhone(e.target.value)}
                     onKeyDown={(e) =>
                       e.key === "Enter" &&
-                      (e.preventDefault(), addPhoneId())
+                      (e.preventDefault(), addSeller())
                     }
                   />
                 </div>
@@ -994,21 +1017,7 @@ export default function AgentConfigForm({
                   type="button"
                   variant="outline"
                   size="icon"
-                  onClick={() => {
-                    const name = newName.trim();
-                    const phone = newPhone.trim();
-                    if (!name || !phone) {
-                      toast.error("Completá nombre y teléfono");
-                      return;
-                    }
-                    if (sellerPhoneIds.some((e) => e.phone === phone)) {
-                      toast.error("Ese teléfono ya está agregado");
-                      return;
-                    }
-                    setSellerPhoneIds((prev) => [...prev, { name, phone }]);
-                    setNewName("");
-                    setNewPhone("");
-                  }}
+                  onClick={addSeller}
                   className="shrink-0"
                   aria-label="Agregar vendedor"
                 >
@@ -1758,18 +1767,28 @@ export default function AgentConfigForm({
         </motion.div>
       </motion.div>
 
+      </fieldset>
+
       {/* ═════════════════════════════════════════════════════════════════════════
          Submit — sticky bottom bar, always visible
          ═════════════════════════════════════════════════════════════════════════ */}
-      <div className="sticky bottom-0 z-30 -mx-4 mt-4 border-t border-border bg-background/95 backdrop-blur-sm px-4 py-3 flex justify-end">
-        <Button
-          type="submit"
-          disabled={isPending}
-          className="btn-gold min-w-[160px] transition-opacity hover:opacity-90"
-        >
-          {isPending ? "Guardando..." : "Guardar configuración"}
-        </Button>
-      </div>
+      {isAdmin ? (
+        <div className="sticky bottom-0 z-30 -mx-4 mt-4 border-t border-border bg-background/95 backdrop-blur-sm px-4 py-3 flex justify-end">
+          <Button
+            type="submit"
+            disabled={isPending}
+            className="btn-gold min-w-[160px] transition-opacity hover:opacity-90"
+          >
+            {isPending ? "Guardando..." : "Guardar configuración"}
+          </Button>
+        </div>
+      ) : (
+        <div className="sticky bottom-0 z-30 -mx-4 mt-4 border-t border-border bg-background/95 backdrop-blur-sm px-4 py-3 flex justify-end">
+          <p className="text-xs text-muted-foreground">
+            Solo lectura — no podés guardar cambios
+          </p>
+        </div>
+      )}
     </form>
   );
 }

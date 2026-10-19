@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Phone, MoreVertical, UserCheck, UserRound } from "lucide-react";
+import { ArrowLeft, UserCheck, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChannelBadge } from "./channel-badge";
 import { MessageBubble } from "./message-bubble";
@@ -12,11 +12,12 @@ import type { ChatMessage, ConversationSummary } from "@/types/chat";
 interface ChatPanelProps {
   conversation: ConversationSummary;
   messages: ChatMessage[];
-  onSend: (message: string) => void;
+  onSend: (message: string) => Promise<void>;
   onBack?: () => void;
   onHumanOverride?: () => void;
   onShowContext?: () => void;
   humanOverrideActive?: boolean;
+  readOnly?: boolean;
   className?: string;
 }
 
@@ -65,6 +66,7 @@ export function ChatPanel({
   onHumanOverride,
   onShowContext,
   humanOverrideActive,
+  readOnly = false,
   className,
 }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -149,12 +151,6 @@ export function ChatPanel({
               <UserCheck className="h-4 w-4" />
             </button>
           )}
-          <button className="p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors">
-            <Phone className="h-4 w-4" />
-          </button>
-          <button className="p-2 rounded-lg hover:bg-muted text-muted-foreground transition-colors">
-            <MoreVertical className="h-4 w-4" />
-          </button>
         </div>
       </motion.div>
 
@@ -191,7 +187,12 @@ export function ChatPanel({
       </div>
 
       {/* Reply input */}
-      <ReplyInput onSend={onSend} channel={conversation.channel} />
+      <ReplyInput
+        onSend={onSend}
+        channel={conversation.channel}
+        disabled={readOnly}
+        placeholder={readOnly ? "Solo lectura — no podés responder" : undefined}
+      />
     </div>
   );
 }

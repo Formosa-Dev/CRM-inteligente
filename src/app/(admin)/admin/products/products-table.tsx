@@ -39,6 +39,7 @@ import {
   updateProduct,
   type ProductsResponse,
 } from "./actions";
+import { useIsAdmin } from "@/components/admin/role-context";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -249,6 +250,7 @@ function ProductCard({
   onEdit,
   onDelete,
   isPending,
+  readOnly,
 }: {
   product: Product;
   availability: boolean;
@@ -256,6 +258,7 @@ function ProductCard({
   onEdit: (p: Product) => void;
   onDelete: (p: Product) => void;
   isPending: boolean;
+  readOnly?: boolean;
 }) {
   return (
     <motion.div
@@ -299,7 +302,7 @@ function ProductCard({
           <span className="text-xs text-foreground/50">Disponible</span>
           <Switch
             checked={availability}
-            disabled={isPending}
+            disabled={isPending || readOnly}
             onCheckedChange={(checked) => onToggleAvailability(product.id, checked)}
             aria-label={`Disponibilidad de ${product.name}`}
           />
@@ -315,6 +318,7 @@ function ProductCard({
       </div>
 
       {/* Actions */}
+      {!readOnly && (
       <div className="flex gap-2 pt-1 border-t border-border">
         <Button
           variant="outline"
@@ -333,6 +337,7 @@ function ProductCard({
           <Trash2 size={13} aria-hidden="true" className="mr-1.5" />Eliminar
         </Button>
       </div>
+      )}
     </motion.div>
   );
 }
@@ -347,6 +352,7 @@ export default function ProductsTable({
 }: ProductsTableProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const isAdmin = useIsAdmin();
 
   const [availability, setAvailability] = useState<Record<number, boolean>>(
     () => Object.fromEntries(initialProducts.map((p) => [p.id, p.available]))
@@ -430,11 +436,13 @@ export default function ProductsTable({
 
         </div>
 
-        <motion.div whileHover={{ y: -1 }} transition={{ duration: 0.15 }}>
-          <Button onClick={() => setIsNewProductOpen(true)}>
-            + Nuevo Producto
-          </Button>
-        </motion.div>
+        {isAdmin && (
+          <motion.div whileHover={{ y: -1 }} transition={{ duration: 0.15 }}>
+            <Button onClick={() => setIsNewProductOpen(true)}>
+              + Nuevo Producto
+            </Button>
+          </motion.div>
+        )}
       </motion.div>
 
       {/* Product Cards Grid */}
@@ -464,6 +472,7 @@ export default function ProductsTable({
               onEdit={setSelectedProduct}
               onDelete={setDeleteTarget}
               isPending={isPending}
+              readOnly={!isAdmin}
             />
           ))
         )}

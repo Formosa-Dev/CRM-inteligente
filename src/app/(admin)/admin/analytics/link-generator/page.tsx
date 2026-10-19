@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -106,7 +107,9 @@ export default function LinkGeneratorPage() {
       .then((b) => {
         if (b?.whatsappPhone) setPhone((v) => v || b.whatsappPhone);
       })
-      .catch(() => {});
+      .catch(() =>
+        toast.error("No se pudo cargar el teléfono del negocio — ingresalo a mano")
+      );
   }, []);
   const [generatedUrl, setGeneratedUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -136,7 +139,10 @@ export default function LinkGeneratorPage() {
         adId: ad.trim() || "general",
       }),
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      toast.error("No se pudo generar el código de referido — intentá de nuevo");
+      return;
+    }
 
     const { code: refCode } = await res.json();
     const url = buildWhatsAppLink(phone.trim(), refCode);
@@ -146,9 +152,13 @@ export default function LinkGeneratorPage() {
 
   async function handleCopy() {
     if (!generatedUrl) return;
-    await navigator.clipboard.writeText(generatedUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(generatedUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("No se pudo copiar — seleccioná el link a mano");
+    }
   }
 
   return (
