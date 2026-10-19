@@ -111,7 +111,11 @@ unbound WhatsApp without credentials instead of silently dropping.
 delivery id, platform message id, kind, direction, status, timestamp and the
 raw payload. Unique keys:
 
-- `(provider, delivery_id)` — provider redelivery is idempotent;
+- `(provider, coalesce(channel_account_id, -1), delivery_id)` — provider
+  redelivery is idempotent **per account**; a provider-side delivery id is
+  only unique per sender account, and migration `0019` re-scoped the index so
+  two provisioned accounts can both persist the same delivery id while legacy
+  `NULL` rows dedup in their own partition;
 - `(provider, platform_message_id, kind, status)` where platform id and status
   are present — status transitions stay distinct but replay-safe.
 
@@ -181,6 +185,20 @@ carry no `channel_account_id` and are unaffected.
   deterministic `platform_message_id`; it is real outbound history, but on a
   first contact it can appear before the inbound message row until that row is
   persisted later in the same request.
+- `leads.phone` is `UNIQUE`, so a customer who messages two provisioned
+  accounts shares a single lead row; `leads.channel_account_id` follows the
+  account that most recently contacted them (account-scoped order lookups
+  attribute orders to that owner). Per-account duplicate leads are impossible
+  by constraint — this is the intended ownership model, not per-account lead
+  state.
+- Account-scoped order/lead reads attribute through `leads.channel_account_id`.
+  Orders whose `lead_id` is `NULL` (no matching lead row at creation time)
+  carry no account attribution and are therefore invisible to account-bound
+  scopes — fail closed by design; legacy unbound contexts still read them
+  phone-globally.
+- The `wa-inbound:*` rate-limit and buffer/dedup keys keep their exact legacy
+  shape for `channel_account_id IS NULL`; the `acct<N>:` prefix only applies
+  to provisioned accounts, so old and new installs behave identically.
 
 ## 10. Corrective review (post-`db3659c`)
 
@@ -220,3 +238,28 @@ findings below are fixed on top of `778ec30`:
 | Missing two-account/route behavior coverage | Added a mocked-DB two-account passive-pipeline test, a two-event signed webhook route test, and a Meta fail-closed test; `assertConversationAccount` is now wired into identity resolution. |
 | Delivery notification used the install-wide latest pending order | Account-scoped contexts join `orders → leads` and filter by `leads.channel_account_id`; the unbound/legacy context keeps the historical lookup. |
 | Dead `id=1`-based location forwarding helper; SQL/JS trim drift | Removed `forwardLocationToDelivery`; `0018` re-normalizes with whitespace trimming that includes tabs/newlines, matching the runtime canonicalizer. |
+
+## 12. Corrective review round 4 (`71483c1..`)
+
+The fresh review of `280a6d0..71483c1` returned CHANGES_REQUIRED. The
+findings below are fixed on top of `71483c1`:
+
+| Finding | Fix |
+| --- | --- |
+| **H1** `triggerAgentForConversation` bypassed send-account resolution (`agentConfig id=1` + env credentials) | The dashboard action now resolves the sender through the same decision path as outbound sends: bound conversation → `resolveChannelAccountById`; unbound WhatsApp → `resolveUnboundWhatsAppSend` (binding → single active account → legacy only when truly unprovisioned); non-WhatsApp unbound → `resolveChannelAccount`. `ambiguous`/`fail`/unresolvable return a typed failure — never a silent global-credential send. |
+| **H2** Buffer/dedup/rate-limit keys were `${channel}:${phone}` with no account | `accountScopedInboundKey` namespaces the inbound identity as `acct<N>:<phone>` for bound events; the `wa-inbound:` rate limit, `BufferManager.isContentDuplicate`, `enqueue`, and `scheduleBufferProcessing` (lock/timer/fetch/last-processed) all key off it. `channelAccountId NULL` keeps the exact legacy key shape. |
+| **H3** `leads.channel_account_id` was written nowhere — the scoped delivery join was dead code | Every conversation-context lead write stamps the column when the account is known: `captureLeadIfNew` (insert + re-contact restamp), conversation auto-linking, inbound location/address updates, and the WhatsApp `createOrder` lead upserts. Telegram/admin/API writes have no conversation account and stay `NULL`. Because `leads.phone` is unique, the column records the owning (most recent) account. |
+| **M1** `notifyDeliveryOrder` composed `decrypt(scoped) \|\| env` credentials | It now resolves the sender exactly like outbound sends: bound conversation → `resolveChannelAccountByIdStrict` (a blank scoped key is an explicit `mismatch` — the notification logs and skips rather than falling back); unbound → `resolveUnboundWhatsAppSend` where legacy env credentials only apply to a genuinely unprovisioned channel. |
+| **L1** `get-number.ts` was a dead global-credential helper | Deleted — no live callers existed (only generated-doc references). |
+| **L2** `ingress.ts` header claimed no `channel_events` table exists | Header and `logAckedWithoutPersistence` comments now describe the real persistence path (`persistChannelEvent` for status/lifecycle/other kinds; the log helper is only for protocol artifacts, unsupported kinds, or unresolvable identities). |
+| **L3** `(provider, delivery_id)` uniqueness was provider-wide | Fixed additively: migration `0019_channel_events_scoped_delivery` drops the old index and recreates it as `(provider, coalesce(channel_account_id, -1), delivery_id)` — `0017` is untouched and `NULL` rows keep a dedicated partition. `FakeDb` models the same key so tests exercise the real constraint. |
+| **L4** Order lifecycle and agent context reads were phone-global | `findActiveOrder`/`getActiveOrderSnapshot` accept an optional `channelAccountId` and join `orders → leads` when bound; the agent's customer-context queries (lead, preferences, recent orders, pending order) scope by the conversation's account; agent tools (`getOrderStatus`, `addToOrder`, `updateOrder`, `cancelOrder`, `suggestProducts`, `getClientHistory`) gate reads/mutations through `isOrderVisibleToScope` or the owning-lead join using `currentAgentConfigScope()`. `NULL` scope/account keeps every legacy phone-global path unchanged — that boundary is deliberate: an unprovisioned install has exactly one account universe. |
+
+New regression coverage: `src/lib/messaging/security-round4.test.ts`
+(25 tests) — bound/ambiguous/legacy send-decision paths for the admin trigger,
+account-namespaced inbound keys and buffer isolation, lead stamping +
+account-scoped delivery lookup, delivery-notification credential selection
+(bound-blank fails closed, bound-valid sends as the account, unbound-ambiguous
+fails closed, unbound-unprovisioned uses legacy creds), per-account
+`channel_events` delivery dedup, and account-scoped order/lifecycle/tool
+reads with a phone-global legacy fallback.
