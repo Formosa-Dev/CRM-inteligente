@@ -132,7 +132,10 @@ export async function setTelegramWebhookAction(): Promise<TelegramActionState> {
   }
   const webhookUrl = `${host}/api/telegram/webhook/${webhookToken}`;
 
-  const result = await setTelegramWebhook(config.botToken, webhookUrl);
+  // secret_token: Telegram signs every update with
+  // X-Telegram-Bot-Api-Secret-Token carrying this value; the route verifies
+  // it before parsing (F10).
+  const result = await setTelegramWebhook(config.botToken, webhookUrl, webhookToken);
   if (!result.ok) {
     return {
       success: false,

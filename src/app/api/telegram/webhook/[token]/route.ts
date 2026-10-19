@@ -56,6 +56,20 @@ export async function POST(
       );
     }
 
+    // F10 — Telegram signs every update with X-Telegram-Bot-Api-Secret-Token
+    // carrying the secret_token registered via setWebhook. No header / wrong
+    // value → the request didn't come through Telegram's relay (one-time ops
+    // step: re-register the webhook so the secret lands on Telegram's side).
+    const secretHeader = request.headers.get("x-telegram-bot-api-secret-token") ?? "";
+    const sa = Buffer.from(secretHeader);
+    const sb = Buffer.from(config.webhookToken ?? "");
+    if (sa.length !== sb.length || !timingSafeEqual(sa, sb)) {
+      return NextResponse.json(
+        { ok: false, error: "Invalid secret token" },
+        { status: 401 }
+      );
+    }
+
     if (!config.enabled) {
       return NextResponse.json(
         { ok: false, error: "Bot disabled" },
