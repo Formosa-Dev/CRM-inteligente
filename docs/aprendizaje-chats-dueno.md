@@ -1,4 +1,4 @@
-# Aprendizaje de Chats Reales: Estilo del Dueño (Leandro)
+# Aprendizaje de Chats Reales: Estilo del Dueño
 
 > Basado en 1378 mensajes de 57 clientes únicos en los últimos 3 días de producción (24-31 Mayo 2026).
 > El bot de IA tiene 0 intervenciones humanas (role=human). Todos los mensajes "assistant" son del dueño.
@@ -68,7 +68,7 @@ Ejemplos reales:
 "12mil seria todo"
 "Ya estaa"
 "Dentro de 15 maso"
-"Lea..LEMON"
+"[alias]"
 "Sii, dalee te preparo"
 "$3000"
 ```
@@ -116,7 +116,7 @@ Dueño: "17mil seria"
 **Fase 4: Alias de pago (cuando preguntan)**
 ```
 Cliente: "Me pasas tu alias"
-Dueño: "Lea..LEMON"
+Dueño: "[alias]"
 ```
 
 **Fase 5: "Ya está" (cuando está listo)**
@@ -191,12 +191,12 @@ El dueño personalmente:
 ### 10. Clientes recurrentes: Reconocimiento natural
 
 ```
-Cliente: "Hola Leo cómo estás?"
-Dueño: "Holaa, sii. Como estas Dana"  ← usa su nombre!
+Cliente: "Hola [nombre] cómo estás?"
+Dueño: "Holaa, sii. Como estas [nombre]"  ← usa su nombre!
 ```
 
 ```
-Dueño: "Pedile a evi nomas ella tiene mi transferencia"  ← conoce a la gente
+Dueño: "Pedile a [conocida] nomas ella tiene mi transferencia"  ← conoce a la gente
 ```
 
 ### 11. Resolución de problemas en caliente

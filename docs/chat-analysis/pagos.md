@@ -30,28 +30,28 @@ Notas de método:
 
 El operador casi nunca inicia el cobro: el cliente propone "te transfiero" y él responde con el alias. Su alias es información VOLÁTIL y viaja en texto plano:
 
-- Junio–19 jul: `Lea..LEMON`
-- Desde ~20 jul (cambió porque la gente mandaba mal): `Mrs..LEMON` — verbatim: "Holaa , cambie mi alias mrs..LEMON / Pasaron mal de vuelta y cambie nomas" (conv 229, 20-jul)
-- Titular, a veces en el mismo mensaje y a veces en el siguiente: `Leandro Javier Patiño` (~197 menciones; ~378 msgs contienen "lemon")
+- Junio–19 jul: `[alias anterior]`
+- Desde ~20 jul (cambió porque la gente mandaba mal): `[alias actual]` — verbatim: "Holaa , cambie mi alias / Pasaron mal de vuelta y cambie nomas" (conv 229, 20-jul)
+- Titular, a veces en el mismo mensaje y a veces en el siguiente: `[nombre del titular]` (~197 menciones; ~378 msgs contienen el alias)
 
 Secuencia típica de cobro (transferencia):
 
 ```
 CLI  Te transfiero / Me pasas tu alias / Pasame alias así te transfiero
 OP   14500            ← total primero, solo
-OP   Mrs..LEMON       ← alias solo en un mensaje
-OP   Leandro Javier Patiño   ← titular (opcional, ~la mitad de las veces)
+OP   [alias]          ← alias solo en un mensaje
+OP   [titular]        ← titular (opcional, ~la mitad de las veces)
 CLI  [image]          ← comprobante
 OP   Gracias / Ya esta / Sisi
 ```
 
 Ejemplos verbatim:
-- "13mil seria todo / Lea..LEMON / Me pasas comprobante" (conv 294, 9-jun)
-- "Sis, mrs..LEMON / Leandro Javier Patiño" ante "transferencia aceptas?" (conv 842, 2-oct)
-- "Mrs..LEMON / Leandro Javier Patiño" ante "me pasas alias para señarte eso porfis" (conv 724, 9-sep)
+- "13mil seria todo / [alias] / Me pasas comprobante" (conv 294, 9-jun)
+- "Sis, [alias] / [titular]" ante "transferencia aceptas?" (conv 842, 2-oct)
+- "[alias] / [titular]" ante "me pasas alias para señarte eso porfis" (conv 724, 9-sep)
 - Cuando paga en efectivo: simplemente "Dalee" / "Si amigo" — no se pide nada más.
 
-Pide comprobante de forma directa: "Me pasas comprobante", "Me pasas comprobante ni bien puedas", "Me pasas comprobante porfa", y justificación operativa: "Comprobante sino no anota dice" (conv 257, 2-oct — la persona que anota pedidos exige el ticket). Con frecuentes clientes a veces no hace falta ("Está bien no es necesario comprobantes" — clienta Silvia, conv 392).
+Pide comprobante de forma directa: "Me pasas comprobante", "Me pasas comprobante ni bien puedas", "Me pasas comprobante porfa", y justificación operativa: "Comprobante sino no anota dice" (conv 257, 2-oct — la persona que anota pedidos exige el ticket). Con clientes frecuentes a veces no hace falta ("Está bien no es necesario comprobantes" — conv 392).
 
 ## 3. Cómo CONFIRMA recepción
 
@@ -69,7 +69,7 @@ Si el comprobante muestra datos correctos pero en su cuenta no cayó, confía en
 
 ## 4. Pagos pendientes
 
-- El operador marca saldos en el chat, directo y con monto: "quedo pendiente 2mil / De tu pedido" (conv 402, 20-jun), "14500 quedo pendiente" (conv 407, 20-jun), "Todavia quedo pendiente 100" (conv 325, 19-sep), "Falta 10, me pasa comprobante" (conv 234, 2-sep), "Falta 24mil del envio de jer9" (conv 229, 8-jun).
+- El operador marca saldos en el chat, directo y con monto: "quedo pendiente 2mil / De tu pedido" (conv 402, 20-jun), "14500 quedo pendiente" (conv 407, 20-jun), "Todavia quedo pendiente 100" (conv 325, 19-sep), "Falta 10, me pasa comprobante" (conv 234, 2-sep), "Falta 24mil del envio de [repartidor]" (conv 229, 8-jun).
 - Cuando falta plata en una transferencia ya hecha, desglosa la cuenta: "Disculpa faltan 1000 / Pq el pedido era 18 y el envio 3mil / Y me diste 20" — y si él se equivocó: "Ahh / Espera / Disculpa / Anote mal / Ya le despedimos al que anoto" (conv 444, 30-jun).
 - Deudas corrientes se negocian en criollo: CLI "me debes dos mil / o te debo 7 mil yo" → OP "Me debes 8 nomas ya" (conv 236, 27-ago). CLI "Yo te debo 70" → OP "Pasame tu alias / Te mando 50" (conv 211, 9-oct — saldo parcial).
 - No hay secuencias de recordatorio agresivas: un aviso factual con el monto alcanza. Si el cliente dice "después te pago", responde "Dale" y queda pendiente.
@@ -85,8 +85,8 @@ Es EL patrón distintivo de este negocio. El delivery casi nunca lleva cambio, e
 5. Transfiere el vuelto y manda la captura `[image]` de SU comprobante → cliente agradece.
 
 Verbatim canónico:
-- CLI "Te pago en efectivo / Tiene cambio?" → OP "Te transfiero tu vuelto porfa" → CLI "agostinasabelli mí alias" → OP "Agostinasabelli" (repite el alias para confirmar) → `[image]` (conv 348, 26-sep).
-- CLI "te pago con un billete de 20mil sabes" → OP "Te transfiero el vuelto" → cliente pasa "azul.mengual sería mi alias / azul jocelin mengual te tiene q aparecer" → después "me pasas? el vuelto" → OP `[image]` (conv 779, 11-12 sep).
+- CLI "Te pago en efectivo / Tiene cambio?" → OP "Te transfiero tu vuelto porfa" → CLI "[alias] mí alias" → OP "[alias]" (repite el alias para confirmar) → `[image]` (conv 348, 26-sep).
+- CLI "te pago con un billete de 20mil sabes" → OP "Te transfiero el vuelto" → cliente pasa "[alias] sería mi alias / [nombre y apellido] te tiene q aparecer" → después "me pasas? el vuelto" → OP `[image]` (conv 779, 11-12 sep).
 - CLI "No tengo cambio" → OP "Te transfiero el vuelto / O deja de propina para los chicos" (conv 260, 11-sep).
 - Alternativa: crédito a favor. OP "Te mando tu vuelto" → CLI "Después no más ....cuando compro otra hamburguesa, descontame" (conv 392, 12-sep).
 - Pregunta previa al efectivo: "Tenes justo?" / "4609 seria tenes justo" (~4 usos) — intenta evitar el vuelto pidiendo pago exacto.
@@ -104,19 +104,19 @@ El operador NUNCA usa decimales ni slang de plata ("lucas": 0 usos de él; "palo
 
 ## 7. Casos borde
 
-- **Pago mixto efectivo+transferencia**: aceptado sin problema. "te doy 10.000 en efectivo y $1.500 en transferencia" (conv 348); "te envio 8mil el resto te doy en efectivo" (conv 588); "adelantarte 6mil por transferencia y el resto en efectivo" (conv 598 → "Dalee / Mrs..LEMON / Leandro Javier Patiño"). Broma suya: cliente "te pago la mitad en efec y la otra en transfe" → "Mas caro asi" → cliente elige efectivo (conv 398, 6-sep).
+- **Pago mixto efectivo+transferencia**: aceptado sin problema. "te doy 10.000 en efectivo y $1.500 en transferencia" (conv 348); "te envio 8mil el resto te doy en efectivo" (conv 588); "adelantarte 6mil por transferencia y el resto en efectivo" (conv 598 → "Dalee / [alias] / [titular]"). Broma suya: cliente "te pago la mitad en efec y la otra en transfe" → "Mas caro asi" → cliente elige efectivo (conv 398, 6-sep).
 - **Split por concepto**: "Lo del envío te pase por transfe / Lo del pedido en te paso en ft" (conv 247, 30-jun). O todo junto a él: "te transfiero todo a vos nomás? o querés que te pague aparte el Delivery" → "Si a mi nomas" (conv 385, 24-jun) — el delivery cobra SU parte a través de él.
-- **Alias equivocado (cliente transfiere a otro alias)**: OP "No es ese el alias / Lea..lemon / Es" (conv 294, 9-jun). Otro: "Ya alrededor de 180mil mandaron mal a su alias / No es la primera ves / Esperemos que reconozca y pase de vuelta" (conv 377, 21-jun) — espera que el banco rebote la transferencia. Esto motivó el cambio de alias jul-20.
+- **Alias equivocado (cliente transfiere a otro alias)**: OP "No es ese el alias / [alias] / Es" (conv 294, 9-jun). Otro: "Ya alrededor de 180mil mandaron mal a su alias / No es la primera ves / Esperemos que reconozca y pase de vuelta" (conv 377, 21-jun) — espera que el banco rebote la transferencia. Esto motivó el cambio de alias jul-20.
 - **Monto incorrecto**: "Pusiste mal / Me mandas de vuelta" (conv 377, 21-jun); "Sin querer te transferir 20" → risa, se acomoda (conv 219, 31-jul); "Te pase sin querer 2 veces" → "Falto dos" (conv 234).
-- **Pagos de terceros**: normal y aceptado. Cliente avisa "A nombre de nerissa / de la cuenta de Nicolas / A nombre de Jorge yamil". Si el cliente pregunta "A nombre de quien sale?" → "Leandro Javier Patiño". Para retiros presenciales exige el nombre: "El nombre? Pq si no le vamos a dar nada" (conv 319, 14-jun).
+- **Pagos de terceros**: normal y aceptado. Cliente avisa "A nombre de [nombre] / de la cuenta de [nombre] / A nombre de [nombre y apellido]". Si el cliente pregunta "A nombre de quien sale?" → el nombre del titular. Para retiros presenciales exige el nombre: "El nombre? Pq si no le vamos a dar nada" (conv 319, 14-jun).
 - **Devolución/reembolso**: "Te devuelvo tu dinero / Alias ?" (conv 289, 8-jun). Y diferencias a favor del cliente: "Te paso la diferencia" + `[image]` comprobante (conv 402, 20-jun).
 - **Seña**: solo pedidos grandes/eventos. "32mil seria, seña con lo que quieras / Como te conozco confío en vos y no te pedi nada" (conv 724, 5-sep). Si el cliente manda de más: "Osea 10mil mas / 22mil me pasaste" — verifica y corrige el número exacto.
-- **Fiado informal**: existe en ambos sentidos pero con gente conocida ("franci, me pidió fiado lata de cerveza" — conv 236; préstamos de guita entre ellos). No es política de venta estándar.
+- **Fiado informal**: existe en ambos sentidos pero con gente conocida ("[conocido], me pidió fiado lata de cerveza" — conv 236; préstamos de guita entre ellos). No es política de venta estándar.
 - **Lo que NO debe imitar**: el operador también usa el chat para plata personal (presta plata, paga alquiler/proveedores, salda deudas de amigos). Eso NO entra al flujo del agente.
 
 ## 8. Karen ya hace parte de esto (jun-oct)
 
-El bot ya opera el flujo de pago de forma compatible: "Total $56.000, te paso el alias si querés pagar por transferencia" (conv 298); "Sii, cuando llega va perfecto" ante "te puedo pagar cuando llega?" (conv 239); ya calcula vuelto mental: "Son $13.500 en total, te queda re bien con $20.000" (conv 340); y deriva al humano cuando hay conflicto: "Te paso con Leandro, el dueño" (conv 298).
+El bot ya opera el flujo de pago de forma compatible: "Total $56.000, te paso el alias si querés pagar por transferencia" (conv 298); "Sii, cuando llega va perfecto" ante "te puedo pagar cuando llega?" (conv 239); ya calcula vuelto mental: "Son $13.500 en total, te queda re bien con $20.000" (conv 340); y deriva al humano cuando hay conflicto: "Te paso con el dueño" (conv 298).
 
 ---
 
@@ -134,5 +134,5 @@ El bot ya opera el flujo de pago de forma compatible: "Total $56.000, te paso el
 10. **Seña:** solo para pedidos grandes o eventos. Monto libre, a confianza ("señame con lo que quieras"). No pedir seña en pedidos comunes.
 11. **Formato de montos:** "$X" o "X mil", sin decimales, cierre con "sería" / "sería todo" / "sería todo con envío". Nada de "lucas/palos". Ejemplos: "24500 sería todo", "3500 sería el envío".
 12. **Tono:** rioplatense informal, mensajes cortos, una idea por mensaje, sin apurar ni presionar el pago. Si el cliente dice "después te pago": "Dale" y queda pendiente (un solo aviso factual si se cobra después).
-13. **Escalación:** si hay disputa de montos, comprobante que no coincide con la cuenta, o transferencia que no rebota, pasar con el humano (Leandro) como ya hace Karen.
+13. **Escalación:** si hay disputa de montos, comprobante que no coincide con la cuenta, o transferencia que no rebota, pasar con el humano (el dueño) como ya hace Karen.
 14. **Nunca prestar plata ni aceptar fiado por cuenta propia** — eso lo decide el dueño personalmente.

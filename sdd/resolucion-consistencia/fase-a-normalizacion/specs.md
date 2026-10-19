@@ -14,9 +14,9 @@
  * - NO agrega ni saca prefijos
  *
  * @example
- *   normalizePhone("+54 9 3704 868421")  // → "5493704868421"
- *   normalizePhone("+5493704868421")     // → "5493704868421"
- *   normalizePhone("03704 868-421")      // → "03704868421"
+ *   normalizePhone("+54 9 3704 111111")  // → "5493704111111"
+ *   normalizePhone("+5493704111111")     // → "5493704111111"
+ *   normalizePhone("03704 111-111")      // → "03704111111"
  *   normalizePhone("11-4123-4567")       // → "1141234567"
  *   normalizePhone("+54 (11) 4123-4567") // → "541141234567"
  */
@@ -27,7 +27,7 @@ export function normalizePhone(phone: string): string;
  * Debe empezar con 549 y tener entre 10 y 13 dígitos en total.
  *
  * @example
- *   isValidPhone("5493704868421")  // → true
+ *   isValidPhone("5493704111111")  // → true
  *   isValidPhone("1141234567")     // → false (no empieza con 549)
  */
 export function isValidPhone(phone: string): boolean;
@@ -61,10 +61,10 @@ export function cleanPhone(phone: string): string {
 
 ## Criterios de Aceptación
 
-- ✅ `normalizePhone("+54 9 3704 868421")` → `"5493704868421"`
-- ✅ `normalizePhone("+5493704868421")` → `"5493704868421"`
+- ✅ `normalizePhone("+54 9 3704 111111")` → `"5493704111111"`
+- ✅ `normalizePhone("+5493704111111")` → `"5493704111111"`
 - ✅ `normalizePhone("11-4123-4567")` → `"1141234567"`
 - ✅ `normalizePhone("")` → `""`
 - ✅ `cleanPhone()` delega y produce el mismo resultado que antes
-- ✅ `isValidPhone("5493704868421")` → `true`
+- ✅ `isValidPhone("5493704111111")` → `true`
 - ✅ `isValidPhone("1141234567")` → `false`

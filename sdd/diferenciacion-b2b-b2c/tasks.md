@@ -41,7 +41,7 @@
 ### Task 1.5 — Actualizar `[PAGO — PRECIO ≠ COMPRA]` con alias por línea
 
 **Changes**:
-- En la línea 491, donde dice `"Lea..LEMON"`, cambiar para que use el alias según orderType
+- En la línea 491, donde dice el alias hardcodeado, cambiar para que use el alias según orderType
 - Si B2C: alias configurado en aliasB2c
 - Si B2B: alias configurado en aliasB2b
 

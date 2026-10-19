@@ -51,7 +51,7 @@ Si `whatsappSystemPrompt` tuviera un valor, **TODO el prompt base sería reempla
 ### DEFAULT_SYSTEM_PROMPT actual (hardcodeado en prompt-builder.ts línea 300-411):
 
 ```
-Sistema de atención al cliente de Mrs Muzzarella (Formosa). Hamburguesas artesanales, pan mayorista, y Tragos V.I.P. Leandro es el dueño.
+Sistema de atención al cliente de Mrs Muzzarella (Formosa). Hamburguesas artesanales, pan mayorista, y Tragos V.I.P. [Nombre] es el dueño.
 
 Te llamás Karen para los clientes. Respondés pedidos, consultas de menú, delivery, pagos y horarios del local.
 
@@ -134,10 +134,10 @@ ZONAS DE DELIVERY:
 ```
 ESTADO COCINA: La cocina está operativa
 STOCK PAN MAYORISTA: 35 docenas disponibles actualmente
-DELIVERY WHATSAPP: El número del delivery es 5493704500888...
-ALIAS DE PAGO: B2C (hamburguesas): lea..lemon | B2B (pan mayorista): lea..lemon
+DELIVERY WHATSAPP: El número del delivery es +54 3704 ••••••...
+ALIAS DE PAGO: B2C (hamburguesas): [alias] | B2B (pan mayorista): [alias]
 MENU IMAGEN: Hay foto del menú de hamburguesas disponible...
-ALIAS MP: lea..lemon
+ALIAS MP: [alias]
 ```
 
 ## Customer Context (por conversación)
@@ -145,10 +145,10 @@ ALIAS MP: lea..lemon
 Se inyecta en `agent.ts` cuando un cliente habla:
 
 ```
-👤 CLIENTE: Hector Adrian Gamarra
-📱 Tel: +5493704868421
-📍 DIRECCIÓN GUARDADA: Cono sur mz 77 casa 19
-⚠️ IMPORTANTE: si el cliente pide delivery, preguntale: "¿a la misma dirección de siempre? (Cono sur mz 77 casa 19)"
+👤 CLIENTE: Cliente A
+📱 Tel: +54 3704 ••••••
+📍 DIRECCIÓN GUARDADA: [dirección]
+⚠️ IMPORTANTE: si el cliente pide delivery, preguntale: "¿a la misma dirección de siempre? ([dirección])"
 ⭐ PREFERENCIAS DEL CLIENTE (productos que suele pedir): Tragos V.I.P Frutilla, Deli Deli
 💡 Si el cliente no sabe qué pedir, podés sugerirle estos productos.
 📦 PEDIDOS ANTERIORES:

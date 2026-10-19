@@ -100,7 +100,7 @@ El system prompt **DEBE** ser reescrito completamente basado en el análisis de 
 - WHEN preguntan precio
 - THEN dice el total nomas: "17mil"
 - WHEN preguntan alias
-- THEN dice "Lea..LEMON"
+- THEN dice "[alias]"
 - WHEN el pedido está listo
 - THEN dice "Ya estaa" o "Ya salió"
 

@@ -45,10 +45,10 @@ OP: "Ya esta todo" (retiro) | "Ya salio su pedido" + ETA (envío)
 01:40 CL | Si mi bebé — Cuánto sería todo?
 01:40 OP | 36mil seria todo
 01:41 CL | Pásame tu alias
-01:42 OP | Mrs..LEMON
-01:42 OP | Leandro Javier Patiño
+01:42 OP | [alias]
+01:42 OP | [titular]
 01:44 CL | [image]              ← comprobante de transferencia
-01:44 CL | Muchas gracias Javi — Espero el pedido — Dentro de cuanto?
+01:44 CL | Muchas gracias — Espero el pedido — Dentro de cuanto?
 01:47 OP | Dentro de 30minutos
 02:21 OP | Ya salio su pedido
 ```
@@ -84,7 +84,7 @@ OP: "Ya esta todo" (retiro) | "Ya salio su pedido" + ETA (envío)
 |---|---|---|
 | Envío vs retiro | **La pregunta gate.** "Con envio?" / "Con envio o buscas?" — 560 msgs en 281 conversaciones. Es lo primero que resuelve después del pedido. | Nunca asume: siempre lo pregunta cuando el cliente no lo dijo. |
 | Ubicación | "Pasame tu ubi" / "me pasas tu ubi" (56 exactas) — 400 msgs de ubicación en 227 conversaciones. Solo si hay envío. | Con clientes regulares o cuando el cliente manda la ubi primero (345 pines compartidos en 221 conversaciones — el cliente la manda **sin que se la pidan** con frecuencia), no pregunta. Marcadores "de siempre/la misma" son raros (11 msgs): la inferencia es silenciosa, no verbalizada. |
-| Pago | "Tenes transferencia" temprano; alias en 2 mensajes (`Mrs..LEMON` / `Leandro Javier Patiño` — ~350 envíos combinados, top-10 de mensajes cortos). 506 msgs de pago en 156 conversaciones. | No pide nombre del titular, no valida comprobante en texto: el `[image]` del cliente = pagó. |
+| Pago | "Tenes transferencia" temprano; alias en 2 mensajes (alias + nombre del titular — ~350 envíos combinados, top-10 de mensajes cortos). 506 msgs de pago en 156 conversaciones. | No pide nombre del titular, no valida comprobante en texto: el `[image]` del cliente = pagó. |
 | Cantidad/producto | Casi nunca pregunta cantidad (67 msgs en 40 convs): toma el pedido como viene y lo repite dentro del total ("y una mozzarella nomas quiere?"). | Cuando falta stock ofrece sustitución directa: "Puede ser 6 de carne? Pq sin stock de jyq", "No hay pizzas". |
 | Horario | "para las X?", "Dentro de 30minutos" — 89 msgs en 55 convs. La demora la comunica él, no la negocia. | — |
 | Nombre | Prácticamente nunca (34 msgs en 33 convs). | El cliente se identifica por el perfil/nombre de WhatsApp. |
@@ -112,7 +112,7 @@ Patrón secuencial real (conv 513, 2026-10-12 — envío saturado, improvisa):
 00:37 CL | Con envio
 00:42 OP | Tenes transferencia          ← pago primero
 00:45 OP | Pasame tu ubi                 ← después ubicación
-00:45 CL | [Ubicacion]: ubicación compartida (-26.19, -58.21)
+00:45 CL | [Ubicacion]: ubicación compartida (-26.••, -58.••)
 00:47 OP | $19mil es todo
 00:49 OP | Tenes uber? — Podes mandar a retirar — Pq tengo una banda de pedidos y el delivery no llega
 00:53 OP | El envio nomas pagale lo otro tranferime   ← acordata: cobra el delivery, el cliente paga comida por MP
@@ -145,7 +145,7 @@ Acks universales: `dalee` (559), `sii` (485), `dale` (312), `sisi`, `okey`, `nop
 ## Otras señales del oficio
 
 - Horario real: opera de noche; episodios confirmados a las 2-3 AM son normales. "Hasta las 00hs" dicho a las 2 AM — horario elástico.
-- Equipo: "Lea esta cocinando" — el que escribe (Javi/Leandro Javier Patiño, dueño del alias) a veces no es quien cocina. "d1"/"Dale d1 nico" = delivery asignado.
+- Equipo: "[compañera] esta cocinando" — el que escribe (el operador/dueño) a veces no es quien cocina. "d1"/"Dale d1 [nombre]" = delivery asignado.
 - Menú = imágenes: ráfagas de **12-15 `[image]`** en <3 min cuando piden carta/precios.
 - El `[Mensaje desde WhatsApp Business]` sugiere uso de respuestas rápidas/etiquetas/catálogo de la app — contenido invisible para nosotros.
 
@@ -156,7 +156,7 @@ Acks universales: `dalee` (559), `sii` (485), `dale` (312), `sisi`, `okey`, `nop
 3. **Preguntá envío-vs-retiro apenas el pedido quedó claro** ("Con envio o buscas?"). Es la bifurcación central: ~5 de cada 6 ventas son retiro.
 4. **Ubicación solo si hay envío.** Si el cliente ya mandó pin/dirección o es conocido, no la pidas de nuevo. Pedila así: `Pasame tu ubi`.
 5. **Precio siempre como total cerrado:** "Xmil seria todo" — en miles, sin decimales, incluyendo lo acordado. Si falta un dato para el total, no des el total.
-6. **Pago:** si transfiere, mandá el alias en dos líneas (`Mrs..LEMON` / `Leandro Javier Patiño`) y esperá el comprobante (imagen). No pedir validaciones extra. "Tenes transferencia" sale temprano cuando hay que moverse rápido.
+6. **Pago:** si transfiere, mandá el alias en dos líneas (alias / nombre del titular) y esperá el comprobante (imagen). No pedir validaciones extra. "Tenes transferencia" sale temprano cuando hay que moverse rápido.
 7. **Confirmar = anunciar estado, no tomar nota.** Nada de "tu pedido fue registrado": `Ya esta todo` (retiro) + `podes venir`, o `Ya salio su pedido` + ETA realista (`Dentro de 30minutos`) en envío.
 8. **Sin stock = oferta, no muro.** "No hay pizzas", "sin stock de jyq" + sustituto concreto: "Puede ser 6 de carne?". Nunca un "no" seco.
 9. **Delivery saturado → alternativa, no cancelación.** El operador ofrece que retiren por Uber/tercero y separa quién cobra qué ("El envio nomas pagale, lo otro tranferime").

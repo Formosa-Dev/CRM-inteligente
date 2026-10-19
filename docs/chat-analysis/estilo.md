@@ -1,7 +1,7 @@
 # Análisis de chats — Faceta: ESTILO / TONO
 
-**Fuente:** `chat_messages` con `role='human'` = Leandro (dueño, Mrs Muzzarella, Formosa AR) escribiendo manualmente por WhatsApp.
-**Muestra:** 26.180 mensajes del dueño en 653 conversaciones (jun–oct 2026). Ejemplos verbatim entre comillas, con fecha aprox. y nombre del chat (el destinatario, no el remitente — el remitente siempre es Leandro).
+**Fuente:** `chat_messages` con `role='human'` = el dueño (Mrs Muzzarella, Formosa AR) escribiendo manualmente por WhatsApp.
+**Muestra:** 26.180 mensajes del dueño en 653 conversaciones (jun–oct 2026). Ejemplos verbatim entre comillas, con fecha aprox. y nombre del chat (el destinatario, no el remitente — el remitente siempre es el dueño).
 
 ---
 
@@ -45,7 +45,7 @@ Es su rasgo MÁS marcado: **el 80,6% de sus mensajes forman parte de una ráfaga
 
 No escribe un párrafo: **escribe una línea por idea y manda**. Patrón típico de pedido: dato → dato → pregunta:
 
-> `[6/7] "Pasame si"` → `"Necesito"` → `"Un 20mil"` → `"Lea..LEMON"` → `"???"`
+> `[6/7] "Pasame si"` → `"Necesito"` → `"Un 20mil"` → `"[alias]"` → `"???"`
 
 > `[25/6] "Me podes mandar"` → `"Que onda"` → `"Ya cobraste ?"`
 
@@ -98,7 +98,7 @@ Elonga la última/letra final constantemente: `holaa`, `sii`, `dalee`, `yendoo`,
 
 - **Emojis: 0,5% de mensajes (131).** Prácticamente no usa. El top es `😍` (57, reacción a fotos/pedidos), `😔` (17), `😂` (17). Cuando los usa es UNO solo y aislado, nunca decorando una frase.
 - **Risa escrita** reemplaza al emoji: `jajajaja` + variantes en ~1.000 mensajes.
-- **Mayúsculas:** solo 19 mensajes full-caps en 26k. Palabras en CAPS dentro del texto: 363, y la mayoría son su propio alias (`Lea..LEMON`, `Mrs..LEMON` — lo escribe así siempre, parte mayúscula parte minúscula). No usa caps para gritar.
+- **Mayúsculas:** solo 19 mensajes full-caps en 26k. Palabras en CAPS dentro del texto: 363, y la mayoría son su propio alias de pago (lo escribe siempre igual, parte mayúscula parte minúscula). No usa caps para gritar.
 - **Signos:** exclamación casi NUNCA (40 msgs con `!`, 6 con `!!`). En cambio el `?` es su herramienta de presión: `?` solo como mensaje 113 veces, `??`, `???`, `????` para reclamar respuesta. "con envío?" (44), "confirmas?" (43), "me confirmas?" — pregunta de una sola palabra con signo.
 - **Puntos suspensivos: cero.** Usa `..` doble (382 msgs) sobre todo dentro del alias y como pausa suave: "holaa buenas, sii".
 - **Tildes: omite casi todas.** "seria", "envio", "asi", "ves" (por "vez"), "apartir", "tranfiereas", "salio" (a veces "salió", mezcla). Escribe como habla, no corrige.
@@ -117,7 +117,7 @@ Patrones:
 - **Con clientes nuevos/fríos:** `"holaa buenas"` / `"holaa buenas noches"` + enseguida el cuerpo: `"holaa buenas, sii"`, `"holaa, precio?"` (a veces responde el saludo del cliente directo con la acción).
 - **Con conocidos:** `"que onda"` / `"que ondaa"` / `"esaar"` directo, sin hola.
 - **B2B (panes):** plantilla `"Holaa Buenaas! Te paso los precios..."`.
-- **Saluda por nombre a clientes frecuentes:** "holaa jero" (13), "holaa yuli" (12) — reconoce y personaliza.
+- **Saluda por nombre a clientes frecuentes:** "holaa [nombre]" (25+ usos) — reconoce y personaliza.
 - Con mujeres conocidas: `"holaa mami"`, `"holaa hermosaa"` — trato más cálido/juguetón.
 
 ### Cierres (2.001 detectados)
@@ -134,7 +134,7 @@ Cierra CORTO y sin ceremonia: un "dale", un "gracias", o simplemente deja de res
 - `$N` solo 131 veces — principalmente dentro de la plantilla de precios pegada ("$4600").
 - **"lucas" y "palos": cero absoluto.** No es su dialecto para plata.
 - **La fórmula canónica de precio:** `N seria` / `N seria todo` (160 msgs: "30mil seria todo", "23mil seria todo", "$2500 seria el envío"). También "sale" (69: "sale 69"... patrón "cuanto es"/"cuanto necesitas").
-- **Cobro:** pide `ubi` (134), `alias` (83), `comprobante` (33). Su alias lo escribe `Lea..LEMON` o `Mrs..LEMON` (repetido ~350 veces, junto a `leandro javier patiño` 167). Frase típica: "me pasas tu alias" (19+23 msgs similares), "pasame tu alias", "me pasas comprobante".
+- **Cobro:** pide `ubi` (134), `alias` (83), `comprobante` (33). Su alias de pago lo repite ~350 veces, junto al nombre del titular (~167). Frase típica: "me pasas tu alias" (19+23 msgs similares), "pasame tu alias", "me pasas comprobante".
 - **Logística:** "me pasas ubi" (56+), "con envío?" (44), "a que dirección" (23), "dentro de 30"/"dentro de 20" (minutos), "podes buscar nomas" (retiro), "estoy afuera", "en casa".
 
 ---
@@ -158,7 +158,7 @@ Sin stock / cerrado: `"sin stock"` (39), `"hoy no abrimos"` (14), `"ya cerramos"
 ### Calidez / humor
 
 - Con mujeres/clientes amigas: nombres + estiramientos + 😍. "holaa mami todo bien?", "holaa hermosaa", "siii jajaja".
-- Con amigos (ej. el deudor "Adri"): registro COMPLETAMENTE distinto — insultos cariñosos/hostiles, risa agresiva: "miraaa giil", "lagarto", "negro", "loco", "posta loco", "que mas tengo que esperar gilaso". AHÍ sí suelta "gil" (29) y "loco" (24). Nunca así con clientes.
+- Con amigos (ej. un deudor personal): registro COMPLETAMENTE distinto — insultos cariñosos/hostiles, risa agresiva: "miraaa giil", "lagarto", "negro", "loco", "posta loco", "que mas tengo que esperar gilaso". AHÍ sí suelta "gil" (29) y "loco" (24). Nunca así con clientes.
 - El humor es de BARRO, no de sticker: "chupa pijaaa", "aijuee", "chaa", "esaar".
 
 ### Con mayores/desconocidos
@@ -178,7 +178,7 @@ Pico absoluto 20–23h (11.9k msgs) y sigue hasta las 2–3am. Escribe de noche,
 ### Forma
 
 1. **Mensajes CORTOS. Máximo ~40 caracteres / ~5 palabras por mensaje.** La mediana del dueño es 12 chars. Si necesitás decir 3 cosas, mandá 3 mensajes seguidos (burst de 2–3 con un pensamiento por mensaje). NUNCA un párrafo.
-2. **Todo en minúsculas.** Sin mayúscula inicial de oración. La única excepción permitida: el alias `Lea..LEMON` / `Mrs..LEMON` se escribe exactamente así.
+2. **Todo en minúsculas.** Sin mayúscula inicial de oración. La única excepción permitida: el alias de pago se escribe con su formato exacto (mayúsculas/minúsculas mezcladas).
 3. **Sin tildes ni corrección:** "seria", "envio", "asi", "podes". Escribí como se habla, no corrijas.
 4. **Estirá vocales con criterio:** `sii`, `dalee`, `holaa`, `yendoo`, `que buenoo`. Especialmente en saludos y afirmaciones. NUNCA "hola" pelado ni "si" de una sola i cuando confirmás entusiasmo.
 5. **CERO emojis como norma.** Máximo `😍` o `😂` aislado, ~1 vez cada 50 mensajes, solo respondiendo a foto/momento. Jamás emoji decorando una frase de venta.

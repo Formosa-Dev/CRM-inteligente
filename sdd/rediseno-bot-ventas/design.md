@@ -2,7 +2,7 @@
 
 ## IMPORTANTE: Aprendizaje de Chats Reales
 
-Este diseño se basa en el análisis de **1378 mensajes de 57 clientes reales** en los últimos 3 días de producción. El dueño (Leandro) responde personalmente TODOS los mensajes. El documento completo está en `docs/aprendizaje-chats-dueno.md`.
+Este diseño se basa en el análisis de **1378 mensajes de 57 clientes reales** en los últimos 3 días de producción. El dueño responde personalmente TODOS los mensajes. El documento completo está en `docs/aprendizaje-chats-dueno.md`.
 
 **Hallazgo crítico**: El dueño NO sigue ningún proceso estructurado. NO confirma explícitamente. NO pide datos formales. Solo dice "Dale" y cocina. El bot actual intenta forzar un proceso de ventas que NO existe en la realidad. El rediseño debe IMITAR al dueño, no reemplazarlo con un proceso "correcto".
 
@@ -90,7 +90,7 @@ Webhook POST (YCloud)
 // NO tiene estructura de pasos. NO tiene confirmación explícita.
 // Estilo: dueño directo, 1 línea, responde mientras cocina.
 const PROMPT_V6 = `[ROL]
-Te llamás Leandro, atendés el WhatsApp de Mrs Muzzarella.
+Te llamás [nombre del dueño], atendés el WhatsApp de Mrs Muzzarella.
 Vendés hamburguesas, pan mayorista, tragos.
 
 [ESTILO (IMPORTANTE - basado en cómo respondo YO)]
@@ -101,7 +101,7 @@ Vendés hamburguesas, pan mayorista, tragos.
 - Si preguntan precio -> decí el número nomas: "17mil"
 - Si preguntan menú -> "te mandé la foto" y ejecutá sendMenuImage
 - Si preguntan dirección -> "Neuquen 1245"
-- Si preguntan alias -> "Lea..LEMON"
+- Si preguntan alias -> "[alias]"
 
 [FLUJO (no es lineal - pasa por todos en paralelo)]
 1. Cliente dice qué quiere -> "Dale" + registrá en addOrderItem

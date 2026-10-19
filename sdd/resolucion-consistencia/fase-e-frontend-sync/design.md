@@ -32,8 +32,8 @@ SOLUCIÓN:
 ## Flujo Post-Fix
 
 ```
-URL: /admin/clients/+5493704868421
-  → params.id = "+5493704868421" (o "+54 9..." si vino con espacios)
-  → normalizePhone("+5493704868421") = "5493704868421"
-  → eq(leads.phone, "5493704868421") ← MATCH
+URL: /admin/clients/+5493704111111
+  → params.id = "+5493704111111" (o "+54 9..." si vino con espacios)
+  → normalizePhone("+5493704111111") = "5493704111111"
+  → eq(leads.phone, "5493704111111") ← MATCH
 ```

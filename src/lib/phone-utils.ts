@@ -3,8 +3,8 @@
  * Elimina +, espacios, guiones, paréntesis y cualquier caracter no dígito.
  *
  * @example
- *   normalizePhone("+54 9 3704 868421")  // → "5493704868421"
- *   normalizePhone("+5493704868421")     // → "5493704868421"
+ *   normalizePhone("+54 9 3704 111111")  // → "5493704111111"
+ *   normalizePhone("+5493704111111")     // → "5493704111111"
  *   normalizePhone("11-4123-4567")       // → "1141234567"
  *   normalizePhone("+54 (11) 4123-4567") // → "541141234567"
  */
@@ -17,7 +17,7 @@ export function normalizePhone(phone: string): string {
  * (empieza con 549 y tiene entre 10 y 13 dígitos).
  *
  * @example
- *   isValidPhone("5493704868421")  // → true
+ *   isValidPhone("5493704111111")  // → true
  *   isValidPhone("1141234567")     // → false
  */
 export function isValidPhone(phone: string): boolean {

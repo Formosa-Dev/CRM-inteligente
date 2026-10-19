@@ -67,7 +67,7 @@ test("a verified web order disables order creation (no duplicate insert)", async
     {
       customerName: "Ramiro",
       orderType: "hamburguesas",
-      customerPhone: "5493704868421",
+      customerPhone: "5493704111111",
     },
     { toolCallId: "test-call", messages: [] },
   );
@@ -79,8 +79,8 @@ test("a verified web order disables order creation (no duplicate insert)", async
 test("target/inbound phone resolves to the same canonical digits", () => {
   // The checkout target and the inbound sender are bound through the same
   // normalizer, so a referenced order must resolve from either input shape.
-  assert.equal(checkoutPhone("370 486-8421"), "5493704868421");
-  assert.equal(checkoutPhone("+54 9 370 486 8421"), "5493704868421");
-  assert.equal(checkoutPhone("54 370 4868421"), "5493704868421");
-  assert.equal(checkoutPhone("5493704868421"), checkoutPhone("3704868421"));
+  assert.equal(checkoutPhone("370 411-1111"), "5493704111111");
+  assert.equal(checkoutPhone("+54 9 370 411 1111"), "5493704111111");
+  assert.equal(checkoutPhone("54 370 4111111"), "5493704111111");
+  assert.equal(checkoutPhone("5493704111111"), checkoutPhone("3704111111"));
 });

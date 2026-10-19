@@ -802,7 +802,7 @@ export default function AgentConfigForm({
                     id="telegramNotifyChatId"
                     name="telegramNotifyChatId"
                     defaultValue={config.telegramNotifyChatId}
-                    placeholder="1991128737"
+                    placeholder="123456789"
                   />
                   <p className="text-xs text-muted-foreground">
                     Recibe avisos de pedidos mayoristas y derivaciones.
@@ -1450,7 +1450,7 @@ export default function AgentConfigForm({
                 <Input
                   id="aliasB2c"
                   name="aliasB2c"
-                  placeholder="Ej: LEAN..LEMON"
+                  placeholder="Ej: TU..ALIAS"
                   value={aliasB2c}
                   onChange={(e) => setAliasB2c(e.target.value)}
                 />

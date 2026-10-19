@@ -59,17 +59,17 @@ function makeSessionContext(overrides: Partial<SessionContext>): SessionContext 
 }
 
 test("configured seller and allowlist phones match canonical digits", () => {
-  assert.equal(phoneMatches("+54 9 3704 868421", "5493704868421"), true);
+  assert.equal(phoneMatches("+54 9 3704 111111", "5493704111111"), true);
   assert.equal(phoneMatches("", ""), false);
   assert.equal(phoneMatches("waba-2", "1555000002"), false);
   assert.equal(phoneMatches("acc-123", "123"), false);
   assert.equal(looksLikePhone("waba-2"), false);
-  assert.equal(phoneInList("+54 9 3704 868421", [{ phone: "5493704868421" }]), true);
+  assert.equal(phoneInList("+54 9 3704 111111", [{ phone: "5493704111111" }]), true);
 });
 
 test("seller resolves before lead capture and delivery takes priority", () => {
-  const identities = { sellerPhoneIds: [{ phone: "5493704868421" }], deliveryPhoneNumber: "+54 9 3704 777777" };
-  const seller = resolveWhatsAppActor("+54 9 3704 868421", identities);
+  const identities = { sellerPhoneIds: [{ phone: "5493704111111" }], deliveryPhoneNumber: "+54 9 3704 777777" };
+  const seller = resolveWhatsAppActor("+54 9 3704 111111", identities);
   assert.equal(seller, "seller");
   assert.equal(shouldCaptureLead(seller), false);
   assert.equal(resolveWhatsAppActor("5493704777777", identities), "delivery");
@@ -1055,7 +1055,7 @@ test("N5 non-commercial follow-ups reach the agent; only override blocks", () =>
 });
 
 test("N6 lower payment is never accepted from memory", () => {
-  for (const rejected of [{ paymentMethod: "transfer" }, { total: 5000 }, { alias: "LEA..LEMON" }]) {
+  for (const rejected of [{ paymentMethod: "transfer" }, { total: 5000 }, { alias: "TEST..ALIAS" }]) {
     assert.throws(() => assertSessionContext(rejected), /not permitted/i);
   }
 

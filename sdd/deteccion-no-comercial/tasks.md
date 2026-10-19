@@ -6,7 +6,7 @@
 
 ## T-06.2: Agregar sección [NO COMERCIAL] en prompt V6
 - [ ] Instrucciones: si el primer mensaje o la conversación no es sobre el negocio → "Holaa, ¿todo bien?" sin vender
-- [ ] Si 2 intercambios no-comerciales → "Ahí te paso con Leandro, yo estoy para cosas del negocio"
+- [ ] Si 2 intercambios no-comerciales → "Ahí te paso con el dueño, yo estoy para cosas del negocio"
 - [ ] Si es ambiguo ("Holaa") → tratar como comercial hasta que se demuestre lo contrario
 
 ## T-06.3: Implementar detección pre-flight en agent.ts

@@ -204,8 +204,8 @@ Vendedor: "nuevo pedido para maria, 1 genesis, delivery a san martin 123"
 Bot: createOrder({customerName:"maria", items:[{name:"Genesis", quantity:1}], orderType:"hamburguesas", address:"san martin 123"})
 → "Dale. Pedido creado; informá ID y total reales devueltos por la herramienta."
 
-Vendedor: "carga 1 toro para hector adrian 5493704868421"
-Bot: createOrder({customerName:"hector adrian", phone:"5493704868421", items:[{name:"Toro Asado", quantity:1}], orderType:"hamburguesas"})
+Vendedor: "carga 1 toro para pedro 5493704111111"
+Bot: createOrder({customerName:"pedro", phone:"5493704111111", items:[{name:"Toro Asado", quantity:1}], orderType:"hamburguesas"})
 → "Dale. Pedido creado; informá ID y total reales devueltos por la herramienta."
 
 Vendedor: "cargá una deli para florencia, no tengo su número"

@@ -96,7 +96,7 @@ Zod schema: `src/app/(admin)/admin/agent/actions.ts:45-100` (`agentConfigSchema`
 | 3d Integraciones | `ycloudWebhookSecret` | password | write-only |
 | | `cloudinaryCloudName` / `cloudinaryApiKey` / `cloudinaryApiSecret` | Input/password | secret write-only |
 | | `metaAppId` / `metaAppSecret` / `metaWebhookVerifyToken` | Input/password | secret write-only |
-| | `telegramNotifyChatId` | `Input` | placeholder `1991128737` |
+| | `telegramNotifyChatId` | `Input` | placeholder `123456789` |
 | | `cronSecret` | password | write-only |
 | | `escalationEmail` | email `Input` | `z.string().email()` (`actions.ts:99`) |
 | 4 IDs permitidos | `allowedPhoneIds` | hidden JSON + add/remove list | `PhoneIdEntry[]{name,phone}` |
@@ -335,7 +335,7 @@ From `src/db/schema.ts` (all `jsonb`):
 | Order status notifications | `src/lib/whatsapp/status-utils.ts:27-58` | `ready`/`delivered` WhatsApp copy (`🍞/🍔`, IG mention) + agent semantics |
 | Follow-up text | `src/app/api/cron/followup/route.ts:76` | review-request message |
 | Escalation Telegram text | `src/lib/whatsapp/tools/escalation-email.ts:52-64` | `🔔 DERIVACIÓN` owner alert |
-| Transfer-to-human reply | `src/lib/whatsapp/tools/transfer-to-human.ts:95` | `"Te paso con Leandro, el dueño, …"` |
+| Transfer-to-human reply | `src/lib/whatsapp/tools/transfer-to-human.ts:95` | `"Te paso con el dueño, …"` |
 | Seller prompt `BASE_SELLER_PROMPT` | `src/lib/whatsapp/seller-prompt.ts:133-304` | seller-via-WhatsApp executor + Muzzarella product dictionary |
 | Internal agent `INTERNAL_AGENT_SYSTEM_PROMPT` | `src/lib/telegram/system-prompt.ts:1` | executive assistant persona + playbooks + radar |
 | Telegram `buildTelegramPrompt` sections | `src/lib/telegram/prompt-builder.ts:11` | live business/menu/promos/memory/reconcile/cash/radar sections |
@@ -400,10 +400,10 @@ Source of truth: `DESIGN.MD` + `src/app/globals.css`.
 - Product synonym dictionary and example names (Genesis, Deli Deli, Bookbinder, Toro Asado,
   Papas Chesse, Prepizza, tragos) — `seller-prompt.ts:230-265`, `telegram/system-prompt.ts`.
 - Business hours defaults `09:00–22:00`, delivery zones centro/norte/sur, `deliveryStartHour 14:00`.
-- Aliases examples (`LEAN..LEMON`, `PANES.AL.POR.MAYOR`), menu images (hamburguesas/pan).
+- Aliases examples (`TU..ALIAS`, `PANES.AL.POR.MAYOR`), menu images (hamburguesas/pan).
 - Karen persona (`DEFAULT_SYSTEM_PROMPT`), status copy referencing "hamburguesas", `/carta-digital`
   redirect, IG handle `@…` in delivered notifications.
-- Owner identity default `OWNER_NAME` and hardcoded `"Te paso con Leandro…"` (`transfer-to-human.ts:95`).
+- Owner identity default `OWNER_NAME` and hardcoded `"Te paso con el dueño…"` (`transfer-to-human.ts:95`).
 
 ---
 

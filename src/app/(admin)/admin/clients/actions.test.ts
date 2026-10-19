@@ -39,8 +39,8 @@ function fakeDeps(options: {
   return { deps, leads, orders, deleteCalls };
 }
 
-const PHONE = "+54 9 3704 868421";
-const NORMALIZED = "5493704868421";
+const PHONE = "+54 9 3704 111111";
+const NORMALIZED = "5493704111111";
 
 test("rejects callers without the admin role before touching the store", async () => {
   const { deps, leads, orders } = fakeDeps({

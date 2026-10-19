@@ -9,8 +9,8 @@
 - "ambiguous" = "Holaa", "Buenas", "Hola" sin contexto adicional
 
 ### R2: Respuesta según clasificación
-- "non_commercial" → "Holaa ¿todo bien?" + NO arrancar flujo de venta. Si el próximo mensaje también es no-comercial → "Ahí te paso con Leandro, yo estoy para cosas del negocio"
-- "ambiguous" → flujo normal. Si los próximos 2 mensajes son no-comerciales → "Ahí te paso con Leandro..."
+- "non_commercial" → "Holaa ¿todo bien?" + NO arrancar flujo de venta. Si el próximo mensaje también es no-comercial → "Ahí te paso con el dueño, yo estoy para cosas del negocio"
+- "ambiguous" → flujo normal. Si los próximos 2 mensajes son no-comerciales → "Ahí te paso con el dueño..."
 - "commercial" → flujo normal
 
 ### R3: Transferencia a humano

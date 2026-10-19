@@ -86,7 +86,7 @@ describe("canonicalExternalUserId", () => {
   it("normalizes +/digits for phone-shaped channels", () => {
     assert.equal(canonicalExternalUserId("whatsapp", "+1 (555) 000-9999"), "15550009999");
     assert.equal(canonicalExternalUserId("whatsapp", "15550009999"), "15550009999");
-    assert.equal(canonicalExternalUserId("sms", "+54 9 3704 868421"), "5493704868421");
+    assert.equal(canonicalExternalUserId("sms", "+54 9 3704 111111"), "5493704111111");
     assert.equal(canonicalExternalUserId("telegram", " 12345678 "), "12345678");
   });
 

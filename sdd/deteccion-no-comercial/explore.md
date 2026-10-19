@@ -67,7 +67,7 @@ Pero NO existe:
    - Ambiguo: "Holaa", "Buenas"
 
 2. Respuesta según clasificación:
-   - No-comercial: "Holaa, ¿todo bien?" + si insiste no-comercial → "Ahí te paso con Leandro, yo estoy para cosas del negocio"
+   - No-comercial: "Holaa, ¿todo bien?" + si insiste no-comercial → "Ahí te paso con el dueño, yo estoy para cosas del negocio"
    - Ambiguo: responder normal, pero si los próximos 2 mensajes no son comerciales → transferir a humano
    - Comercial: flujo normal
 

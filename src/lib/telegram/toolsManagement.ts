@@ -651,7 +651,7 @@ export const getBusinessSummaryTool = tool({
 // Ver el historial de mensajes de una conversación específica
 export const getConversationMessagesTool = tool({
   description:
-    "Muestra el historial COMPLETO de mensajes de una conversación de WhatsApp. PREGUNTAS: 'mostrame el chat con Hector', 'qué dijo el cliente X?', 'historial de la conversación 5'",
+    "Muestra el historial COMPLETO de mensajes de una conversación de WhatsApp. PREGUNTAS: 'mostrame el chat con Juan', 'qué dijo el cliente X?', 'historial de la conversación 5'",
   inputSchema: z.object({
     conversationId: z.number().optional().describe("ID de la conversación (si se sabe)"),
     customerPhone: z.string().optional().describe("Teléfono del cliente para buscar su conversación"),
@@ -828,7 +828,7 @@ export const getCustomerFullProfileTool = tool({
 // Combina: items del pedido actual + direcciones + tipo de cliente + historial
 export const getConversationContextTool = tool({
   description:
-    "Obtiene el contexto COMPLETO de una conversación de WhatsApp: items del pedido actual, direcciones guardadas, tipo de cliente (b2c/b2b), y últimos mensajes. PREGUNTAS: 'mostrame el pedido de Hector', 'qué contexto tiene la conversación 5', 'cómo viene el chat con Maria'",
+    "Obtiene el contexto COMPLETO de una conversación de WhatsApp: items del pedido actual, direcciones guardadas, tipo de cliente (b2c/b2b), y últimos mensajes. PREGUNTAS: 'mostrame el pedido de Juan', 'qué contexto tiene la conversación 5', 'cómo viene el chat con Maria'",
   inputSchema: z.object({
     conversationId: z
       .number()
@@ -992,7 +992,7 @@ export const setHumanOverrideTool = tool({
 // ─── sendMessageAsOperatorTool - Enviar mensaje como operador humano ──────────
 export const sendMessageAsOperatorTool = tool({
   description:
-    "Envía un mensaje como operador humano a una conversación (WhatsApp, Telegram u otro canal conectado). El mensaje se envía al cliente por el canal de la conversación y queda registrado en el historial. USAR DESPUÉS de activar setHumanOverride para mantener el control, aunque también funciona sin override. PREGUNTAS: 'mandale un mensaje a Hector', 'decile que ya le llega', 'respondé al chat 5'",
+    "Envía un mensaje como operador humano a una conversación (WhatsApp, Telegram u otro canal conectado). El mensaje se envía al cliente por el canal de la conversación y queda registrado en el historial. USAR DESPUÉS de activar setHumanOverride para mantener el control, aunque también funciona sin override. PREGUNTAS: 'mandale un mensaje a Juan', 'decile que ya le llega', 'respondé al chat 5'",
   inputSchema: z.object({
     conversationId: z.number().describe("ID de la conversación"),
     text: z.string().describe("Texto del mensaje a enviar al cliente"),
@@ -1101,7 +1101,7 @@ export const sendMessageAsOperatorTool = tool({
 // ─── injectCustomerNoteTool - Agregar nota interna a un lead ─────────────────
 export const injectCustomerNoteTool = tool({
   description:
-    "AGREGA una nota interna al perfil de un cliente (lead). La nota se ve cuando el agente de WhatsApp procese el próximo mensaje del cliente. Se concatena con las notas existentes con timestamp. PREGUNTAS: 'agregale una nota a Hector', 'dejale una nota a Maria', 'poné que prefiere carne'",
+    "AGREGA una nota interna al perfil de un cliente (lead). La nota se ve cuando el agente de WhatsApp procese el próximo mensaje del cliente. Se concatena con las notas existentes con timestamp. PREGUNTAS: 'agregale una nota a Juan', 'dejale una nota a Maria', 'poné que prefiere carne'",
   inputSchema: z.object({
     phone: z
       .string()

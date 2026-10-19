@@ -35,7 +35,7 @@ He analizado los ~40k líneas del repo. Esto es lo que encontré:
 /**
  * Teléfono NUMÉRICO puro. Saca: +, espacios, guiones, paréntesis.
  * El formato canónico es sin +, sin espacios, sin guiones.
- * Ej: "+54 9 3704 868421" → "5493704868421"
+ * Ej: "+54 9 3704 111111" → "5493704111111"
  */
 export function normalizePhone(phone: string): string;
 
@@ -139,21 +139,21 @@ En `POST /api/leads`:
 
 ```
 ENTRADA (cualquier formato)
-  "+54 9 3704 868421"
-  "5493704868421"
-  "03704 868421"
+  "+54 9 3704 111111"
+  "5493704111111"
+  "03704 111111"
          │
          ▼
   normalizePhone() ←───── CENTRAL, se llama SIEMPRE
          │
          ▼
-  "5493704868421"  ←─── Formato canónico NUMÉRICO puro
+  "5493704111111"  ←─── Formato canónico NUMÉRICO puro
          │
          ▼
-  DB: leads.phone = "5493704868421"  (UNIQUE)
+  DB: leads.phone = "5493704111111"  (UNIQUE)
          │
          ▼
-  URL: /admin/clients/5493704868421  (encodeURIComponent seguro)
+  URL: /admin/clients/5493704111111  (encodeURIComponent seguro)
          │
          ▼
   [id]/page.tsx: normalizePhone(params.id) → query

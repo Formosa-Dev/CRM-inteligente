@@ -205,7 +205,7 @@ El bot de Telegram es tu **asistente ejecutivo**. Le hablás y él hace. Cosas q
 | Crear producto | "creá hamburguesa de carne, hornela, 5000" | Crea el producto en el catálogo |
 | Ver analytics | "cómo vamos hoy?" o "ventas de esta semana" | Muestra métricas |
 | Cambiar configuración | "abrí la cocina" o "cambiá horario a 05-23" | Cambia al instante |
-| Mandar WhatsApp a un cliente | "mandale a Hector 'tu pedido ya salió'" | Envía el mensaje |
+| Mandar WhatsApp a un cliente | "mandale a Juan 'tu pedido ya salió'" | Envía el mensaje |
 | Tomar control de un chat | "tomá control del chat 5" | Desactiva a Karen, vos podés responder |
 | Ver conversaciones | "mostrame los chats" | Últimas conversaciones |
 

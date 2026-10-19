@@ -4,7 +4,7 @@
 
 El bot envía mensajes automáticos de cambio de estado ("🍞 Ya esta tu pedido") que **no incluyen contexto del pedido** y **no siempre se persisten** correctamente en `chat_messages`. Además, cuando el dueño responde desde WhatsApp Business App, sus mensajes **no siempre se capturan como echo** (no se guardan como `human` en DB), lo que deja al AI ciego. Sumado a esto, el AI genera **respuestas duplicadas/inconsistentes** porque el contexto está incompleto.
 
-El caso concreto: Denise (5492966685071) preguntando por prepizzas — el humano respondió "Sisi ya estan" desde el celular, el AI no lo vio, y contestó dos veces con información contradictoria ("no hay pedido en curso" + "nos vemos mañana").
+El caso concreto: Cliente A (+54 3704 ••••••) preguntando por prepizzas — el humano respondió "Sisi ya estan" desde el celular, el AI no lo vio, y contestó dos veces con información contradictoria ("no hay pedido en curso" + "nos vemos mañana").
 
 ## Scope
 
@@ -103,4 +103,4 @@ El caso concreto: Denise (5492966685071) preguntando por prepizzas — el humano
 - [ ] `sendText()` captura el `wamid` y lo persiste
 - [ ] AI no responde si el humano respondió en los últimos 60 segundos
 - [ ] AI usa los mensajes `system` de notificaciones como contexto
-- [ ] El caso de Denise no se repite: AI no contesta "no hay pedido en curso" cuando el humano acaba de coordinar la entrega
+- [ ] El caso del Cliente A no se repite: AI no contesta "no hay pedido en curso" cuando el humano acaba de coordinar la entrega

@@ -53,7 +53,7 @@ Cuando un cliente B2C pregunta por alias de pago, el sistema **DEBE** usar el al
 #### Scenario: Alias B2C devuelto
 - GIVEN el cliente B2C pregunta "pasame para pagar"
 - WHEN el agente ejecuta getPaymentAlias o responde directamente
-- THEN usa el alias almacenado en `agentConfig.aliasB2c` (ej: "Lea..LEMON")
+- THEN usa el alias almacenado en `agentConfig.aliasB2c` (ej: "[alias]")
 - AND NO usa `agentConfig.aliasB2b`
 
 ---

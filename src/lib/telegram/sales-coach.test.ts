@@ -75,9 +75,9 @@ test("summarizeOutcomes cuenta por origen y conversaciones sin venta", () => {
 // ─── De-identificación ───────────────────────────────────────────────────────
 
 test("redactPII quita nombres conocidos, teléfonos largos y emails", () => {
-  const out = redactPII("Juan quiere 5493704868421, mail juan@test.com", ["Juan", "María"]);
+  const out = redactPII("Juan quiere 5493704111111, mail juan@test.com", ["Juan", "María"]);
   assert.doesNotMatch(out, /Juan/);
-  assert.doesNotMatch(out, /5493704868421/);
+  assert.doesNotMatch(out, /5493704111111/);
   assert.doesNotMatch(out, /juan@test.com/);
   assert.match(out, /\[CLIENTE\]/);
   assert.match(out, /\[NUM\]/);

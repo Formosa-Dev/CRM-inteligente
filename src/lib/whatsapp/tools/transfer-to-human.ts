@@ -92,7 +92,7 @@ export function createTransferToHumanTool(conversationId: number) {
         });
       }
 
-      return "Te paso con Leandro, el dueño, él se va a encargar personalmente. Gracias por esperar.";
+      return "Te paso con el dueño, él se va a encargar personalmente. Gracias por esperar.";
     },
   });
 }

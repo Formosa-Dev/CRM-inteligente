@@ -21,7 +21,7 @@ export const sendWhatsAppMessage = tool({
   description:
     "Envía un mensaje de WhatsApp a un número de teléfono específico. Preguntas: 'mandar mensaje a cliente', 'enviar WhatsApp', 'notificar por WhatsApp'",
   inputSchema: z.object({
-    to: z.string().describe("Número de teléfono del destinatario (ej: 5493705868421)"),
+    to: z.string().describe("Número de teléfono del destinatario (ej: 5493704111111)"),
     message: z.string().describe("Texto del mensaje a enviar"),
   }),
   execute: async ({ to, message }) => {
@@ -115,7 +115,7 @@ Filtros disponibles:
 - "b2c" → Solo clientes consumidor final (hamburguesas)
 - "24h" → Solo los que tienen la ventana de 24h activa (mensaje gratuito) — clientes cuyo ÚLTIMO MENSAJE ENTRANTE fue hace menos de 24h
 - "con-pedido" → Solo los que ya hicieron algún pedido
-- "buscar: TEXTO" → Busca por nombre o teléfono (ej: "buscar: hector")
+- "buscar: TEXTO" → Busca por nombre o teléfono (ej: "buscar: juan")
 `;
 
 export const broadcastWhatsApp = tool({
