@@ -24,7 +24,9 @@ import { extractYCloudEchoMessage } from "./providers/ycloud";
 import {
   channelAccountRowId,
   logAckedWithoutPersistence,
+  resolveIngressContext,
 } from "./ingress";
+import { getProvider } from "./registry";
 import type {
   ChannelAccount,
   ChannelKind,
@@ -146,8 +148,16 @@ async function handleEcho(
       `[webhook:echo] Echo from ${botPhone} → ${customerPhone}: "${displayText.slice(0, 80)}"`
     );
 
-    // 4. Buscar o crear conversación por el teléfono del customer
-    //    findOrCreateConversation normaliza customerPhone internamente
+    // 4. Dedup BEFORE any conversation lookup/mutation. An echo from account
+    //    B must never touch account A's conversation, not even to rebind it.
+    if (echoMsgId && (await isMessageDuplicate(echoMsgId))) {
+      console.log(`[webhook:echo] Duplicate echo ${echoMsgId} — skipping`);
+      return NextResponse.json({ ok: true }, { status: 200 });
+    }
+
+    // 5. Buscar o crear la conversación EN EL ÁMBITO DE LA CUENTA. A legacy
+    //    null-account row is never adopted; a different account gets its own
+    //    row. This is the no-crossover guarantee.
     const echoConv = await findOrCreateConversation(
       "whatsapp",
       customerPhone,
@@ -157,32 +167,7 @@ async function handleEcho(
     );
     const conversationId = echoConv.id;
 
-    // S15 — bind the conversation to the matched account so operator/handoff
-    // sends resolve it via channelAccountId. Guarded: only stamps when the
-    // binding is missing or changed (a fresh create/backfill already reports
-    // the stamped value, so this fires only on a real rebinding).
-    if (
-      echoAccountId != null &&
-      Number.isFinite(echoAccountId) &&
-      echoConv.channelAccountId !== echoAccountId
-    ) {
-      await db
-        .update(conversations)
-        .set({ channelAccountId: echoAccountId, updatedAt: new Date() })
-        .where(eq(conversations.id, conversationId));
-      console.log(
-        `[webhook:echo] Bound conversation ${conversationId} to channel_account #${echoAccountId}`
-      );
-    }
-
-    // 5. Dedup: si este echo ya tiene el mismo platformMessageId, skip
     if (echoMsgId) {
-      const isDup = await isMessageDuplicate(echoMsgId);
-      if (isDup) {
-        console.log(`[webhook:echo] Duplicate echo ${echoMsgId} — skipping`);
-        return NextResponse.json({ ok: true }, { status: 200 });
-      }
-
       // Dedup adicional: si el contenido coincide con el ÚLTIMO mensaje
       // del assistant en los últimos 30s, es el eco de nuestra propia respuesta
       const recentMessages = await getConversationMessages(conversationId, 1);
@@ -506,11 +491,39 @@ export async function handleNormalizedEvent(
   event: NormalizedInboundEvent,
   ctx?: InboundContext
 ): Promise<NextResponse> {
-  // S12 — the account the ingress route resolved for this event. Stamped on
-  // every conversation/message write; undefined for legacy callers and
-  // placeholder accounts, which keeps rows null exactly as before.
+  // S12/S17 — every surface (canonical /api/whatsapp/webhook included)
+  // resolves the event's channel account BEFORE any conversation lookup or
+  // send. Callers may pass it; otherwise resolve it here. A provisioned
+  // channel with no matching account fails closed instead of falling back to
+  // the legacy null-account identity.
+  let effectiveCtx = ctx;
+  if (!effectiveCtx) {
+    try {
+      effectiveCtx = await resolveIngressContext(
+        getProvider(event.provider),
+        event
+      );
+    } catch (resolveError) {
+      console.error(
+        "[webhook] Channel-account resolution failed — retryable, not acked",
+        resolveError
+      );
+      return NextResponse.json(
+        { error: "account-resolution-failed" },
+        { status: 503 }
+      );
+    }
+  }
+  if (!effectiveCtx) {
+    logAckedWithoutPersistence(
+      event,
+      "no channel account matches this event (fail-closed)"
+    );
+    return NextResponse.json({ ok: true }, { status: 200 });
+  }
   const channelAccountId =
-    ctx?.channelAccountId ?? channelAccountRowId(ctx?.account);
+    effectiveCtx.channelAccountId ??
+    channelAccountRowId(effectiveCtx.account);
   const payload = event.raw as Record<string, unknown>;
 
   // 2a. Protocol-eligibility gate FIRST: empty Business echoes and

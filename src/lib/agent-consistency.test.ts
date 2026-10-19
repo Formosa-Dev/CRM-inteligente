@@ -1269,8 +1269,11 @@ test("S15 operator sends resolve the conversation's channel account", () => {
   const unmatched = echoBody.indexOf('"unmatched"');
   const findConv = echoBody.indexOf("findOrCreateConversation(");
   assert.ok(unmatched !== -1 && findConv !== -1 && unmatched < findConv);
-  // Matched echoes stamp the conversation binding.
-  assert.match(route, /channelAccountId: echoAccountId/);
+  // Matched echoes create/lookup the account-scoped identity (never rebind).
+  assert.match(
+    route,
+    /findOrCreateConversation\(\s*"whatsapp",[\s\S]*?echoAccountId\s*\)/,
+  );
 
   // The handoff transport decision now receives the conversation channel.
   assert.match(route, /deliverWebhookHandoff\(\{[\s\S]*channel: convChannel[\s\S]*decision: sessionDecision/);

@@ -237,7 +237,9 @@ export const conversations = pgTable("conversations", {
   // Nullable since multi-channel (S11): social identities have no whatsappId.
   // The legacy UNIQUE constraint stays — Postgres allows multiple NULLs, so
   // non-null dedup is preserved; identity-level uniqueness now also lives on
-  // the (channel, external_user_id) partial unique index below.
+  // account-aware partial unique indexes below.
+  // Account-scoped rows leave whatsapp_id NULL; the legacy UNIQUE constraint
+  // only guards null-account (legacy) rows.
   whatsappId: varchar("whatsapp_id", { length: 255 }).unique(),
   channelAccountId: integer("channel_account_id").references(() => channelAccounts.id),
   externalThreadId: text("external_thread_id"), // provider thread/conversation id
@@ -251,6 +253,11 @@ export const conversations = pgTable("conversations", {
   humanOverrideUntil: timestamp("human_override_until", { withTimezone: true }),
   lastReconciledAt: timestamp("last_reconciled_at", { withTimezone: true }),
   externalUserId: varchar("external_user_id", { length: 255 }),
+  // Canonical, channel-aware identity key. Phone-shaped channels store digits
+  // only; social channels store the provider identifier verbatim. Uniqueness
+  // is account-scoped below: (channel, account, key) for bound rows and
+  // (channel, key) for legacy null-account rows.
+  externalUserIdNormalized: varchar("external_user_id_normalized", { length: 255 }),
   conversationMetadata: jsonb("conversation_metadata").$type<{
     repromptCount: number;
     lastUserMessageType: "order" | "greeting" | "menu" | "info" | "complaint" | "other";
@@ -262,9 +269,17 @@ export const conversations = pgTable("conversations", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (table) => ({
-  channelExternalUserUq: uniqueIndex("conversations_channel_external_user_uq")
-    .on(table.channel, table.externalUserId)
-    .where(sql`external_user_id is not null`),
+  // Account-scoped identity: the same customer on two provisioned numbers is
+  // two conversations, never one shared or rebound row.
+  channelAccountExternalUq: uniqueIndex("conversations_channel_account_external_uq")
+    .on(table.channel, table.channelAccountId, table.externalUserIdNormalized)
+    .where(sql`external_user_id_normalized is not null and channel_account_id is not null`),
+  // Legacy null-account identity keeps the pre-S11 dedup semantics.
+  channelLegacyExternalUq: uniqueIndex("conversations_channel_legacy_external_uq")
+    .on(table.channel, table.externalUserIdNormalized)
+    .where(sql`external_user_id_normalized is not null and channel_account_id is null`),
+  channelIdentityLookupIdx: index("conversations_channel_identity_idx")
+    .on(table.channel, table.externalUserIdNormalized),
 }));
 
 // Durable boundary state only: business entities remain authoritative in their own tables.

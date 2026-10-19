@@ -1,7 +1,11 @@
 import { db } from "@/db";
 import { conversations, chatMessages, leads, attachments } from "@/db/schema";
-import { eq, and, desc, or } from "drizzle-orm";
+import { eq, and, desc, isNull, or } from "drizzle-orm";
 import { normalizePhone } from "@/lib/phone-utils";
+import {
+  resolveConversationIdentity,
+  type ConversationIdentityRepository,
+} from "@/lib/messaging/conversation-identity";
 import type { ChannelAccount, ChannelKind, OutboundMessage } from "@/lib/messaging/types";
 
 // Full channel universe (parity with schema channelEnum / ChannelKind).
@@ -29,8 +33,9 @@ export interface IncomingMessage {
 }
 
 // Find or create conversation, returns { id, isNew, channel, channelAccountId }
-// channelAccountId (optional, S12): stamps the channel_accounts row that owns
-// this conversation — set on create, backfilled on match when the row lacks it.
+// channelAccountId (S12/S17): stamps the channel_accounts row that owns this
+// conversation. Identity is account-aware: account B never reuses account A's
+// row, and a legacy null-account row is never silently rebound.
 export async function findOrCreateConversation(
   channel: Channel,
   externalUserId: string,
@@ -43,103 +48,110 @@ export async function findOrCreateConversation(
   channel: ChannelKind;
   channelAccountId: number | null;
 }> {
-  // Try to find existing by channel + externalUserId
-  const existing = await db
-    .select({
-      id: conversations.id,
-      channel: conversations.channel,
-      channelAccountId: conversations.channelAccountId,
-    })
-    .from(conversations)
-    .where(
-      and(
-        eq(conversations.channel, channel),
-        eq(conversations.externalUserId, externalUserId)
-      )
-    )
-    .limit(1);
-
-  if (existing[0]) {
-    if (channelAccountId && existing[0].channelAccountId == null) {
-      await db
-        .update(conversations)
-        .set({ channelAccountId })
-        .where(eq(conversations.id, existing[0].id));
-    }
-    return {
-      id: existing[0].id,
-      isNew: false,
-      channel: existing[0].channel,
-      channelAccountId: channelAccountId ?? existing[0].channelAccountId,
-    };
-  }
-
-  // For WhatsApp, also check by whatsappId (backward compat)
-  if (channel === "whatsapp") {
-    const byWaId = await db
-      .select({
-        id: conversations.id,
-        channelAccountId: conversations.channelAccountId,
-      })
-      .from(conversations)
-      .where(eq(conversations.whatsappId, externalUserId))
-      .limit(1);
-
-    if (byWaId[0]) {
-      // Update with new fields
-      await db
-        .update(conversations)
-        .set({
-          channel: "whatsapp",
-          externalUserId,
-          ...(channelAccountId && byWaId[0].channelAccountId == null
-            ? { channelAccountId }
-            : {}),
+  const repo: ConversationIdentityRepository = {
+    async find(scopeChannel, scopeAccountId, normalizedExternalUserId) {
+      const [row] = await db
+        .select({
+          id: conversations.id,
+          channel: conversations.channel,
+          channelAccountId: conversations.channelAccountId,
         })
-        .where(eq(conversations.id, byWaId[0].id));
-      return {
-        id: byWaId[0].id,
-        isNew: false,
-        channel: "whatsapp",
-        channelAccountId: byWaId[0].channelAccountId,
-      };
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.channel, scopeChannel),
+            eq(
+              conversations.externalUserIdNormalized,
+              normalizedExternalUserId
+            ),
+            scopeAccountId == null
+              ? isNull(conversations.channelAccountId)
+              : eq(conversations.channelAccountId, scopeAccountId)
+          )
+        )
+        .limit(1);
+      return row
+        ? {
+            id: row.id,
+            channel: row.channel as ChannelKind,
+            channelAccountId: row.channelAccountId ?? null,
+          }
+        : null;
+    },
+    async insert(input) {
+      try {
+        const phoneBacked =
+          input.channel === "whatsapp" || input.channel === "telegram";
+        const [conv] = await db
+          .insert(conversations)
+          .values({
+            // Account-scoped rows never take the legacy whatsappId slot: it
+            // is globally unique and would collide across accounts.
+            whatsappId:
+              input.channelAccountId == null && input.channel === "whatsapp"
+                ? input.externalUserId
+                : input.channelAccountId == null && input.channel === "telegram"
+                  ? `tg_${input.externalUserId}`
+                  : null,
+            customerName: input.customerName || null,
+            customerPhone:
+              phoneBacked || input.customerPhone
+                ? normalizePhone(input.customerPhone || input.externalUserId)
+                : null,
+            channel: input.channel,
+            externalUserId: input.externalUserId,
+            externalUserIdNormalized: input.externalUserIdNormalized,
+            channelAccountId: input.channelAccountId,
+            status: "active",
+            lastMessageAt: new Date(),
+            lastMessagePreview: null,
+          })
+          .returning({
+            id: conversations.id,
+            channel: conversations.channel,
+            channelAccountId: conversations.channelAccountId,
+          });
+        return {
+          kind: "inserted",
+          record: {
+            id: conv.id,
+            channel: conv.channel as ChannelKind,
+            channelAccountId: conv.channelAccountId ?? null,
+          },
+        };
+      } catch (err: unknown) {
+        if ((err as { code?: string } | null)?.code === "23505") {
+          return { kind: "conflict" };
+        }
+        throw err;
+      }
+    },
+  };
+
+  const resolved = await resolveConversationIdentity(repo, {
+    channel,
+    externalUserId,
+    channelAccountId: channelAccountId ?? null,
+    customerName,
+    customerPhone,
+  });
+
+  // Auto-link lead by phone number if a new conversation was created.
+  if (resolved.isNew) {
+    const finalPhone = customerPhone
+      ? normalizePhone(customerPhone)
+      : normalizePhone(externalUserId);
+    if (finalPhone) {
+      await autoLinkLeadToConversation(finalPhone, resolved.record.id);
     }
   }
 
-  // Create new. whatsappId/customerPhone only apply to phone-shaped channels:
-  // social identities (instagram/facebook/reddit) leave them null (S11 made
-  // whatsappId nullable; the legacy "tg_" prefix stays for telegram only).
-  const phoneBacked = channel === "whatsapp" || channel === "telegram";
-  const [conv] = await db
-    .insert(conversations)
-    .values({
-      whatsappId:
-        channel === "whatsapp"
-          ? externalUserId
-          : channel === "telegram"
-            ? `tg_${externalUserId}`
-            : null,
-      customerName: customerName || null,
-      customerPhone:
-        phoneBacked || customerPhone
-          ? normalizePhone(customerPhone || externalUserId)
-          : null,
-      channel,
-      externalUserId,
-      channelAccountId: channelAccountId ?? null,
-      status: "active",
-      lastMessageAt: new Date(),
-      lastMessagePreview: null,
-    })
-    .returning({ id: conversations.id });
-
-  // Auto-link lead by phone number if a new conversation was created
-  const finalPhone = customerPhone ? normalizePhone(customerPhone) : externalUserId;
-  if (finalPhone) {
-    await autoLinkLeadToConversation(finalPhone, conv.id);
-  }
-
-  return { id: conv.id, isNew: true, channel, channelAccountId: null };
+  return {
+    id: resolved.record.id,
+    isNew: resolved.isNew,
+    channel: resolved.record.channel,
+    channelAccountId: resolved.record.channelAccountId,
+  };
 }
 
 /**
