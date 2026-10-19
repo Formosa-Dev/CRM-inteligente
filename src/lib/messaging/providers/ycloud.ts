@@ -14,6 +14,8 @@
  *   `src/lib/media/downloader.ts` (GET /v2/whatsapp/media/{id})
  */
 
+import { createHash } from "node:crypto";
+
 import { sendDocument, sendImage, sendText } from "@/lib/ycloud";
 import { verifyYCloudSignature } from "@/lib/whatsapp/signature";
 import { ECHO_EVENT_TYPES } from "@/lib/whatsapp/webhook-pipeline";
@@ -165,6 +167,26 @@ function mapStatus(status: unknown): NormalizedInboundEvent["status"] {
   return undefined;
 }
 
+/**
+ * Deterministic fallback when the envelope carries no event id: a stable
+ * hash over fields that survive provider redelivery. Keeps id-less events
+ * dedupable instead of collapsing onto an empty key (contract §deliveryId).
+ */
+function syntheticDeliveryId(payload: Record<string, unknown>): string {
+  const message =
+    ["whatsappInboundMessage", "whatsappMessage", "whatsappSmbMessageEcho", "message"]
+      .map((key) => payload[key])
+      .find(isRecord) ?? {};
+  const basis = JSON.stringify([
+    asString(payload.type),
+    asString(payload.sendTime) ?? asString(payload.createTime),
+    asString(message.wamid) ?? asString(message.id),
+    asString(message.from),
+    asString(message.to),
+  ]);
+  return `ycloud:synth:${createHash("sha256").update(basis).digest("hex").slice(0, 16)}`;
+}
+
 function baseEvent(
   payload: Record<string, unknown>,
   kind: NormalizedInboundEvent["kind"],
@@ -172,7 +194,7 @@ function baseEvent(
 ): NormalizedInboundEvent {
   return {
     provider: "ycloud",
-    deliveryId: asString(payload.id) ?? "",
+    deliveryId: asString(payload.id) ?? syntheticDeliveryId(payload),
     kind,
     direction,
     providerAccountId: "",
@@ -201,7 +223,10 @@ function normalizeInbound(
   const msgType = asString(message.type) ?? "unknown";
 
   event.deliveryId =
-    asString(payload.id) ?? asString(message.wamid) ?? asString(message.id) ?? "";
+    asString(payload.id) ??
+    asString(message.wamid) ??
+    asString(message.id) ??
+    syntheticDeliveryId(payload);
   event.providerAccountId = asString(message.wabaId) ?? "";
   event.platformMessageId = asString(message.wamid) ?? asString(message.id);
   event.sender = {
@@ -236,7 +261,10 @@ function normalizeEcho(payload: Record<string, unknown>): NormalizedInboundEvent
   if (!message) return event;
 
   event.deliveryId =
-    asString(payload.id) ?? asString(message.wamid) ?? asString(message.id) ?? "";
+    asString(payload.id) ??
+    asString(message.wamid) ??
+    asString(message.id) ??
+    syntheticDeliveryId(payload);
   event.providerAccountId = asString(message.wabaId) ?? "";
   event.platformMessageId = asString(message.wamid) ?? asString(message.id);
   // On echoes the business is the sender; the customer lives in `to` (raw).
@@ -277,20 +305,28 @@ function normalizeStatus(
   return event;
 }
 
-function toSendResult(
+/**
+ * Maps the delegated senders' result to SendResult. `retryable` reports the
+ * error CLASS, not remaining attempts: 4xx/validation/config errors are
+ * permanent; 5xx and network errors are transient even though the sender
+ * already spent its own 3-attempt budget (a later caller retry may still
+ * succeed).
+ */
+export function toSendResult(
   res: { ok: true; wamid?: string } | { ok: false; error: string }
 ): SendResult {
   if (res.ok) {
     // image/document sends return ok without a wamid today (see ycloud.ts).
     return { ok: true, providerMessageId: res.wamid ?? "", status: "sent" };
   }
-  // Missing credentials/config is not retryable; upstream 5xx/fetch failures
-  // already exhausted their retry budget and may be retried by the caller.
-  return {
-    ok: false,
-    error: res.error,
-    retryable: !res.error.startsWith("Missing "),
-  };
+  const statusMatch = /^YCloud error (\d{3})/.exec(res.error);
+  const status = statusMatch ? Number(statusMatch[1]) : undefined;
+  const retryable = res.error.startsWith("Missing ")
+    ? false
+    : status !== undefined
+      ? status >= 500
+      : true; // fetch/network/max-retries errors are transient
+  return { ok: false, error: res.error, retryable };
 }
 
 export const ycloudProvider: MessagingProvider = {
@@ -327,6 +363,7 @@ export const ycloudProvider: MessagingProvider = {
   // resolving agent_config → env inside the delegated senders until
   // `channel_accounts` exists (roadmap §2.3 / execution-control §2.3).
   async sendMessage(_account, msg) {
+    const externalId = msg.idempotencyKey; // → ycloud externalId
     switch (msg.type) {
       case "text": {
         if (!msg.text) {
@@ -336,7 +373,9 @@ export const ycloudProvider: MessagingProvider = {
             retryable: false,
           };
         }
-        return toSendResult(await sendText(msg.to, msg.text));
+        return toSendResult(
+          await sendText(msg.to, msg.text, externalId)
+        );
       }
       case "image": {
         if (!msg.mediaUrl) {
@@ -346,7 +385,9 @@ export const ycloudProvider: MessagingProvider = {
             retryable: false,
           };
         }
-        return toSendResult(await sendImage(msg.to, msg.mediaUrl, msg.text));
+        return toSendResult(
+          await sendImage(msg.to, msg.mediaUrl, msg.text, externalId)
+        );
       }
       case "document": {
         if (!msg.mediaUrl) {
@@ -356,7 +397,9 @@ export const ycloudProvider: MessagingProvider = {
             retryable: false,
           };
         }
-        return toSendResult(await sendDocument(msg.to, msg.mediaUrl, msg.text));
+        return toSendResult(
+          await sendDocument(msg.to, msg.mediaUrl, msg.text, externalId)
+        );
       }
       default:
         return {

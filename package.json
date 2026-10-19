@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test:agents": "node --import tsx --test src/lib/agent-consistency.test.ts src/lib/checkout/contract.test.ts src/lib/checkout/origin.test.ts src/lib/checkout/service.test.ts src/components/cart/checkout-ux.test.ts src/lib/whatsapp/web-order-guard.test.ts src/lib/checkout/notify.test.ts src/lib/telegram/notifier.test.ts src/lib/telegram/webhook-model.test.ts src/lib/telegram/sales-coach.test.ts src/lib/cash/session.test.ts src/lib/whatsapp/temporal-order-guard.test.ts src/lib/whatsapp/broadcast.test.ts",
+    "test:agents": "node --import tsx --test src/lib/agent-consistency.test.ts src/lib/checkout/contract.test.ts src/lib/checkout/origin.test.ts src/lib/checkout/service.test.ts src/components/cart/checkout-ux.test.ts src/lib/whatsapp/web-order-guard.test.ts src/lib/checkout/notify.test.ts src/lib/telegram/notifier.test.ts src/lib/telegram/webhook-model.test.ts src/lib/telegram/sales-coach.test.ts src/lib/cash/session.test.ts src/lib/whatsapp/temporal-order-guard.test.ts src/lib/whatsapp/broadcast.test.ts src/lib/messaging/provider-contract.test.ts src/lib/messaging/providers/ycloud.test.ts",
     "db:push": "drizzle-kit push --force 2>/dev/null || echo '[db:push] Skipped (already applied)'",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

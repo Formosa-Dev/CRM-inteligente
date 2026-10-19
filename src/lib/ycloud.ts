@@ -22,7 +22,8 @@ async function sleep(ms: number) {
 
 export async function sendText(
   to: string,
-  text: string
+  text: string,
+  externalId?: string
 ): Promise<SendTextResult> {
   const { apiKey, from } = await getYCloudCreds();
 
@@ -35,6 +36,7 @@ export async function sendText(
     to,
     type: "text",
     text: { body: text, preview_url: false },
+    ...(externalId ? { externalId } : {}),
   });
 
   for (let attempt = 0; attempt <= 2; attempt++) {
@@ -91,7 +93,8 @@ export async function sendText(
 export async function sendImage(
   to: string,
   imageUrl: string,
-  caption?: string
+  caption?: string,
+  externalId?: string
 ): Promise<SendTextResult> {
   const { apiKey, from } = await getYCloudCreds();
 
@@ -104,6 +107,7 @@ export async function sendImage(
     to,
     type: "image",
     image: { link: imageUrl, caption: caption || "" },
+    ...(externalId ? { externalId } : {}),
   });
 
   for (let attempt = 0; attempt <= 2; attempt++) {
@@ -152,7 +156,8 @@ export async function sendDocument(
   to: string,
   documentUrl: string,
   caption?: string,
-  fileName?: string
+  fileName?: string,
+  externalId?: string
 ): Promise<SendTextResult> {
   const { apiKey, from } = await getYCloudCreds();
 
@@ -169,6 +174,7 @@ export async function sendDocument(
       caption: caption || "",
       filename: fileName || "documento.pdf",
     },
+    ...(externalId ? { externalId } : {}),
   });
 
   for (let attempt = 0; attempt <= 2; attempt++) {

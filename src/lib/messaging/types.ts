@@ -1,23 +1,21 @@
 /**
  * Messaging provider abstraction — frozen contract.
  *
- * Naming follows `docs/socialcrm/provider-integration-evidence.md` §4
- * verbatim; `ChannelAccount` additionally merges the `tenantId`,
- * `isDefault` and `displayAddress` fields from
- * `docs/socialcrm/architecture-roadmap.md` §2.2 (on conflicts, evidence
- * names win: `providerAccountId`, `deliveryId`).
+ * Follows `docs/socialcrm/provider-integration-evidence.md` §4 verbatim,
+ * including the `ChannelAccount` field list. Account defaulting is a
+ * schema/resolver concern (not a contract field) and `senderAddress`
+ * covers the display role — execution-control §2.2 / final-review R-1.
  */
 
 export type ProviderId = "ycloud" | "zernio" | "kapso";
 
+/** Channels are destinations; `comment`/`messenger` are event kinds, not channels. */
 export type ChannelKind =
   | "whatsapp"
   | "instagram"
   | "facebook"
-  | "messenger"
   | "telegram"
-  | "sms"
-  | "comment";
+  | "sms";
 
 export interface ChannelAccount {
   id: string;
@@ -35,9 +33,6 @@ export interface ChannelAccount {
   status: "active" | "disconnected" | "error";
   /** Single install: always the constant "default". Never build tenancy logic. */
   tenantId: string;
-  isDefault: boolean;
-  /** E.164 phone or social handle shown to operators; null when unknown. */
-  displayAddress: string | null;
 }
 
 export interface OutboundMessage {
@@ -57,7 +52,12 @@ export type SendResult =
 
 export interface NormalizedInboundEvent {
   provider: ProviderId;
-  /** delivery-level dedup key: evt_* | X-Zernio-Event-Id | X-Idempotency-Key */
+  /**
+   * delivery-level dedup key: evt_* | X-Zernio-Event-Id | X-Idempotency-Key.
+   * Adapters must synthesize a deterministic `{provider}:synth:<hash>` key
+   * when the envelope carries no id — never leave it empty, or id-less
+   * events would collapse into a single dedup bucket.
+   */
   deliveryId: string;
   kind:
     | "message.received"

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test, { describe } from "node:test";
-import { ycloudProvider as provider } from "./ycloud";
+import { toSendResult, ycloudProvider as provider } from "./ycloud";
 import type { ChannelAccount } from "../types";
 
 const SECRET = "whsec_test_fixture_secret";
@@ -23,8 +23,6 @@ const ACCOUNT: ChannelAccount = {
   credentials: { apiKey: "fake-api-key", webhookSecret: SECRET },
   status: "active",
   tenantId: "default",
-  isDefault: true,
-  displayAddress: "+15550009999",
 };
 
 // Recorded fixture shapes per docs.ycloud.com/reference/webhook-events-payloads.
@@ -297,6 +295,72 @@ describe("ycloud parseWebhook — NormalizedInboundEvent fixtures", () => {
         `body ${body} must yield no events`
       );
     }
+  });
+
+  test("envelope without id gets a deterministic ycloud:synth deliveryId", () => {
+    const idLess = JSON.stringify({
+      type: "whatsapp.inbound_message.received",
+      whatsappInboundMessage: {
+        wamid: "wamid.NOID001",
+        from: "+15550001234",
+        to: "+15550009999",
+        sendTime: "2026-10-18T12:00:09.000Z",
+        type: "text",
+        text: { body: "sin event id" },
+      },
+    });
+    const [a] = provider.parseWebhook({ headers: {}, rawBody: idLess });
+    const [b] = provider.parseWebhook({ headers: {}, rawBody: idLess });
+    assert.match(a.deliveryId, /^ycloud:synth:[0-9a-f]{16}$/);
+    assert.equal(a.deliveryId, b.deliveryId, "same payload must dedup to one key");
+    assert.equal(a.platformMessageId, "wamid.NOID001");
+  });
+});
+
+describe("toSendResult — retryable classification", () => {
+  test("4xx client errors are not retryable", () => {
+    for (const err of [
+      "YCloud error 400: bad request",
+      "YCloud error 422: invalid phone",
+    ]) {
+      const res = toSendResult({ ok: false, error: err });
+      assert.equal(res.ok, false);
+      if (!res.ok) assert.equal(res.retryable, false, err);
+    }
+  });
+
+  test("5xx and network failures stay retryable (transient class)", () => {
+    for (const err of [
+      "YCloud error 500: upstream",
+      "Fetch error: socket hangup",
+      "Max retries exceeded",
+    ]) {
+      const res = toSendResult({ ok: false, error: err });
+      assert.equal(res.ok, false);
+      if (!res.ok) assert.equal(res.retryable, true, err);
+    }
+  });
+
+  test("missing credentials/config is not retryable", () => {
+    const res = toSendResult({
+      ok: false,
+      error: "Missing YCLOUD_API_KEY or WHATSAPP_PHONE_NUMBER",
+    });
+    assert.equal(res.ok, false);
+    if (!res.ok) assert.equal(res.retryable, false);
+  });
+
+  test("success maps wamid to providerMessageId", () => {
+    assert.deepEqual(toSendResult({ ok: true, wamid: "wamid.X" }), {
+      ok: true,
+      providerMessageId: "wamid.X",
+      status: "sent",
+    });
+    assert.deepEqual(toSendResult({ ok: true }), {
+      ok: true,
+      providerMessageId: "",
+      status: "sent",
+    });
   });
 });
 
