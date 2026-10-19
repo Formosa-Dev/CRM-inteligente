@@ -4,8 +4,10 @@ import { eq, and, desc, isNull, or } from "drizzle-orm";
 import { normalizePhone } from "@/lib/phone-utils";
 import {
   resolveConversationIdentity,
+  isPhoneChannel,
   type ConversationIdentityRepository,
 } from "@/lib/messaging/conversation-identity";
+import { ensureLeadIdentity } from "@/lib/messaging/lead-identity";
 import { isSchemaNotReady } from "@/lib/messaging/errors";
 import { notifyDeliveryArrived } from "@/lib/whatsapp/delivery-notify";
 import type { DeliveryNotifyResult } from "@/lib/whatsapp/delivery-notify";
@@ -196,6 +198,21 @@ export async function findOrCreateConversation(
         resolved.record.channelAccountId
       );
     }
+  }
+
+  // Phone-less channels key leads on lead_identities(channel, externalId).
+  // Runs on every inbound (not just isNew) — it is one indexed lookup and
+  // stays correct if an older conversation pre-dates the identity table.
+  if (!isPhoneChannel(channel)) {
+    await ensureLeadIdentity({
+      channel,
+      externalUserId,
+      externalUserIdNormalized: resolved.normalizedExternalUserId,
+      customerName,
+      customerPhone,
+      channelAccountId: resolved.record.channelAccountId,
+      conversationId: resolved.record.id,
+    });
   }
 
   return {

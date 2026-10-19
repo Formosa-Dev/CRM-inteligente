@@ -437,6 +437,26 @@ export const leads = pgTable("leads", {
     .where(sql`external_user_id is not null`),
 }));
 
+// ─── Lead identities (one lead ↔ N channel identities) ─────────────────────
+// Social leads have no phone: the identity lives here keyed by
+// (channel, externalId). externalId stores the CANONICAL per-channel key —
+// phone channels keep normalized digits, social channels the provider id —
+// matching conversations.external_user_id_normalized so lookups line up.
+// Phone stays the primary key for WhatsApp leads; social leads get
+// leads.phone = NULL + one lead_identities row (§2.4 social identity model).
+export const leadIdentities = pgTable("lead_identities", {
+  id: serial("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().default("default"),
+  leadId: integer("lead_id").notNull().references(() => leads.id, { onDelete: "cascade" }),
+  channel: channelEnum("channel").notNull(),
+  externalId: text("external_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  channelExternalUq: uniqueIndex("lead_identities_channel_external_uq")
+    .on(table.channel, table.externalId),
+  leadIdx: index("lead_identities_lead_idx").on(table.leadId),
+}));
+
 export const attachments = pgTable("attachments", {
   id: serial("id").primaryKey(),
   leadId: integer("lead_id").references(() => leads.id),

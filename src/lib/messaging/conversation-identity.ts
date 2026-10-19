@@ -20,6 +20,15 @@ import type { ChannelKind } from "./types";
 const PHONE_CHANNELS = new Set<ChannelKind>(["whatsapp", "telegram", "sms"]);
 const PHONE_SHAPED = /^[+\d\s().-]+$/;
 
+/**
+ * Channels whose customer identity is a phone number — `leads.phone` remains
+ * their primary lead key. Social channels (instagram/facebook/reddit) key
+ * leads through `lead_identities` instead (see `lead-identity.ts`).
+ */
+export function isPhoneChannel(channel: ChannelKind): boolean {
+  return PHONE_CHANNELS.has(channel);
+}
+
 /** Canonical identity key: digits for phone-shaped channels, trimmed otherwise. */
 export function canonicalExternalUserId(
   channel: ChannelKind,

@@ -140,6 +140,15 @@ function uniqueKeys(table: string, row: Row): string[] {
   if (table === "chat_messages" && row.platformMessageId) {
     keys.push(`platform:${String(row.platformMessageId)}`);
   }
+  if (table === "lead_identities") {
+    // Mirrors lead_identities_channel_external_uq (migration 0020).
+    keys.push(
+      `leadid:${String(row.channel)}|${String(row.externalId)}`
+    );
+  }
+  if (table === "leads" && row.phone) {
+    keys.push(`leadphone:${String(row.phone)}`);
+  }
   if (table === "channel_events" && row.deliveryId) {
     // Mirrors channel_events_provider_delivery_uq (migration 0019):
     // (provider, coalesce(channel_account_id, -1), delivery_id).
