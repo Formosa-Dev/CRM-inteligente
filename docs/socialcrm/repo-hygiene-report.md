@@ -171,6 +171,9 @@ changed nothing under `drizzle/`.
 `git grep` for the known customer name (`hector`, case-insensitive) and
 Argentine phone patterns (`549` + 9–11 digits; generic 10–15 digit runs).
 
+Note: name occurrences elsewhere in this report are verbatim citations of
+deleted file names, kept for audit provenance — not gratuitous PII.
+
 ### 4.1 Likely real customer PII still in the tree
 
 | Path | Signal |
