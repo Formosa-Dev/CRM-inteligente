@@ -9,7 +9,11 @@
  *   credentials still resolve agent_config → env inside those functions
  *   until `channel_accounts` lands in slice B3)
  * - parseWebhook  → normalizes the payloads handled today by
- *   `src/app/api/whatsapp/webhook/route.ts` (inbound, echo, status)
+ *   `src/app/api/whatsapp/webhook/route.ts` (inbound, echo, status).
+ *   Dedup mirrors the route exactly: inbound `platformMessageId` prefers
+ *   `message.id` and echoes use `msg.id || event.id`; on echoes the
+ *   business is the sender (`sender.phone`) while the customer — the
+ *   conversation routing key — is exposed via `providerConversationId`.
  * - resolveMedia  → same metadata step as `downloadYCloudMedia` in
  *   `src/lib/media/downloader.ts` (GET /v2/whatsapp/media/{id})
  */
@@ -113,8 +117,13 @@ function classifySignatureFailure(
   return "signature_mismatch";
 }
 
-/** Mirrors the route's multi-key echo extraction (see webhook-pipeline.ts). */
-function extractEchoMessage(
+/**
+ * Mirrors the route's multi-key echo extraction (see webhook-pipeline.ts).
+ * Exported for the webhook route: echo handling needs msg-level fields the
+ * normalized contract can't carry (e.g. media `fileSize`), so the app-level
+ * consumer reads them through this one provider-owned extraction.
+ */
+export function extractYCloudEchoMessage(
   event: Record<string, unknown>
 ): Record<string, unknown> | undefined {
   for (const key of ECHO_MESSAGE_KEYS) {
@@ -232,7 +241,9 @@ function normalizeInbound(
     asString(message.id) ??
     syntheticDeliveryId(payload);
   event.providerAccountId = asString(message.wabaId) ?? "";
-  event.platformMessageId = asString(message.wamid) ?? asString(message.id);
+  // The route dedups inbound on `message.id` (wamid is the same value on
+  // real YCloud payloads; kept as fallback for id-less envelopes).
+  event.platformMessageId = asString(message.id) ?? asString(message.wamid);
   event.sender = {
     phone: asString(message.from),
     bsuid: asString(message.fromUserId),
@@ -261,7 +272,7 @@ function normalizeInbound(
 
 function normalizeEcho(payload: Record<string, unknown>): NormalizedInboundEvent {
   const event = baseEvent(payload, "message.echo", "outbound");
-  const message = extractEchoMessage(payload);
+  const message = extractYCloudEchoMessage(payload);
   if (!message) return event;
 
   event.deliveryId =
@@ -270,9 +281,14 @@ function normalizeEcho(payload: Record<string, unknown>): NormalizedInboundEvent
     asString(message.id) ??
     syntheticDeliveryId(payload);
   event.providerAccountId = asString(message.wabaId) ?? "";
-  event.platformMessageId = asString(message.wamid) ?? asString(message.id);
-  // On echoes the business is the sender; the customer lives in `to` (raw).
-  event.sender = { phone: asString(message.from) };
+  // Route echo dedup is `msg.id || event.id` — no wamid fallback in between.
+  event.platformMessageId = asString(message.id) ?? asString(payload.id);
+  // On echoes the business is the sender and the customer lives in `to`:
+  // `to` is the conversation routing key, `from` is the bot/operator phone
+  // (both with the same envelope fallbacks the route applies).
+  event.providerConversationId =
+    asString(message.to) ?? asString(payload.to);
+  event.sender = { phone: asString(message.from) ?? asString(payload.from) };
 
   const msgType = asString(message.type) ?? "text";
   event.type = normalizeType(msgType);

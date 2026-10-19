@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyYCloudSignature } from "@/lib/whatsapp/signature";
-import { messenger } from "@/lib/messaging";
+import {
+  messenger,
+  providerForChannel,
+  type NormalizedInboundEvent,
+} from "@/lib/messaging";
+import { extractYCloudEchoMessage } from "@/lib/messaging/providers/ycloud";
 import { sendWhatsAppBubbles } from "@/lib/buffer/response-sender";
 import {
   findOrCreateConversation,
@@ -54,86 +58,40 @@ export async function GET(request: NextRequest) {
   return new NextResponse(token, { status: 200 });
 }
 
-// ─── Echo event types de YCloud ─────────────────────────────────────────────
-const ECHO_EVENT_TYPES = [
-  "whatsapp.message.echo",
-  "whatsapp.smb.message.echoes",
-];
-
-// Keys candidatas donde puede venir el mensaje en el payload del echo
-const ECHO_MESSAGE_KEYS = [
-  "whatsappMessage",
-  "whatsappSmbMessageEcho",
-  "whatsappSmbMessageEchoes",
-  "smbMessage",
-  "message",
-  "whatsappMessageEcho",
-];
-
 // ─── Echo handler ───────────────────────────────────────────────────────────
+// Envelope→event translation lives in the adapter's parseWebhook; the fields
+// consumed here are the normalized equivalents of what this handler used to
+// parse inline:
+//   sender.phone            = msg.from || payload.from  (bot/staff)
+//   providerConversationId  = msg.to   || payload.to    (customer)
+//   platformMessageId       = msg.id   || payload.id    (echo dedup key)
+//   type / text             = msg.type / body-or-caption
 async function handleEcho(
-  payload: Record<string, unknown>
+  event: NormalizedInboundEvent
 ): Promise<NextResponse> {
   try {
-    // 1. Extraer el objeto mensaje del payload (búsqueda en múltiples keys)
-    const event = payload as Record<string, unknown>;
-    let msg: Record<string, unknown> | undefined;
+    const payload = event.raw as Record<string, unknown>;
 
-    for (const key of ECHO_MESSAGE_KEYS) {
-      const candidate = event[key];
-      if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
-        msg = candidate as Record<string, unknown>;
-        break;
-      }
-    }
-
-    // Fallback dinámico: buscar cualquier valor dict que tenga "to" o "from"
-    if (!msg) {
-      for (const [k, v] of Object.entries(event)) {
-        if (["type", "id", "createTime", "sendTime", "apiVersion"].includes(k)) continue;
-        if (v && typeof v === "object" && !Array.isArray(v)) {
-          const obj = v as Record<string, unknown>;
-          if (obj.to || obj.from) {
-            msg = obj;
-            break;
-          }
-        }
-      }
-    }
-
-    if (!msg) {
-      console.warn("[webhook:echo] Could not extract message from echo payload", {
-        type: event.type,
-        keys: Object.keys(event).filter(k => !["type", "id", "createTime", "sendTime", "apiVersion"].includes(k)),
-        hasTo: !!event.to,
-        hasFrom: !!event.from,
-      });
-      return NextResponse.json({ ok: true }, { status: 200 });
-    }
-
-    // 2. Extraer teléfonos
     // En un echo: from = quien envió (bot/staff), to = quien recibe (customer)
-    const customerPhone = (msg.to || event.to) as string | undefined;
-    const botPhone = (msg.from || event.from) as string | undefined;
+    const customerPhone = event.providerConversationId;
+    const botPhone = event.sender.phone;
 
     if (!customerPhone || !botPhone) {
       console.warn("[webhook:echo] Missing phone numbers in echo payload");
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
-    // 3. Extraer el contenido del mensaje
-    const msgType = (msg.type as string) || "text";
+    // Extraer el contenido del mensaje
+    const msgType = event.type ?? "text";
     let displayText = "[Mensaje desde WhatsApp Business]";
 
-    if (msgType === "text" && msg.text && typeof msg.text === "object") {
-      displayText = (msg.text as Record<string, unknown>).body as string || displayText;
+    if (msgType === "text") {
+      displayText = event.text ?? displayText;
     } else if (["image", "audio", "document", "video"].includes(msgType)) {
-      const mediaObj = msg[msgType] as Record<string, unknown> | undefined;
-      const caption = mediaObj?.caption as string | undefined;
-      displayText = caption || `[${msgType}]`;
+      displayText = event.text ?? `[${msgType}]`;
     }
 
-    const echoMsgId = (msg.id || event.id) as string | undefined;
+    const echoMsgId = event.platformMessageId;
 
     console.log(
       `[webhook:echo] Echo from ${botPhone} → ${customerPhone}: "${displayText.slice(0, 80)}"`
@@ -224,7 +182,11 @@ async function handleEcho(
     if (!isOwnEcho) {
       // ── AUDIO: download + transcribe (P2) ─────────────────────────────────
       if (msgType === "audio") {
-        const mediaObj = msg["audio"] as Record<string, unknown> | undefined;
+        // mediaRefs has no fileSize field — pull the raw media object through
+        // the adapter's own echo extraction for the fields it can't carry.
+        const mediaObj = extractYCloudEchoMessage(payload)?.["audio"] as
+          | Record<string, unknown>
+          | undefined;
         if (mediaObj?.id) {
           try {
             const [acConfig] = await db
@@ -455,11 +417,15 @@ async function deliverWebhookHandoff(input: {
 
 /**
  * POST — Incoming WhatsApp messages from YCloud
+ *
+ * Envelope verification + parsing are delegated to the provider adapter
+ * (signature → verifyWebhook, envelope → parseWebhook). Per-event app logic
+ * lives in `handleNormalizedEvent` below — the ordering of its gates is
+ * unchanged from when it ran inline in POST.
  */export async function POST(request: NextRequest) {
   const rawBody = await request.text();
 
   // 1. Verify webhook signature (header: ycloud-signature)
-  const signature = request.headers.get("ycloud-signature") || "";
   const { getIntegrationSecrets } = await import("@/lib/integrations");
   const secret = (await getIntegrationSecrets()).ycloudWebhookSecret;
 
@@ -467,13 +433,47 @@ async function deliverWebhookHandoff(input: {
     console.error("[webhook:wa] YCLOUD_WEBHOOK_SECRET not set — rejecting");
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
-  if (!verifyYCloudSignature(rawBody, signature, secret)) {
+
+  const provider = providerForChannel("whatsapp");
+  if (!provider) {
+    console.error("[webhook:wa] No messaging provider registered for channel 'whatsapp'");
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  }
+
+  const headers = Object.fromEntries(request.headers.entries());
+  if (!provider.verifyWebhook({ headers, rawBody, secret }).ok) {
     console.error("[webhook:wa] Signature verification FAILED — check YCLOUD_WEBHOOK_SECRET matches YCloud dashboard");
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
-  // Parse the payload
-  const payload = JSON.parse(rawBody);
+  const events = provider.parseWebhook({ headers, rawBody });
+  if (events.length === 0) {
+    // Preserve the pre-extraction contract: a signed but non-JSON body used
+    // to throw at the inline JSON.parse (unhandled → 500). The adapter
+    // returns [] for those bodies, so replay the throw here; valid JSON
+    // that simply isn't a YCloud envelope acks like before.
+    JSON.parse(rawBody);
+    return NextResponse.json({ ok: true }, { status: 200 });
+  }
+
+  let response: NextResponse = NextResponse.json({ ok: true }, { status: 200 });
+  for (const event of events) {
+    response = await handleNormalizedEvent(event);
+  }
+  return response;
+}
+
+/**
+ * Per-event pipeline. The adapter already translated the envelope into
+ * `NormalizedInboundEvent` (kind, dedup ids, sender, type, text, mediaRefs);
+ * `event.raw` stays available for fields the contract can't carry (location
+ * coordinates, per-type media extras like caption/fileSize). Everything
+ * below is app logic identical to the pre-extraction inline flow.
+ */
+async function handleNormalizedEvent(
+  event: NormalizedInboundEvent
+): Promise<NextResponse> {
+  const payload = event.raw as Record<string, unknown>;
 
   // 2a. Protocol-eligibility gate FIRST: empty Business echoes and
   //     delivery/status events are acknowledged with 200 and cause no
@@ -486,29 +486,35 @@ async function deliverWebhookHandoff(input: {
   // 2. Handle ECHO events (outgoing messages from WhatsApp Business App)
   //    Esto va ANTES del filtro de inbound messages porque los echoes
   //    tienen type diferente
-  if (ECHO_EVENT_TYPES.includes(payload.type)) {
-    return handleEcho(payload);
+  if (event.kind === "message.echo") {
+    return handleEcho(event);
   }
 
   // 3. Filter non-message events (status updates, etc.)
-  if (payload.type !== "whatsapp.inbound_message.received") {
+  if (event.kind !== "message.received") {
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 
-  const message = payload.whatsappInboundMessage;
+  const message = payload.whatsappInboundMessage as
+    | Record<string, unknown>
+    | undefined;
 
   // Accept: text, image, audio, document, video, location — drop everything else
   const SUPPORTED_TYPES = ["text", "image", "audio", "document", "video", "location"] as const;
   type SupportedType = (typeof SUPPORTED_TYPES)[number];
 
-  if (!message || !SUPPORTED_TYPES.includes(message.type as SupportedType)) {
+  if (
+    !message ||
+    !event.type ||
+    !SUPPORTED_TYPES.includes(event.type as SupportedType)
+  ) {
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 
-  const msgType = message.type as SupportedType;
-  const messageId = message.id as string;
-  const customerPhone = message.from as string;
-  const customerName = (message.customerProfile?.name as string) || null;
+  const msgType = event.type as SupportedType;
+  const messageId = event.platformMessageId as string;
+  const customerPhone = event.sender.phone as string;
+  const customerName = event.sender.name ?? null;
 
   // 3b. Durable inbound dedup BEFORE any conversation lookup or session
   //     work. A dedup failure fails closed: no routing and no output.
@@ -605,7 +611,7 @@ async function deliverWebhookHandoff(input: {
 
     // 7. Capture lead if first contact — a lead-capture failure must never
     //    kill the inbound pipeline (message persistence + agent reply).
-    const textForLead = msgType === "text" ? (message.text?.body as string) || "" : "";
+    const textForLead = msgType === "text" ? event.text ?? "" : "";
     if (shouldCaptureLead(actor)) {
       try {
         await captureLeadIfNew(customerPhone, customerName, textForLead);
@@ -704,7 +710,7 @@ async function deliverWebhookHandoff(input: {
 
     } else if (msgType === "text") {
       // ── TEXT ──────────────────────────────────────────────────────────────
-      agentText = (message.text?.body as string) || "";
+      agentText = event.text ?? "";
       policyText = agentText.trim().length > 0 ? agentText : null;
       const textInsert = await insertMessage(conversationId, "user", agentText, undefined, messageId);
 

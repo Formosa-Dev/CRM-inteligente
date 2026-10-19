@@ -559,6 +559,31 @@ test("webhook orders protocol filter before lookup and session before agent", ()
   assert.match(post, /fail closed/i);
 });
 
+test("webhook delegates signature verify + envelope parsing to the provider adapter", () => {
+  const route = readFileSync("src/app/api/whatsapp/webhook/route.ts", "utf8");
+  const postStart = route.indexOf("export async function POST");
+  const helperStart = route.indexOf("async function handleNormalizedEvent");
+  assert.ok(postStart !== -1 && helperStart > postStart, "POST must delegate to handleNormalizedEvent");
+  const post = route.slice(postStart, helperStart);
+
+  // Signature verification stays first and goes through the provider
+  // boundary — the route no longer calls the signature module directly.
+  const verify = post.indexOf("provider.verifyWebhook(");
+  const parse = post.indexOf("provider.parseWebhook(");
+  const dispatch = post.indexOf("handleNormalizedEvent(event)");
+  assert.ok(verify !== -1, "POST must verify the signature via the provider");
+  assert.ok(parse !== -1, "POST must parse the envelope via the provider");
+  assert.ok(dispatch !== -1, "POST must dispatch normalized events");
+  assert.ok(verify < parse, "signature verification must run before parsing");
+  assert.ok(parse < dispatch, "parsing must run before per-event handling");
+
+  // Envelope-shape reads belong to the adapter now: POST must not pick
+  // YCloud keys or event types out of the raw payload itself.
+  assert.doesNotMatch(post, /whatsappInboundMessage|whatsappMessage|whatsappSmbMessageEcho/);
+  assert.doesNotMatch(post, /payload\.type\b/);
+  assert.doesNotMatch(route, /verifyYCloudSignature/, "route must not bypass the provider's verifyWebhook");
+});
+
 function createFakeHandoffRepository() {
   const episodeKeys = new Set<string>();
   const inboundKeys = new Set<string>();

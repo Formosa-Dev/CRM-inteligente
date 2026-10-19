@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test, { describe } from "node:test";
-import { toSendResult, ycloudProvider as provider } from "./ycloud";
+import {
+  extractYCloudEchoMessage,
+  toSendResult,
+  ycloudProvider as provider,
+} from "./ycloud";
 import type { ChannelAccount } from "../types";
 
 const SECRET = "whsec_test_fixture_secret";
@@ -312,6 +316,292 @@ describe("ycloud parseWebhook — NormalizedInboundEvent fixtures", () => {
     const [b] = provider.parseWebhook({ headers: {}, rawBody: idLess });
     assert.match(a.deliveryId, /^ycloud:synth:[0-9a-f]{16}$/);
     assert.equal(a.deliveryId, b.deliveryId, "same payload must dedup to one key");
+  });
+});
+
+describe("ycloud parseWebhook — route-parity pins", () => {
+  // These pin the exact fields the webhook route consumed from the raw
+  // envelope before parsing moved into the adapter. If a normalization
+  // choice drifts from what the route used to read inline, one of these
+  // must fail.
+
+  test("inbound platformMessageId prefers message.id — the route's dedup key", () => {
+    const [e] = provider.parseWebhook({
+      headers: {},
+      rawBody: JSON.stringify({
+        type: "whatsapp.inbound_message.received",
+        id: "evt_par_1",
+        whatsappInboundMessage: {
+          id: "msg-id-preferred",
+          wamid: "wamid-differs",
+          from: "+15550001234",
+          type: "text",
+          text: { body: "hola" },
+        },
+      }),
+    });
+    assert.equal(e.platformMessageId, "msg-id-preferred");
+  });
+
+  test("inbound platformMessageId falls back to wamid when id is absent", () => {
+    const [e] = provider.parseWebhook({
+      headers: {},
+      rawBody: JSON.stringify({
+        type: "whatsapp.inbound_message.received",
+        id: "evt_par_2",
+        whatsappInboundMessage: {
+          wamid: "wamid-fallback-1",
+          from: "+15550001234",
+          type: "text",
+          text: { body: "hola" },
+        },
+      }),
+    });
+    assert.equal(e.platformMessageId, "wamid-fallback-1");
+  });
+
+  test("echo platformMessageId is msg.id then envelope id — never wamid", () => {
+    // Route deduped echoes with `msg.id || event.id`; wamid was never in the
+    // chain. Both fixtures discriminate against a wamid-first regression.
+    const [withMsgId] = provider.parseWebhook({
+      headers: {},
+      rawBody: JSON.stringify({
+        type: "whatsapp.message.echo",
+        id: "evt_echo_1",
+        whatsappMessage: {
+          id: "msg-echo-id",
+          wamid: "wamid-should-not-win",
+          from: "+15550009999",
+          to: "+15550001234",
+          type: "text",
+          text: { body: "hola" },
+        },
+      }),
+    });
+    assert.equal(withMsgId.platformMessageId, "msg-echo-id");
+
+    const [noMsgId] = provider.parseWebhook({
+      headers: {},
+      rawBody: JSON.stringify({
+        type: "whatsapp.message.echo",
+        id: "evt_echo_2",
+        whatsappMessage: {
+          wamid: "wamid-still-loses",
+          from: "+15550009999",
+          to: "+15550001234",
+          type: "text",
+          text: { body: "hola" },
+        },
+      }),
+    });
+    assert.equal(noMsgId.platformMessageId, "evt_echo_2");
+  });
+
+  test("echo maps customer → providerConversationId, bot → sender.phone (envelope fallbacks)", () => {
+    const [e] = provider.parseWebhook({ headers: {}, rawBody: ECHO_EVENT });
+    assert.equal(e.providerConversationId, "+15550001234");
+    assert.equal(e.sender.phone, "+15550009999");
+
+    // Route read `msg.to || event.to` / `msg.from || event.from` — the
+    // envelope-level to/from must back-fill when the message omits them.
+    const [fallback] = provider.parseWebhook({
+      headers: {},
+      rawBody: JSON.stringify({
+        type: "whatsapp.message.echo",
+        id: "evt_echo_3",
+        from: "+15550009999",
+        to: "+15550001234",
+        whatsappMessage: {
+          id: "msg-echo-3",
+          type: "text",
+          text: { body: "operador" },
+        },
+      }),
+    });
+    assert.equal(fallback.providerConversationId, "+15550001234");
+    assert.equal(fallback.sender.phone, "+15550009999");
+  });
+
+  test("inbound reply context maps to replyToMessageId (wamid first, then id)", () => {
+    const base = {
+      type: "whatsapp.inbound_message.received",
+      id: "evt_reply_1",
+      whatsappInboundMessage: {
+        id: "msg-1",
+        from: "+15550001234",
+        type: "text",
+        text: { body: "respuesta" },
+      },
+    };
+    const [wamidCtx] = provider.parseWebhook({
+      headers: {},
+      rawBody: JSON.stringify({
+        ...base,
+        whatsappInboundMessage: {
+          ...base.whatsappInboundMessage,
+          context: { wamid: "wamid-ctx", id: "id-ctx" },
+        },
+      }),
+    });
+    assert.equal(wamidCtx.replyToMessageId, "wamid-ctx");
+
+    const [idCtx] = provider.parseWebhook({
+      headers: {},
+      rawBody: JSON.stringify({
+        ...base,
+        whatsappInboundMessage: {
+          ...base.whatsappInboundMessage,
+          context: { id: "id-ctx" },
+        },
+      }),
+    });
+    assert.equal(idCtx.replyToMessageId, "id-ctx");
+  });
+
+  test("unsupported inbound types normalize to 'unknown' but stay message.received", () => {
+    for (const msgType of ["contact", "order", "system"]) {
+      const [e] = provider.parseWebhook({
+        headers: {},
+        rawBody: JSON.stringify({
+          type: "whatsapp.inbound_message.received",
+          id: `evt_un_${msgType}`,
+          whatsappInboundMessage: {
+            id: `msg-${msgType}`,
+            from: "+15550001234",
+            type: msgType,
+          },
+        }),
+      });
+      assert.equal(e.kind, "message.received", msgType);
+      assert.equal(e.type, "unknown", msgType);
+      // Route needs the raw envelope for the artifact gate and drops.
+      assert.equal(e.platformMessageId, `msg-${msgType}`);
+    }
+  });
+
+  test("sticker/reaction/interactive keep their type for downstream filtering", () => {
+    for (const msgType of ["sticker", "reaction", "interactive"]) {
+      const [e] = provider.parseWebhook({
+        headers: {},
+        rawBody: JSON.stringify({
+          type: "whatsapp.inbound_message.received",
+          id: `evt_t_${msgType}`,
+          whatsappInboundMessage: {
+            id: `msg-${msgType}`,
+            from: "+15550001234",
+            type: msgType,
+          },
+        }),
+      });
+      assert.equal(e.type, msgType);
+    }
+  });
+
+  test("location inbound keeps type 'location' with coords reachable via raw", () => {
+    const [e] = provider.parseWebhook({
+      headers: {},
+      rawBody: JSON.stringify({
+        type: "whatsapp.inbound_message.received",
+        id: "evt_loc_1",
+        whatsappInboundMessage: {
+          id: "msg-loc",
+          from: "+15550001234",
+          type: "location",
+          location: { latitude: -26.18, longitude: -58.17, name: "Plaza" },
+        },
+      }),
+    });
+    assert.equal(e.type, "location");
+    assert.equal(e.kind, "message.received");
+    const msg = (e.raw as { whatsappInboundMessage: Record<string, unknown> })
+      .whatsappInboundMessage;
+    assert.deepEqual(msg.location, {
+      latitude: -26.18,
+      longitude: -58.17,
+      name: "Plaza",
+    });
+  });
+
+  test("timestamp falls back message.sendTime → envelope sendTime → createTime", () => {
+    const mk = (msg: Record<string, unknown>, env: Record<string, unknown>) =>
+      provider.parseWebhook({
+        headers: {},
+        rawBody: JSON.stringify({
+          type: "whatsapp.inbound_message.received",
+          id: "evt_ts",
+          ...env,
+          whatsappInboundMessage: {
+            id: "m1",
+            from: "+15550001234",
+            type: "text",
+            text: { body: "x" },
+            ...msg,
+          },
+        }),
+      })[0];
+
+    assert.equal(
+      mk(
+        { sendTime: "2026-01-01T00:00:03.000Z" },
+        { sendTime: "2026-01-01T00:00:02.000Z", createTime: "2026-01-01T00:00:01.000Z" }
+      ).timestamp,
+      "2026-01-01T00:00:03.000Z"
+    );
+    assert.equal(
+      mk({}, { sendTime: "2026-01-01T00:00:02.000Z", createTime: "2026-01-01T00:00:01.000Z" })
+        .timestamp,
+      "2026-01-01T00:00:02.000Z"
+    );
+    assert.equal(
+      mk({}, { createTime: "2026-01-01T00:00:01.000Z" }).timestamp,
+      "2026-01-01T00:00:01.000Z"
+    );
+  });
+
+  test("echo without extractable message still yields a message.echo event", () => {
+    // The route's artifact gate acks these before echo handling; the event
+    // must carry kind so the gate path stays reachable.
+    const [e] = provider.parseWebhook({
+      headers: {},
+      rawBody: JSON.stringify({
+        type: "whatsapp.message.echo",
+        id: "evt_empty_echo",
+      }),
+    });
+    assert.equal(e.kind, "message.echo");
+    assert.equal(e.deliveryId, "evt_empty_echo");
+    assert.equal(e.platformMessageId, undefined);
+    assert.equal(e.sender.phone, undefined);
+    assert.equal(e.providerConversationId, undefined);
+  });
+});
+
+describe("extractYCloudEchoMessage — route-owned echo field access", () => {
+  test("finds the message via candidate keys", () => {
+    for (const key of [
+      "whatsappMessage",
+      "whatsappSmbMessageEcho",
+      "whatsappSmbMessageEchoes",
+      "smbMessage",
+      "message",
+      "whatsappMessageEcho",
+    ]) {
+      const msg = { from: "+1", to: "+2", type: "text" };
+      assert.equal(
+        extractYCloudEchoMessage({ [key]: msg }),
+        msg,
+        `key ${key}`
+      );
+    }
+  });
+
+  test("dynamic fallback picks any dict carrying to/from", () => {
+    const msg = { from: "+1", type: "audio", audio: { id: "a1" } };
+    assert.equal(extractYCloudEchoMessage({ customKey: msg }), msg);
+    assert.equal(
+      extractYCloudEchoMessage({ type: "whatsapp.message.echo", id: "e1" }),
+      undefined
+    );
   });
 });
 
