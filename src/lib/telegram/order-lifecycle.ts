@@ -9,7 +9,7 @@
 
 import { db } from "@/db";
 import { orders } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { getArgentinaHour } from "@/lib/argentina-time";
 import { isValidPhone, normalizePhone } from "@/lib/phone-utils";
 import { getStatusNotificationMessage } from "@/lib/whatsapp/status-utils";
@@ -28,6 +28,8 @@ export interface StatusTransitionPlan {
   scheduleFollowUp: boolean;
   /** hay mensaje de estado para notificar al cliente. */
   notify: boolean;
+  /** cancelled desde un estado no-terminal → reponer el stock descontado. */
+  restoreStock: boolean;
 }
 
 /**
@@ -36,6 +38,10 @@ export interface StatusTransitionPlan {
  * cliente (getStatusNotificationMessage devuelve null para el resto) y el
  * follow-up se agenda solo en la primera transición a delivered — re-marcar
  * delivered no debe re-encolar un aviso que el cron ya envió.
+ *
+ * El stock se repone SOLO al entrar a cancelled desde un estado no terminal:
+ * re-cancelar no duplica la reposición y cancelar algo ya entregado no
+ * devuelve items que ya salieron físicamente.
  */
 export function planOrderStatusTransition(
   currentStatus: string | null,
@@ -46,6 +52,10 @@ export function planOrderStatusTransition(
     markDeliveredAt: delivered,
     scheduleFollowUp: delivered && currentStatus !== "delivered",
     notify: newStatus === "ready" || delivered,
+    restoreStock:
+      newStatus === "cancelled" &&
+      currentStatus !== "cancelled" &&
+      currentStatus !== "delivered",
   };
 }
 
@@ -55,6 +65,38 @@ export interface ApplyTransitionResult {
   notified?: boolean;
   notifyError?: string;
   customerName?: string | null;
+  /** el pedido ya estaba en el estado pedido (nada que hacer). */
+  alreadyInStatus?: boolean;
+  /** se repuso stock por la cancelación. */
+  stockRestored?: boolean;
+}
+
+/**
+ * Espejo de decrementStockBestEffort (order-utils): createOrder descuenta
+ * stock al crear; al cancelar hay que devolverlo. Best-effort — una falla de
+ * stock no debe romper la cancelación del pedido.
+ */
+async function restoreStockBestEffort(items: unknown): Promise<void> {
+  try {
+    for (const item of Array.isArray(items) ? items : []) {
+      const { productId, quantity } = item as {
+        productId?: number;
+        quantity?: number;
+      };
+      if (
+        !productId ||
+        typeof quantity !== "number" ||
+        !Number.isSafeInteger(quantity) ||
+        quantity <= 0
+      )
+        continue;
+      await db.execute(
+        sql`UPDATE products SET stock = stock + ${quantity} WHERE id = ${productId} AND stock IS NOT NULL`
+      );
+    }
+  } catch (err) {
+    console.warn("[restoreStock] Failed (non-fatal):", err);
+  }
 }
 
 /**
@@ -182,6 +224,7 @@ export async function applyOrderStatusTransition(
       customerName: orders.customerName,
       orderType: orders.orderType,
       address: orders.address,
+      items: orders.items,
     })
     .from(orders)
     .where(eq(orders.id, orderId))
@@ -196,6 +239,26 @@ export async function applyOrderStatusTransition(
     ...opts.extraFields,
   };
   if (plan.markDeliveredAt) fields.deliveredAt = new Date();
+
+  if (newStatus === "cancelled") {
+    // Idempotente: la cláusula `status != 'cancelled'` hace que una segunda
+    // cancelación (o dos concurrentes) devuelva 0 filas — solo la transición
+    // real repone stock, nunca dos veces.
+    const rows = await db
+      .update(orders)
+      .set(fields)
+      .where(and(eq(orders.id, orderId), ne(orders.status, "cancelled")))
+      .returning({ id: orders.id });
+    if (rows.length === 0) {
+      return { ok: true, alreadyInStatus: true, customerName: order.customerName };
+    }
+    if (plan.restoreStock) await restoreStockBestEffort(order.items);
+    return {
+      ok: true,
+      stockRestored: plan.restoreStock,
+      customerName: order.customerName,
+    };
+  }
 
   await db.update(orders).set(fields).where(eq(orders.id, orderId));
 

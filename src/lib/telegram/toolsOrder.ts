@@ -369,18 +369,21 @@ export const cancelOrder = tool({
       };
     }
 
-    await db
-      .update(orders)
-      .set({
-        status: "cancelled",
+    // La transición repone el stock descontado al crear el pedido
+    // (order-lifecycle.ts), de forma idempotente.
+    const result = await applyOrderStatusTransition(orderId, "cancelled", {
+      extraFields: {
         notes: reason ? `Cancelado: ${reason}` : "Cancelado por el cliente",
-        updatedAt: new Date(),
-      })
-      .where(eq(orders.id, orderId));
+      },
+    });
+    if (!result.ok) return { success: false, message: result.error };
+    if (result.alreadyInStatus) {
+      return { success: true, message: `Pedido #${orderId} ya estaba cancelado` };
+    }
 
     return {
       success: true,
-      message: `Pedido #${orderId} cancelado`,
+      message: `Pedido #${orderId} cancelado${result.stockRestored ? " — stock repuesto" : ""}`,
     };
   },
 });
