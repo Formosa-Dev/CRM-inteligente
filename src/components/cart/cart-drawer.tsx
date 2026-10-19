@@ -179,9 +179,10 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
                         variant="ghost"
                         size="icon-sm"
                         className="size-11 shrink-0 sm:size-7"
+                        aria-label={`Quitar una unidad de ${item.product.name}`}
                         onClick={() => updateQuantity(key, item.quantity - 1)}
                       >
-                        <Minus className="size-3" aria-label="Quitar una unidad" />
+                        <Minus className="size-3" aria-hidden="true" />
                       </Button>
                       <span className="w-6 text-center text-sm tabular-nums">
                         {item.quantity}
@@ -190,10 +191,11 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
                         variant="ghost"
                         size="icon-sm"
                         className="size-11 shrink-0 sm:size-7"
+                        aria-label={`Agregar una unidad de ${item.product.name}`}
                         disabled={item.quantity >= maxQuantity}
                         onClick={() => updateQuantity(key, item.quantity + 1)}
                       >
-                        <Plus className="size-3" aria-label="Agregar una unidad" />
+                        <Plus className="size-3" aria-hidden="true" />
                       </Button>
                     </div>
                   ) : null}
@@ -211,7 +213,7 @@ export function CartDrawer({ open, onClose }: CartDrawerProps) {
                     aria-label={`Eliminar ${item.product.name}`}
                     className="size-11 shrink-0 opacity-70 hover:opacity-100 transition-opacity sm:size-7"
                   >
-                    <Trash2 className="size-3 text-destructive" />
+                    <Trash2 className="size-3 text-destructive" aria-hidden="true" />
                   </Button>
                 </div>
                 )
