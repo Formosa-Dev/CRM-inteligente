@@ -1581,7 +1581,7 @@ test("text reveal supports emLines", () => {
 
 test("storefront display headings mix roman with real italic keywords", () => {
   const home = readFileSync("src/app/(storefront)/page.tsx", "utf8");
-  assert.match(home, /<em className="marker-gold">hamburguesa<\/em>/);
+  assert.match(home, /<em className="marker-gold">producto<\/em>/);
   assert.match(home, /<em>nuestra<\/em>/);
   assert.match(home, /<em>Digital<\/em>/);
   const delivery = readFileSync("src/components/home/delivery-cta.tsx", "utf8");

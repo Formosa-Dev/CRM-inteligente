@@ -80,7 +80,7 @@ export default function HomePage() {
                   Sobre Nosotros
                 </span>
                 <h2 className="font-heading text-3xl font-black leading-tight text-foreground sm:text-4xl">
-                  Más que una <em className="marker-gold">hamburguesa</em>
+                  Más que una <em className="marker-gold">producto</em>
                 </h2>
                 <p className="leading-relaxed text-foreground/65">
                   {business?.description ||
