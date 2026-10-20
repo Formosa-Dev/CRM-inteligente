@@ -168,9 +168,10 @@ export async function testMetaConnection(): Promise<MetaConfigState> {
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
+      const ref = reportInternalError("meta.testConnection", body?.error ?? res.statusText);
       return {
         success: false,
-        message: `Error de conexión: ${body?.error?.message ?? res.statusText}`,
+        message: `Error de conexión con Meta (ref: ${ref})`,
       };
     }
 
