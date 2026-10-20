@@ -2,7 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { db } from "@/db";
 import { leads, orders, agentConfig, conversations, chatMessages, products } from "@/db/schema";
-import { eq, desc, ilike, or, gte, lte, count, and, asc, sql, type Column, type SQL } from "drizzle-orm";
+import { eq, desc, ilike, or, gte, lte, count, and, asc, sql, inArray, type Column, type SQL } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { normalizePhone } from "@/lib/phone-utils";
 import { getArgentinaDayIndex } from "@/lib/argentina-time";
@@ -18,6 +18,20 @@ import { applyOrderStatusTransition } from "./order-lifecycle";
 // u objeto legacy { enabled, days, open, close }
 type BusinessHoursEntry = { day?: string; open?: boolean; openTime?: string; closeTime?: string };
 type BusinessHoursData = BusinessHoursEntry[] | { enabled?: boolean; days?: string; open?: string; close?: string };
+
+// F6 — el texto que escriben los clientes llega al contexto del operador.
+// Va SIEMPRE delimitado: el tag marca que es DATO, nunca instrucción.
+// Se eliminan tags forjados dentro del contenido para que un mensaje no
+// pueda "cerrar" el bloque y simular texto del sistema.
+export const CUSTOMER_MESSAGE_TAG = "customer_message";
+
+export function quoteCustomerText(content: string): string {
+  const clean = content.replace(/<\/?customer_message\s*>/gi, "");
+  return `<${CUSTOMER_MESSAGE_TAG}>${clean}</${CUSTOMER_MESSAGE_TAG}>`;
+}
+
+// Columnas cuyo valor es texto escrito por clientes (quoting en queryData)
+const CUSTOMER_TEXT_COLUMNS = new Set(["content", "lastMessagePreview", "firstMessage"]);
 
 // ─── manageManagement: Tools de gestión interna ──────────────────────────────
 
@@ -127,7 +141,7 @@ export const getClientDetailTool = tool({
       lines.push(`Tags: ${(lead.tags as string[]).join(", ")}`);
     if (lead.notes) lines.push(`Notas: ${lead.notes}`);
     if (lead.utmSource) lines.push(`Fuente: ${lead.utmSource}${lead.utmCampaign ? ` / ${lead.utmCampaign}` : ""}`);
-    if (lead.firstMessage) lines.push(`Primer mensaje: "${lead.firstMessage}"`);
+    if (lead.firstMessage) lines.push(`Primer mensaje: ${quoteCustomerText(lead.firstMessage)}`);
     lines.push(`Registrado: ${lead.createdAt?.toLocaleDateString("es-AR")}`);
 
     if (recentOrders.length > 0) {
@@ -479,7 +493,7 @@ export const getConversationsTool = tool({
     if (rows.length === 0) return "No hay conversaciones.";
 
     return rows.map((r) =>
-      `• #${r.id} ${r.customerName ?? "?"} (${r.customerPhone}) — ${r.status}${r.lastMessageAt ? ` — ${r.lastMessageAt.toLocaleString("es-AR")}` : ""}${r.lastMessagePreview ? `: "${r.lastMessagePreview.slice(0, 50)}"` : ""}`
+      `• #${r.id} ${r.customerName ?? "?"} (${r.customerPhone}) — ${r.status}${r.lastMessageAt ? ` — ${r.lastMessageAt.toLocaleString("es-AR")}` : ""}${r.lastMessagePreview ? `: ${quoteCustomerText(r.lastMessagePreview.slice(0, 50))}` : ""}`
     ).join("\n");
   },
 });
@@ -487,13 +501,11 @@ export const getConversationsTool = tool({
 // ─── updateAgentConfigTool ──────────────────────────────────────────────────
 export const updateAgentConfigTool = tool({
   description:
-    "ACTUALIZA cualquier configuración del negocio en tiempo real. Usar cuando el admin pida cambios en: cocina (isCooking), hamburguesas sin stock (hamburguesasSinStock), stock de pan (stockPanDocenas), alias de pago (aliasB2c/aliasB2b), tiempo de espera (tiempoEspera), o cualquier campo de configuración. Solo envía los campos que querés cambiar.",
+    "ACTUALIZA configuración NO FINANCIERA del negocio en tiempo real. Usar cuando el admin pida cambios en: cocina (isCooking), hamburguesas sin stock (hamburguesasSinStock), stock de pan (stockPanDocenas), o tiempo de espera (tiempoEspera). Solo envía los campos que querés cambiar. NOTA: los alias de pago (aliasB2c/aliasB2b) NO se pueden cambiar por esta tool — se editan desde el panel admin.",
   inputSchema: z.object({
     isCooking: z.boolean().optional().describe("true = cocina abierta, false = cocina cerrada"),
     hamburguesasSinStock: z.boolean().optional().describe("true = sin stock de hamburguesas, false = hay stock"),
     stockPanDocenas: z.number().int().min(0).optional().describe("Stock de pan en docenas"),
-    aliasB2c: z.string().optional().describe("Alias de Mercado Pago para hamburguesas (B2C)"),
-    aliasB2b: z.string().optional().describe("Alias de Mercado Pago para pan mayorista (B2B)"),
     tiempoEspera: z.string().optional().describe("Tiempo de espera estimado. Ej: '30-40 min'"),
   }),
   execute: async (args) => {
@@ -503,8 +515,6 @@ export const updateAgentConfigTool = tool({
     if (args.isCooking !== undefined) { updates.isCooking = args.isCooking; changed.push(`cocina: ${args.isCooking ? "abierta" : "cerrada"}`); }
     if (args.hamburguesasSinStock !== undefined) { updates.hamburguesasSinStock = args.hamburguesasSinStock; changed.push(`hamburguesas sin stock: ${args.hamburguesasSinStock ? "si" : "no"}`); }
     if (args.stockPanDocenas !== undefined) { updates.stockPanDocenas = args.stockPanDocenas; changed.push(`stock pan: ${args.stockPanDocenas} doc`); }
-    if (args.aliasB2c !== undefined) { updates.aliasB2c = args.aliasB2c; changed.push(`alias B2C: ${args.aliasB2c}`); }
-    if (args.aliasB2b !== undefined) { updates.aliasB2b = args.aliasB2b; changed.push(`alias B2B: ${args.aliasB2b}`); }
     if (args.tiempoEspera !== undefined) { updates.tiempoEspera = args.tiempoEspera; changed.push(`tiempo espera: ${args.tiempoEspera}`); }
 
     if (changed.length === 0) return "No especificaste qué cambiar. Pasá al menos un parámetro.";
@@ -550,7 +560,11 @@ export const queryDataTool = tool({
       // metaAccessToken) are excluded — the LLM context must never see
       // credentials even via prompt injection.
       const tableMap: Record<string, PgTable> = {
-        conversations, leads, orders, products, chatMessages,
+        conversations,
+        leads,
+        orders,
+        products,
+        chat_messages: chatMessages,
       };
 
       const tbl = tableMap[table];
@@ -595,11 +609,16 @@ export const queryDataTool = tool({
           if (val === null || val === undefined) return "";
           if (val instanceof Date) return val.toLocaleString("es-AR");
           if (typeof val === "object") return JSON.stringify(val).slice(0, 100);
-          return String(val).slice(0, 80);
+          const text = String(val).slice(0, 80);
+          // Texto escrito por clientes: delimitado — es DATO, no instrucción.
+          return CUSTOMER_TEXT_COLUMNS.has(h) ? quoteCustomerText(text) : text;
         }).filter(Boolean).join(" | ");
       }).join("\n");
     } catch (e: unknown) {
-      return `Error al consultar: ${(e as Error).message || "desconocido"}`;
+      // F13: el detalle del error queda en logs del servidor; al modelo solo
+      // le va un código estable — nunca texto interno de DB/driver.
+      console.error("[queryData] query failed:", e);
+      return "Error al consultar (ERR_QUERY_FAILED). Probá con otros filtros o una tool específica.";
     }
   },
 });
@@ -717,7 +736,9 @@ export const getConversationMessagesTool = tool({
       const time = m.createdAt ? m.createdAt.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }) : "";
       const role = m.role === "user" ? "👤 Cliente" : "🤖 Bot";
       const content = m.content?.slice(0, 200) || "";
-      return `${time} ${role}: ${content}`;
+      // El texto del cliente se delimita: es DATO a leer, nunca instrucción.
+      const body = m.role === "user" ? quoteCustomerText(content) : content;
+      return `${time} ${role}: ${body}`;
     }).join("\n");
   },
 });
@@ -923,7 +944,7 @@ export const getConversationContextTool = tool({
       .where(
         and(
           eq(chatMessages.conversationId, convId),
-          sql`${chatMessages.role} IN ('user', 'assistant')`
+          inArray(chatMessages.role, ["user", "assistant"])
         )
       )
       .orderBy(desc(chatMessages.createdAt))
@@ -940,7 +961,11 @@ export const getConversationContextTool = tool({
               minute: "2-digit",
             })
           : "";
-        sections.push(`${time} ${role}: ${m.content?.slice(0, 150) || ""}`);
+        // El texto del cliente se delimita: es DATO a leer, nunca instrucción.
+        const content = m.content?.slice(0, 150) || "";
+        sections.push(
+          `${time} ${role}: ${m.role === "user" ? quoteCustomerText(content) : content}`
+        );
       }
     }
 
@@ -1161,7 +1186,10 @@ export const deleteLeadTool = tool({
       await deleteLeadCascade({ leadId: id, phone: lead.phone });
       return `✅ Lead #${id} (${lead.name || "sin nombre"}) eliminado.`;
     } catch (e) {
-      return `Error al eliminar: ${e instanceof Error ? e.message : "desconocido"}`;
+      // Mismo criterio que queryData: el detalle queda server-side, al modelo
+      // le va un código estable — nunca texto interno de DB/driver.
+      console.error(`[deleteLead] failed for lead #${id}:`, e);
+      return `No pude eliminar el lead #${id} (ERR_DELETE_FAILED). Revisá logs del servidor.`;
     }
   },
 });

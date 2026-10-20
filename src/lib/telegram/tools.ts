@@ -11,6 +11,11 @@ import { whatsAppTools } from "./toolsWhatsApp";
 import { memoryTools } from "./toolsMemory";
 import { cashTools } from "./toolsCash";
 import { salesCoachTools } from "./toolsSalesCoach";
+import {
+  confirmActionTool,
+  withAuditLog,
+  withOperatorConfirmation,
+} from "./tool-confirmations";
 
 // ─── Tools Maestras (Delegantes) ───────────────────────────────────────
 // Cada Tool Maestra es un grupo de sub-tools relacionadas
@@ -64,8 +69,21 @@ export const analytics = {
 };
 
 // ─── Export Completo: Todas las tools como un ToolSet ────────────────────
+//
+// F6 — postura de seguridad del toolset del operador:
+// - Tools de alto impacto/irreversibles NO ejecutan directo: pasan por
+//   withOperatorConfirmation → acción pendiente + token que solo
+//   confirmAction efectiviza (estado server-side, no lenguaje natural).
+// - El resto de las mutaciones quedan auditadas vía withAuditLog
+//   (log estructurado sin PII — solo ids).
+// - Reads (get*/search*/query*/calculate*/recall*/analyze*/propose*)
+//   no se tocan.
 
 export const internalAgentTools = {
+  // confirmación de acciones pendientes (único camino para ejecutar
+  // las tools gated de abajo)
+  confirmAction: confirmActionTool,
+
   // queryOrder (~6 tools)
   getOrderById: queryOrderTools.getOrderById,
   getOrderStatus: queryOrderTools.getOrderStatus,
@@ -76,11 +94,11 @@ export const internalAgentTools = {
 
   // manageClient (~6 tools)
   getClientByPhone: manageClientTools.getClientByPhone,
-  createClient: manageClientTools.createClient,
-  updateClient: manageClientTools.updateClient,
+  createClient: withAuditLog("createClient", manageClientTools.createClient),
+  updateClient: withAuditLog("updateClient", manageClientTools.updateClient),
   getClientHistory: manageClientTools.getClientHistory,
   suggestProducts: manageClientTools.suggestProducts,
-  setClientAlias: manageClientTools.setClientAlias,
+  setClientAlias: withAuditLog("setClientAlias", manageClientTools.setClientAlias),
 
   // manageProduct (~8 tools)
   getAllProducts: manageProductTools.getAllProducts,
@@ -88,43 +106,46 @@ export const internalAgentTools = {
   getProductById: manageProductTools.getProductById,
   searchProducts: manageProductTools.searchProducts,
   getProductAvailability: manageProductTools.getProductAvailability,
-  createProduct: manageProductTools.createProduct,
-  updateProduct: manageProductTools.updateProduct,
-  deleteProduct: manageProductTools.deleteProduct,
+  createProduct: withAuditLog("createProduct", manageProductTools.createProduct),
+  updateProduct: withAuditLog("updateProduct", manageProductTools.updateProduct),
+  deleteProduct: withAuditLog("deleteProduct", manageProductTools.deleteProduct),
 
   // manageOrder (~10 tools)
-  createOrder: manageOrderTools.createOrder,
-  addItemToOrder: manageOrderTools.addItemToOrder,
-  removeItemFromOrder: manageOrderTools.removeItemFromOrder,
-  updateOrderStatus: manageOrderTools.updateOrderStatus,
-  updateOrder: manageOrderTools.updateOrder,
-  cancelOrder: manageOrderTools.cancelOrder,
+  createOrder: withAuditLog("createOrder", manageOrderTools.createOrder),
+  addItemToOrder: withAuditLog("addItemToOrder", manageOrderTools.addItemToOrder),
+  removeItemFromOrder: withAuditLog("removeItemFromOrder", manageOrderTools.removeItemFromOrder),
+  updateOrderStatus: withAuditLog("updateOrderStatus", manageOrderTools.updateOrderStatus),
+  updateOrder: withAuditLog("updateOrder", manageOrderTools.updateOrder),
+  cancelOrder: withOperatorConfirmation("cancelOrder", manageOrderTools.cancelOrder),
   calculateTotal: manageOrderTools.calculateTotal,
-  confirmOrder: manageOrderTools.confirmOrder,
-  markAsPaid: manageOrderTools.markAsPaid,
-  markPaymentMethod: manageOrderTools.markPaymentMethod,
-  createDeliveredOrder: manageOrderTools.createDeliveredOrder,
+  confirmOrder: withAuditLog("confirmOrder", manageOrderTools.confirmOrder),
+  markAsPaid: withAuditLog("markAsPaid", manageOrderTools.markAsPaid),
+  markPaymentMethod: withAuditLog("markPaymentMethod", manageOrderTools.markPaymentMethod),
+  createDeliveredOrder: withAuditLog("createDeliveredOrder", manageOrderTools.createDeliveredOrder),
 
   // manageManagement (14 tools)
   getClients: managementTools.getClients,
   getClientDetail: managementTools.getClientDetail,
   searchClient: managementTools.searchClient,
-  deleteLead: managementTools.deleteLead,
-  updateOrderStatusNew: managementTools.updateOrderStatusNew,
+  deleteLead: withOperatorConfirmation("deleteLead", managementTools.deleteLead),
+  updateOrderStatusNew: withAuditLog("updateOrderStatusNew", managementTools.updateOrderStatusNew),
   getAnalytics: managementTools.getAnalytics,
   getBusinessHours: managementTools.getBusinessHours,
-  updateBusinessHours: managementTools.updateBusinessHours,
+  updateBusinessHours: withAuditLog("updateBusinessHours", managementTools.updateBusinessHours),
   getConversations: managementTools.getConversations,
-  updateAgentConfig: managementTools.updateAgentConfig,
+  updateAgentConfig: withAuditLog("updateAgentConfig", managementTools.updateAgentConfig),
   queryData: managementTools.queryData,
   getBusinessSummary: managementTools.getBusinessSummary,
   getConversationMessages: managementTools.getConversationMessages,
   getActivePromotions: managementTools.getActivePromotions,
   getCustomerFullProfile: managementTools.getCustomerFullProfile,
   getConversationContext: managementTools.getConversationContext,
-  setHumanOverride: managementTools.setHumanOverride,
-  sendMessageAsOperator: managementTools.sendMessageAsOperator,
-  injectCustomerNote: managementTools.injectCustomerNote,
+  setHumanOverride: withAuditLog("setHumanOverride", managementTools.setHumanOverride),
+  sendMessageAsOperator: withOperatorConfirmation(
+    "sendMessageAsOperator",
+    managementTools.sendMessageAsOperator,
+  ),
+  injectCustomerNote: withAuditLog("injectCustomerNote", managementTools.injectCustomerNote),
 
   // analytics (4 tools)
   getSalesByDateRange: analyticsTools.getSalesByDateRange,
@@ -132,22 +153,39 @@ export const internalAgentTools = {
   getTopClients: analyticsTools.getTopClients,
   getAverageTicket: analyticsTools.getAverageTicket,
 
-  // whatsApp (2 tools)
-  sendWhatsAppMessage: whatsAppTools.sendWhatsAppMessage,
-  broadcastWhatsApp: whatsAppTools.broadcastWhatsApp,
+  // whatsApp (2 tools) — envío a clientes: gated; dryRun de broadcast pasa directo
+  sendWhatsAppMessage: withOperatorConfirmation(
+    "sendWhatsAppMessage",
+    whatsAppTools.sendWhatsAppMessage,
+  ),
+  broadcastWhatsApp: withOperatorConfirmation(
+    "broadcastWhatsApp",
+    whatsAppTools.broadcastWhatsApp,
+    { skip: (args) => args.dryRun === true },
+  ),
 
   // memory + reconcile (5 tools)
-  rememberThis: memoryTools.rememberThis,
-  forgetThis: memoryTools.forgetThis,
+  rememberThis: withAuditLog("rememberThis", memoryTools.rememberThis),
+  forgetThis: withAuditLog("forgetThis", memoryTools.forgetThis),
   recallMemories: memoryTools.recallMemories,
   getReconcileCandidates: memoryTools.getReconcileCandidates,
-  resolveReconcileCandidate: memoryTools.resolveReconcileCandidate,
+  resolveReconcileCandidate: withAuditLog(
+    "resolveReconcileCandidate",
+    memoryTools.resolveReconcileCandidate,
+  ),
 
-  // cash (5 tools)
+  // cash (5 tools) — mutaciones auditadas; el cierre queda gated (financiero)
   ...cashTools,
+  openCash: withAuditLog("openCash", cashTools.openCash),
+  registerCashMovement: withAuditLog("registerCashMovement", cashTools.registerCashMovement),
+  updateCashMovement: withAuditLog("updateCashMovement", cashTools.updateCashMovement),
+  deleteCashMovement: withAuditLog("deleteCashMovement", cashTools.deleteCashMovement),
+  closeCash: withOperatorConfirmation("closeCash", cashTools.closeCash),
+  correctCashSession: withAuditLog("correctCashSession", cashTools.correctCashSession),
 
   // sales coach: loop de aprendizaje operador → agente (3 tools)
   ...salesCoachTools,
+  applySalesGuidance: withAuditLog("applySalesGuidance", salesCoachTools.applySalesGuidance),
 };
 
 // whatsApp: Comunicación por WhatsApp
