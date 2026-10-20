@@ -239,6 +239,27 @@ precedence over env vars.
 - [ ] Upload an image in `/admin` → works (requires `CLOUDINARY_*` configured)
 - [ ] Cron jobs run green in Render (they 401 unless the `Authorization: Bearer` header matches `CRON_SECRET` — see below)
 
+## 9. Migrate inbound media to the persistent disk (one-time)
+
+If inbound media already lives under `public/uploads/` (pre-Round-2 layout),
+move it once into `MEDIA_UPLOADS_DIR` so it is served through the session-gated
+`/api/media/[...path]` route and can live on the persistent disk:
+
+```bash
+# From the app directory — dry-run first (default; prints what would move):
+node scripts/migrate-uploads.mjs --dry-run
+# Then apply the moves:
+node scripts/migrate-uploads.mjs --apply
+```
+
+- Source is `public/uploads/<conversationId>/<file>`; destination is
+  `MEDIA_UPLOADS_DIR` (default `data/uploads`), preserving the same relative
+  path. Existing destination files are never overwritten — they are skipped and
+  counted.
+- Run it with `MEDIA_UPLOADS_DIR` pointing at your Render persistent-disk mount
+  (e.g. `/var/data/uploads`). `public/` is NOT persistent on Render, so leaving
+  media there loses it on the next redeploy.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -263,13 +284,15 @@ stored secret undecryptable** — you would have to re-enter every credential in
 `/admin/agent`. There is no re-encryption runbook yet; treat the value as
 fixed for the life of the instance and store it somewhere safe.
 
-### ⚠️ Media on the local disk does not survive (G5)
+### ⚠️ Inbound media needs a Render persistent disk (G5)
 
-Inbound channel media saved under `public/uploads` lives on Render's
-**ephemeral disk** — it is lost on every redeploy/restart. Admin uploads go to
-Cloudinary and are durable; inbound-media durability is a known limitation
-until the durable-store work lands. Configure `CLOUDINARY_*` so at least all
-admin/outbound media is persistent.
+Inbound channel media is stored in `MEDIA_UPLOADS_DIR` (default `data/uploads`,
+private and served only through the session-gated `/api/media/[...path]`
+route). On Render the app's local disk is **ephemeral** — files there are lost
+on every redeploy/restart — so mount a Render **persistent disk** and point
+`MEDIA_UPLOADS_DIR` at it (e.g. `/var/data/uploads`). Admin/outbound uploads go
+to Cloudinary and are durable; inbound-media durability requires the persistent
+disk. See §9 for the one-time move of files still under `public/uploads`.
 
 ## Next step
 
