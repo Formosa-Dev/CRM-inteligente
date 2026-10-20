@@ -207,9 +207,10 @@ export async function updateOrderStatus(
         );
         if (!notified.ok) {
           revalidatePath("/admin/orders");
+          const ref = reportInternalError("orders.updateStatus.notify", notified.error);
           return {
             success: false,
-            message: `Estado actualizado, pero no se pudo notificar: ${notified.error}`,
+            message: `Estado actualizado, pero no se pudo notificar al cliente (ref: ${ref})`,
           };
         }
 
@@ -298,9 +299,10 @@ export async function notifyCustomer(
       }
     );
     if (!notified.ok) {
+      const ref = reportInternalError("orders.notifyCustomer.notify", notified.error);
       return {
         success: false,
-        message: `Error al enviar: ${notified.error}`,
+        message: `Error al enviar la notificación (ref: ${ref})`,
       };
     }
 
