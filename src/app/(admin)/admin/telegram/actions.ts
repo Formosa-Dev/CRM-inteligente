@@ -12,7 +12,7 @@ import {
 import { db } from "@/db";
 import { eq } from "drizzle-orm";
 import { agentConfig } from "@/db/schema";
-import { maskToken as maskTokenUtil } from "@/lib/encryption";
+import { encrypt, maskToken as maskTokenUtil } from "@/lib/encryption";
 
 export type TelegramStatus = {
   configured: boolean;
@@ -69,7 +69,7 @@ export async function getTelegramStatus(): Promise<TelegramStatus> {
     webhookToken = randomBytes(24).toString("hex");
     await db
       .update(agentConfig)
-      .set({ telegramWebhookToken: webhookToken, updatedAt: new Date() })
+      .set({ telegramWebhookToken: encrypt(webhookToken), updatedAt: new Date() })
       .where(eq(agentConfig.id, 1));
   }
 
@@ -127,7 +127,7 @@ export async function setTelegramWebhookAction(): Promise<TelegramActionState> {
     webhookToken = randomBytes(24).toString("hex");
     await db
       .update(agentConfig)
-      .set({ telegramWebhookToken: webhookToken, updatedAt: new Date() })
+      .set({ telegramWebhookToken: encrypt(webhookToken), updatedAt: new Date() })
       .where(eq(agentConfig.id, 1));
   }
   const webhookUrl = `${host}/api/telegram/webhook/${webhookToken}`;
