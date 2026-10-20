@@ -63,7 +63,7 @@ async function tragoNames(): Promise<Set<string>> {
   return new Set(rows.map((r) => r.name.trim().toLowerCase()));
 }
 
-// ─── analyticsTools: Métricas de negocio para Mrs Muzzarella ────────────────
+// ─── analyticsTools: Métricas de negocio ─────────────────────────────────────
 
 // getSalesByDateRange - Ventas totales en un rango de fechas
 export const getSalesByDateRange = tool({

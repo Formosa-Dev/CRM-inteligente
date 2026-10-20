@@ -9,7 +9,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",
-        // Premium gold gradient - like Citronela but gold for Mrs Muzzarella
+        // Premium gold gradient for the admin accent
         premium:
           "bg-gradient-to-r from-gold via-gold-bright to-gold-ember text-primary-foreground font-semibold shadow-lg shadow-primary/20 hover:brightness-110 hover:shadow-xl hover:shadow-primary/30 hover:scale-105 active:scale-100 transition-all duration-300",
         // Glass surface with gold border
