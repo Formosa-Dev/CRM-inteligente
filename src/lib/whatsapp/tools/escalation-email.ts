@@ -76,7 +76,7 @@ export async function sendEscalationEmail(data: EscalationData): Promise<{ ok: b
           });
           if (resp.ok) telegramDelivered = true;
         } catch (err) {
-          console.warn(`[escalation] Telegram to ${chatId} failed:`, err);
+          console.warn(`[escalation] Telegram send to an admin chat failed:`, err);
         }
       }
 
@@ -94,7 +94,7 @@ export async function sendEscalationEmail(data: EscalationData): Promise<{ ok: b
 
   // Log the escalation for the admin dashboard
   console.log(`[escalation] 🔔 ${subject}`);
-  console.log(`[escalation] Customer: ${data.customerName} (${data.customerPhone})`);
+  console.log(`[escalation] Customer: [redacted — identity lives on the conversation/lead record]`);
   console.log(`[escalation] Reason: ${data.reason}`);
   console.log(`[escalation] Category: ${data.category}`);
 

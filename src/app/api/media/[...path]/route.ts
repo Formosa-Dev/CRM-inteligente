@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { mediaUploadsDir } from "@/lib/media/downloader";
 import fs from "fs/promises";
 import path from "path";
-
-const UPLOADS_DIR = path.join(process.cwd(), "public", "uploads");
 
 const MIME_MAP: Record<string, string> = {
   ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
@@ -16,7 +15,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ) {
-  // public/uploads only holds INBOUND customer media (WhatsApp/Telegram voice
+  // The media dir only holds INBOUND customer media (WhatsApp/Telegram voice
   // notes, photos, docs saved by saveMediaLocally) — product images go to
   // Cloudinary. Nothing here is meant to be public: require a session.
   // auth() throwing (no request scope, misconfigured secret) fails closed.
@@ -35,11 +34,12 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Prevent directory traversal
+  // Prevent directory traversal — resolve fully, then require confinement.
+  const uploadsDir = path.resolve(mediaUploadsDir());
   const cleanSegments = segments.map((s) => s.replace(/\.\./g, ""));
-  const filePath = path.join(UPLOADS_DIR, ...cleanSegments);
+  const filePath = path.resolve(uploadsDir, ...cleanSegments);
 
-  if (!filePath.startsWith(UPLOADS_DIR)) {
+  if (filePath !== uploadsDir && !filePath.startsWith(uploadsDir + path.sep)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

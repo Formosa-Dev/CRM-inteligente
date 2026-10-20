@@ -132,7 +132,10 @@ export async function setTelegramWebhookAction(): Promise<TelegramActionState> {
   }
   const webhookUrl = `${host}/api/telegram/webhook/${webhookToken}`;
 
-  const result = await setTelegramWebhook(config.botToken, webhookUrl);
+  // secret_token: Telegram signs every update with
+  // X-Telegram-Bot-Api-Secret-Token carrying this value; the route verifies
+  // it before parsing (F10).
+  const result = await setTelegramWebhook(config.botToken, webhookUrl, webhookToken);
   if (!result.ok) {
     return {
       success: false,
@@ -197,63 +200,4 @@ export async function getTelegramWebhookInfoAction(): Promise<
     url: info.url ?? "",
     pendingUpdateCount: info.pendingUpdateCount ?? 0,
   };
-}
-
-/**
- * Save Telegram Bot config to DB (encrypted)
- */
-export async function saveTelegramConfigAction(
-  botToken: string,
-  chatId: string,
-  enabled: boolean,
-  webhookToken?: string
-): Promise<TelegramActionState> {
-  if (!(await requireAdmin())) {
-    return { success: false, message: "No autorizado" };
-  }
-
-  if (!botToken) {
-    return { success: false, message: "Bot Token es requerido" };
-  }
-
-  try {
-    const { encrypt } = await import("@/lib/encryption");
-
-    // Verify token works by getting bot info
-    const { getMe } = await import("@/lib/telegram/bot");
-    const me = await getMe(botToken);
-    if (!me.ok || !me.username) {
-      return { success: false, message: "Token inválido. No se pudo obtener info del bot." };
-    }
-
-    // Encrypt token before storing; keep existing webhook token unless a
-    // replacement was submitted.
-    const encryptedToken = encrypt(botToken);
-
-    const update: Record<string, unknown> = {
-      telegramBotToken: encryptedToken,
-      telegramChatId: chatId || null,
-      telegramEnabled: enabled,
-      updatedAt: new Date(),
-    };
-    if (webhookToken?.trim()) {
-      update.telegramWebhookToken = webhookToken.trim();
-    }
-
-    await db
-      .update(agentConfig)
-      .set(update)
-      .where(eq(agentConfig.id, 1));
-
-    return {
-      success: true,
-      message: `Bot @${me.username} configurado correctamente${enabled ? "" : " (deshabilitado)"}`,
-    };
-  } catch (error) {
-    console.error("[telegram] Save config error:", error);
-    return {
-      success: false,
-      message: `Error al guardar: ${error instanceof Error ? error.message : "Unknown error"}`,
-    };
-  }
 }

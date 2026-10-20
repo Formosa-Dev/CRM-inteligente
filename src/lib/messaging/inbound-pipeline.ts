@@ -200,7 +200,7 @@ async function handleEcho(
     const echoMsgId = event.platformMessageId;
 
     console.log(
-      `[webhook:echo] Echo from ${botPhone} → ${customerPhone}: "${displayText.slice(0, 80)}"`
+      `[webhook:echo] Echo ${echoMsgId ?? "(no platform id)"} type=${msgType}`
     );
 
     // 4. Dedup BEFORE any conversation lookup/mutation. An echo from account
@@ -429,12 +429,11 @@ async function handleDeliveryNotification(
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
-    console.log(`[delivery] Message from delivery (${deliveryPhone}): type=${msgType}`);
+    console.log(`[delivery] Message from delivery sender — type=${msgType}`);
 
     if (msgType === "text") {
       // Delivery confirms arrival → notify customer
-      const text = (message.text as Record<string, unknown> | undefined)?.body as string || "";
-      console.log(`[delivery] Delivery says: "${text.slice(0, 80)}"`);
+      console.log(`[delivery] Delivery text received — notifying customer`);
 
       const result = await notifyCustomerDeliveryArrived(deliveryPhone, {
         account: ctx.channelAccountId != null ? ctx.account : undefined,
@@ -648,12 +647,21 @@ export async function handleNormalizedEvent(
   const customerKey = accountScopedInboundKey(channelAccountId, customerPhone);
 
   // Per-phone rate limit — a spamming customer would otherwise burn OpenAI
-  // tokens through Whisper/vision/agent calls. 200 is returned regardless so
-  // YCloud does not retry-storm dropped messages.
-  const inboundRate = await checkRateLimit(`wa-inbound:${phoneKey}`);
+  // tokens through Whisper/vision/agent calls. The dedicated account-scoped
+  // "wa-inbound" bucket is isolated from public-API buckets, so abuse of
+  // /api/leads etc. can never starve inbound processing. On limit we return
+  // 429 (not a 200 ack) so the provider retries the delivery instead of us
+  // silently dropping the customer message.
+  const inboundRate = await checkRateLimit(`wa-inbound:${phoneKey}`, {
+    bucket:
+      channelAccountId != null
+        ? `wa-inbound:acct${channelAccountId}`
+        : "wa-inbound",
+    bucketLimit: 300,
+  });
   if (!inboundRate.success) {
-    console.warn(`[webhook:wa] Rate limited inbound from ${phone}`);
-    return NextResponse.json({ ok: true, rateLimited: true }, { status: 200 });
+    console.warn(`[webhook:wa] Rate limited inbound message ${messageId}`);
+    return NextResponse.json({ error: "rate-limited" }, { status: 429 });
   }
 
   try {
@@ -714,7 +722,7 @@ export async function handleNormalizedEvent(
     // Gate identities before creating a conversation or persisting a lead.
     const allowedIds = (config.allowedPhoneIds ?? []) as { name: string; phone: string }[];
     if (allowedIds.length > 0 && !phoneInList(customerPhone, allowedIds)) {
-      console.log(`[webhook:wa] BLOCKED — phone ${customerPhone} not in allowedPhoneIds`);
+      console.log(`[webhook:wa] BLOCKED — message ${messageId} from non-allowed sender`);
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
@@ -754,12 +762,12 @@ export async function handleNormalizedEvent(
     //     El buffer acumula mensajes por ~11s y los procesa todos juntos.
     const isSeller = actor === "seller";
     if (isSeller) {
-      console.log(`[webhook:wa] SELLER DETECTED — ${customerPhone}, will use seller buffer callback`);
+      console.log(`[webhook:wa] SELLER DETECTED — conv ${conversationId}, will use seller buffer callback`);
       // No hacemos return — el flujo sigue abajo y el mensaje se encola en el buffer
       // pero con un flag para que el callback use el sistema de Telegram
     }
 
-    console.log(`[webhook:wa] Message from ${customerPhone} (${customerName}) type=${msgType} id=${messageId}`);
+    console.log(`[webhook:wa] Message conv=${conversationId} type=${msgType} id=${messageId}`);
 
     // 4f. Auto-reply when outside 24h window
     const autoReplyEnabled = config.autoReply24h === true;
@@ -940,7 +948,7 @@ export async function handleNormalizedEvent(
           .where(eq(leads.phone, phone))
           .then((r) => {
             if (r.rowCount && r.rowCount > 0)
-              console.log(`[webhook:wa] Address saved to lead ${customerPhone}: ${addrToSave}`);
+              console.log(`[webhook:wa] Address saved to lead for conv ${conversationId}`);
           })
           .catch((err) => console.warn("[webhook:wa] Failed to save address:", err));
 
@@ -1287,11 +1295,11 @@ export async function handleNormalizedEvent(
     // Content-level dedup (Level 2) — catches exact resends within 5s
     const isDuplContent = await BufferManager.isContentDuplicate("whatsapp", customerKey, agentText);
     if (isDuplContent) {
-      console.log(`[buffer:enqueue] Content duplicate detected, skipping: ${agentText.slice(0, 50)}`);
+      console.log(`[buffer:enqueue] Content duplicate detected for message ${messageId}, skipping`);
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
-    console.log(`[webhook:wa] Enqueueing to buffer for whatsapp:${customerKey}`);
+    console.log(`[webhook:wa] Enqueueing to buffer — conv ${conversationId}`);
     await BufferManager.enqueue("whatsapp", customerKey, {
       content: agentText,
       messageId,
@@ -1307,12 +1315,12 @@ export async function handleNormalizedEvent(
     const botNumber = config.phoneNumber || process.env.WHATSAPP_PHONE_NUMBER || "";
     const systemPrompt = config.systemPrompt || "";
 
-    console.log(`[webhook:wa] Config for agent — apiKey:${apiKey ? "SET" : "EMPTY"} botNumber:${botNumber || "EMPTY"} prompt:${systemPrompt ? "SET" : "EMPTY"}`);
+    console.log(`[webhook:wa] Config for agent — apiKey:${apiKey ? "SET" : "EMPTY"} botNumber:${botNumber ? "SET" : "EMPTY"} prompt:${systemPrompt ? "SET" : "EMPTY"}`);
 
     // Fire-and-forget: webhook returns 200 immediately, processing happens in background
     scheduleBufferProcessing("whatsapp", customerKey, async (bufferedMessages) => {
       return runWithAgentConfigScope(configScope, async () => {
-      console.log(`[webhook:wa] Buffer callback fired — ${bufferedMessages.length} msgs for ${customerPhone}${isSeller ? " (SELLER)" : ""}`);
+      console.log(`[webhook:wa] Buffer callback fired — ${bufferedMessages.length} msgs for conv ${conversationId}${isSeller ? " (SELLER)" : ""}`);
 
       // S15 — honor the conversation's channel-account binding (echoes stamp
       // it): replies go out as that account. A bound-but-unresolvable account
@@ -1413,14 +1421,14 @@ export async function handleNormalizedEvent(
           providerConversationId: replyThreadId,
           onBubbleSent: persistSentBubble,
         });
-        console.log(`[seller-agent] Replied to seller ${customerPhone}: ${reply.slice(0, 80)}`);
+        console.log(`[seller-agent] Replied to seller — conv ${conversationId}`);
         return;
       }
 
       // CLIENTE: verificar human override
       const stillOverridden = await checkHumanOverride(conversationId);
       if (stillOverridden) {
-        console.log(`[webhook:wa] Human override activated during debounce for ${customerPhone} — aborting AI`);
+        console.log(`[webhook:wa] Human override activated during debounce for conv ${conversationId} — aborting AI`);
         return;
       }
 
@@ -1428,7 +1436,7 @@ export async function handleNormalizedEvent(
       const { checkRecentHumanActivity } = await import("@/lib/channels/router");
       const recentHuman = await checkRecentHumanActivity(conversationId, 60);
       if (recentHuman) {
-        console.log(`[webhook:wa] Human activity detected in last 60s for ${customerPhone} — aborting AI to avoid conflict`);
+        console.log(`[webhook:wa] Human activity detected in last 60s for conv ${conversationId} — aborting AI to avoid conflict`);
         return;
       }
 
@@ -1437,12 +1445,12 @@ export async function handleNormalizedEvent(
       try {
         const gated = await loadSessionState(conversationId);
         if (gated?.mode === "handed_off") {
-          console.log(`[webhook:wa] Session handed_off for ${customerPhone} — aborting AI`);
+          console.log(`[webhook:wa] Session handed_off for conv ${conversationId} — aborting AI`);
           return;
         }
         const overrideNow = await checkHumanOverride(conversationId);
         if (overrideNow) {
-          console.log(`[webhook:wa] Human override re-read after debounce for ${customerPhone} — aborting AI`);
+          console.log(`[webhook:wa] Human override re-read after debounce for conv ${conversationId} — aborting AI`);
           return;
         }
       } catch (stateError) {
@@ -1484,7 +1492,7 @@ export async function handleNormalizedEvent(
           : {}),
       });
 
-      console.log(`[webhook:wa] Agent response: ${responseText.slice(0, 100)}... (${pendingMedia.length} media pending)`);
+      console.log(`[webhook:wa] Agent response produced — ${responseText.length} chars, ${pendingMedia.length} media pending`);
 
       // ═══════════════════════════════════════════════════════════════════
       // ORDEN CORRECTO: primero texto, DESPUÉS media
@@ -1542,7 +1550,7 @@ export async function handleNormalizedEvent(
         }
       }
 
-      console.log(`[webhook:wa] Response sent to ${customerPhone}`);
+      console.log(`[webhook:wa] Response sent — conv ${conversationId}`);
       });
     }).catch((err) => console.error("[webhook:wa] Buffer processing error:", err));
 

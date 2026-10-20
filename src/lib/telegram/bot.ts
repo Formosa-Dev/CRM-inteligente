@@ -100,13 +100,20 @@ export async function sendTelegramMessage(
 
 export async function setTelegramWebhook(
   token: string,
-  webhookUrl: string
+  webhookUrl: string,
+  secretToken?: string
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await fetch(apiUrl(token, "setWebhook"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: webhookUrl }),
+      // secret_token makes Telegram sign every update with
+      // X-Telegram-Bot-Api-Secret-Token, which the webhook route verifies
+      // before parsing (F10).
+      body: JSON.stringify({
+        url: webhookUrl,
+        ...(secretToken ? { secret_token: secretToken } : {}),
+      }),
     });
 
     const data = await res.json();
@@ -220,7 +227,7 @@ export function getTelegramConfigFromEnv(): TelegramConfig {
 import { db } from "@/db";
 import { eq } from "drizzle-orm";
 import { agentConfig } from "@/db/schema";
-import { decrypt } from "@/lib/encryption";
+import { decrypt, decryptIfEncrypted } from "@/lib/encryption";
 
 /**
  * Get Telegram config from database (with encrypted token)
@@ -240,8 +247,14 @@ export async function getTelegramConfigFromDB(): Promise<TelegramConfig> {
       const decryptedToken = decrypt(config.telegramBotToken);
       // No default: an empty webhook token disables the route (401 on every
       // request) rather than leaving a publicly guessable one.
+      // Stored plaintext today — telegram_webhook_token is varchar(100) and
+      // cannot hold the ~187-char AES-GCM ciphertext (F10 rotation note:
+      // widening the column to text enables at-rest encryption, which this
+      // decryptIfEncrypted read already tolerates).
       const webhookToken =
-        config.telegramWebhookToken || process.env.TELEGRAM_WEBHOOK_TOKEN || "";
+        decryptIfEncrypted(config.telegramWebhookToken) ||
+        process.env.TELEGRAM_WEBHOOK_TOKEN ||
+        "";
       // Soporta múltiples IDs separados por coma: "123456, 789012, 345678"
       const allowedChatIds = config.telegramChatId
         ? config.telegramChatId

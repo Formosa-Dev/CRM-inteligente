@@ -26,6 +26,8 @@ import { neon } from "@neondatabase/serverless";
 import { randomBytes } from "node:crypto";
 import {
   encrypt,
+  decrypt,
+  isEncrypted,
   getMe,
   setWebhook,
   getWebhookInfo,
@@ -146,9 +148,14 @@ async function main() {
   }
 
   // Reusar el webhook token existente para no invalidar una URL ya registrada;
-  // generar uno nuevo solo si falta.
+  // generar uno nuevo solo si falta. Si el valor guardado está encriptado
+  // (columna ensanchada post-F10) se desencripta para reusarlo; si no se
+  // puede desencriptar con el AUTH_SECRET actual, se rota a uno nuevo.
+  const storedWebhookToken = isEncrypted(existing.telegram_webhook_token)
+    ? decrypt(existing.telegram_webhook_token, authSecret)
+    : existing.telegram_webhook_token;
   const webhookToken =
-    explicitWebhookToken || existing.telegram_webhook_token || randomBytes(24).toString("hex");
+    explicitWebhookToken || storedWebhookToken || randomBytes(24).toString("hex");
   const webhookUrl = `${publicUrl}/api/telegram/webhook/${webhookToken}`;
 
   const encryptedToken = encrypt(token, authSecret);
@@ -163,7 +170,9 @@ async function main() {
     where id = 1`;
   console.log("✔ DB actualizada (token encriptado, webhook token, chat ids, telegram_enabled=true).");
 
-  const setRes = await setWebhook(token, webhookUrl);
+  // secret_token hace que Telegram firme cada update con
+  // X-Telegram-Bot-Api-Secret-Token, que la route verifica antes de parsear.
+  const setRes = await setWebhook(token, webhookUrl, webhookToken);
   if (!setRes.ok) {
     console.error(`✖ setWebhook falló: ${setRes.error}`);
     console.error("  La DB quedó configurada; corregí la URL y reejecutá (es idempotente).");

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { BufferManager, type BufferedMessage, getLastProcessedContent, setLastProcessedContent } from "./manager";
 import { BUFFER_CONFIG, type Channel } from "./config";
 
@@ -15,6 +16,12 @@ const MAX_REPROCESS_DEPTH = 3;
 // timer, so retries ride the normal drain cadence instead of hot-looping.
 const MAX_CALLBACK_ATTEMPTS = 3;
 
+// userId is a customer phone / telegram chat id — PII that must not reach
+// logs (F4). A truncated digest keeps per-user correlation across lock,
+// process, and retry lines without storing the identifier itself.
+const userTag = (userId: string): string =>
+  createHash("sha256").update(userId).digest("hex").slice(0, 10);
+
 // Main processing function — called after enqueue
 export async function scheduleBufferProcessing(
   channel: Channel,
@@ -29,22 +36,22 @@ export async function scheduleBufferProcessing(
     // Try to acquire lock — if someone else is processing, bail
     const locked = await BufferManager.acquireLock(channel, userId);
     if (!locked) {
-      console.log(`[buffer:lock] Lock already held for ${channel}:${userId}, skipping`);
+      console.log(`[buffer:lock] Lock already held for ${channel}:${userTag(userId)}, skipping`);
       return; // another processor is handling this user
     }
 
-    console.log(`[buffer:lock] Acquired lock for ${channel}:${userId}`);
+    console.log(`[buffer:lock] Acquired lock for ${channel}:${userTag(userId)}`);
 
     try {
       await processBufferLoop(channel, userId, processCallback, 0);
     } finally {
       await BufferManager.releaseLock(channel, userId);
-      console.log(`[buffer:lock] Released lock for ${channel}:${userId}`);
+      console.log(`[buffer:lock] Released lock for ${channel}:${userTag(userId)}`);
     }
 
     if (!(await BufferManager.hasNewMessages(channel, userId))) return;
     console.log(
-      `[buffer:tail] Messages arrived during lock release for ${channel}:${userId} — re-entering drain`
+      `[buffer:tail] Messages arrived during lock release for ${channel}:${userTag(userId)} — re-entering drain`
     );
   }
 }
@@ -57,7 +64,7 @@ async function processBufferLoop(
 ): Promise<void> {
   if (depth >= MAX_REPROCESS_DEPTH) {
     console.warn(
-      `[buffer:interrupt] Max reprocess depth (${MAX_REPROCESS_DEPTH}) reached for ${channel}:${userId}, stopping recursion`
+      `[buffer:interrupt] Max reprocess depth (${MAX_REPROCESS_DEPTH}) reached for ${channel}:${userTag(userId)}, stopping recursion`
     );
     return;
   }
@@ -76,7 +83,7 @@ async function processBufferLoop(
     attempts++;
   }
 
-  console.log(`[buffer:process] Timer expired or max attempts reached for ${channel}:${userId} after ${attempts}s`);
+  console.log(`[buffer:process] Timer expired or max attempts reached for ${channel}:${userTag(userId)} after ${attempts}s`);
 
   // Fetch all buffered messages
   const messages = await BufferManager.fetchAndClear(channel, userId);
@@ -84,16 +91,16 @@ async function processBufferLoop(
   if (messages.length === 0) return;
 
     console.log(
-      `[buffer:process] Start — ${messages.length} msgs for ${channel}:${userId} (depth=${depth})`
+      `[buffer:process] Start — ${messages.length} msgs for ${channel}:${userTag(userId)} (depth=${depth})`
     );
 
     try {
-      console.log(`[buffer:process] About to call processCallback for ${channel}:${userId}`);
+      console.log(`[buffer:process] About to call processCallback for ${channel}:${userTag(userId)}`);
       await processCallback(messages);
-      console.log(`[buffer:process] Done for ${channel}:${userId} (depth=${depth})`);
+      console.log(`[buffer:process] Done for ${channel}:${userTag(userId)} (depth=${depth})`);
     } catch (err) {
       console.error(
-        `[buffer:process] Callback error for ${channel}:${userId} (depth=${depth}):`,
+        `[buffer:process] Callback error for ${channel}:${userTag(userId)} (depth=${depth}):`,
         err instanceof Error ? err.message : err,
         err instanceof Error ? err.stack : ''
       );
@@ -110,7 +117,7 @@ async function processBufferLoop(
           await BufferManager.enqueue(channel, userId, { ...m, attempt: attempts });
         }
         console.warn(
-          `[buffer:retry] Re-enqueued ${messages.length} msg(s) for ${channel}:${userId} (attempt ${attempts + 1}/${MAX_CALLBACK_ATTEMPTS})`
+          `[buffer:retry] Re-enqueued ${messages.length} msg(s) for ${channel}:${userTag(userId)} (attempt ${attempts + 1}/${MAX_CALLBACK_ATTEMPTS})`
         );
       } else {
         await BufferManager.enqueueDeadLetter(channel, userId, {
@@ -119,7 +126,7 @@ async function processBufferLoop(
           messages,
         });
         console.error(
-          `[buffer:dead-letter] ${messages.length} msg(s) for ${channel}:${userId} exhausted ${MAX_CALLBACK_ATTEMPTS} callback attempts — moved to dead letter`
+          `[buffer:dead-letter] ${messages.length} msg(s) for ${channel}:${userTag(userId)} exhausted ${MAX_CALLBACK_ATTEMPTS} callback attempts — moved to dead letter`
         );
       }
       // The outer loop's post-release hasNewMessages re-check picks the
@@ -139,7 +146,7 @@ async function processBufferLoop(
 
     if (newHash === processedHash || newHash === getLastProcessedContent(channel, userId)) {
       console.log(
-        `[buffer:interrupt] Content-duplicate detected for ${channel}:${userId}, skipping re-process (depth=${depth})`
+        `[buffer:interrupt] Content-duplicate detected for ${channel}:${userTag(userId)}, skipping re-process (depth=${depth})`
       );
       setLastProcessedContent(channel, userId, newHash);
       return; // Don't re-process — content is identical to what was just handled
@@ -152,7 +159,7 @@ async function processBufferLoop(
 
     setLastProcessedContent(channel, userId, newHash);
     console.log(
-      `[buffer:interrupt] New (different) messages during processing for ${channel}:${userId}, re-processing (depth=${depth + 1})`
+      `[buffer:interrupt] New (different) messages during processing for ${channel}:${userTag(userId)}, re-processing (depth=${depth + 1})`
     );
     await processBufferLoop(channel, userId, processCallback, depth + 1);
   }

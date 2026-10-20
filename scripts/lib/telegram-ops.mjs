@@ -106,12 +106,17 @@ export async function getMe(token) {
   }
 }
 
-export async function setWebhook(token, url) {
+export async function setWebhook(token, url, secretToken) {
   try {
     const res = await fetch(`${TELEGRAM_API}${token}/setWebhook`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
+      // secret_token → Telegram envía X-Telegram-Bot-Api-Secret-Token en cada
+      // update; la route lo verifica antes de parsear (F10).
+      body: JSON.stringify({
+        url,
+        ...(secretToken ? { secret_token: secretToken } : {}),
+      }),
     });
     const data = await res.json().catch(() => ({}));
     if (!data.ok) return { ok: false, error: data.description ?? `HTTP ${res.status}` };

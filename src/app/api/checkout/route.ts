@@ -1,7 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { checkoutSchema } from "@/lib/checkout/contract";
 import { CheckoutError, submitCheckout } from "@/lib/checkout/service";
-import { checkRateLimit } from "@/lib/infra/rate-limit";
+import { checkRateLimit, clientIpFromRequest } from "@/lib/infra/rate-limit";
 import { isAllowedCheckoutOrigin } from "@/lib/checkout/origin";
 
 export async function POST(request: Request) {
@@ -12,7 +12,7 @@ export async function POST(request: Request) {
     // in submitCheckout already protects against duplicate orders.
     let limited = false;
     try {
-      const limit = await checkRateLimit(`checkout:${request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown"}`);
+      const limit = await checkRateLimit(`checkout:${clientIpFromRequest(request)}`, { bucket: "checkout" });
       limited = !limit.success;
     } catch { /* fail open */ }
     if (limited) return Response.json({ error: "Esperá un minuto antes de volver a confirmar." }, { status: 429, headers: { "Retry-After": "60" } });

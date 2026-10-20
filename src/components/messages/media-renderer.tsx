@@ -9,7 +9,12 @@ interface MediaRendererProps {
 
 function resolveUrl(url: string): string {
   if (url.startsWith("http") || url.startsWith("//")) return url;
-  return `${typeof window !== "undefined" ? window.location.origin : ""}${url}`;
+  // Rows saved before media left public/ carry /uploads/<path>; the bytes now
+  // live behind the session-gated media route under the same relative path.
+  const pathname = url.startsWith("/uploads/")
+    ? `/api/media/${url.slice("/uploads/".length)}`
+    : url;
+  return `${typeof window !== "undefined" ? window.location.origin : ""}${pathname}`;
 }
 
 function formatFileSize(bytes?: number): string {

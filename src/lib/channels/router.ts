@@ -260,7 +260,7 @@ async function autoLinkLeadToConversation(
       console.log(`[leads] Auto-linked lead #${lead.id} → conversation #${conversationId}`);
     }
   } catch (err) {
-    console.warn(`[leads] Auto-link failed for phone ${phone}:`, err);
+    console.warn(`[leads] Auto-link failed for conversation #${conversationId}:`, err);
   }
 }
 

@@ -250,7 +250,7 @@ describe("H2 — account-scoped inbound keys", () => {
     const src = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
     assert.match(src, /accountScopedInboundKey\(channelAccountId, phone\)/);
     assert.match(src, /accountScopedInboundKey\(channelAccountId, customerPhone\)/);
-    assert.match(src, /checkRateLimit\(`wa-inbound:\$\{phoneKey\}`\)/);
+    assert.match(src, /checkRateLimit\(`wa-inbound:\$\{phoneKey\}`/);
     assert.match(src, /BufferManager\.isContentDuplicate\("whatsapp", customerKey/);
     assert.match(src, /BufferManager\.enqueue\("whatsapp", customerKey/);
     assert.match(src, /scheduleBufferProcessing\("whatsapp", customerKey/);

@@ -58,7 +58,7 @@ export async function transcribeAudio(
       if (response.ok) {
         const result = (await response.json()) as { text?: string };
         if (result.text) {
-          console.log(`[transcription] OK: "${result.text.slice(0, 80)}..."`);
+          console.log(`[transcription] OK (${result.text.length} chars)`);
           return result.text;
         }
       }

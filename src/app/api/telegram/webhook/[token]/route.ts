@@ -14,7 +14,8 @@ import {
   createIdempotencyKey,
 } from "@/lib/idempotency";
 import { createCorrelationId, createLogger, logRequestReceived } from "@/lib/logger";
-import { checkRateLimit, getRateLimitHeaders } from "@/lib/infra/rate-limit";
+import { checkRateLimit, clientIpFromRequest, getRateLimitHeaders } from "@/lib/infra/rate-limit";
+import { readBoundedBody } from "@/lib/infra/webhook-guard";
 import {
   findOrCreateConversation,
   insertMessage,
@@ -55,6 +56,20 @@ export async function POST(
       );
     }
 
+    // F10 — Telegram signs every update with X-Telegram-Bot-Api-Secret-Token
+    // carrying the secret_token registered via setWebhook. No header / wrong
+    // value → the request didn't come through Telegram's relay (one-time ops
+    // step: re-register the webhook so the secret lands on Telegram's side).
+    const secretHeader = request.headers.get("x-telegram-bot-api-secret-token") ?? "";
+    const sa = Buffer.from(secretHeader);
+    const sb = Buffer.from(config.webhookToken ?? "");
+    if (sa.length !== sb.length || !timingSafeEqual(sa, sb)) {
+      return NextResponse.json(
+        { ok: false, error: "Invalid secret token" },
+        { status: 401 }
+      );
+    }
+
     if (!config.enabled) {
       return NextResponse.json(
         { ok: false, error: "Bot disabled" },
@@ -62,12 +77,12 @@ export async function POST(
       );
     }
 
-    // ── Rate limiting ──
-    const ip =
-      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-      request.headers.get("x-real-ip") ??
-      "unknown";
-    const rateCheck = await checkRateLimit(`telegram:${ip}`);
+    // ── Rate limiting — last-hop client IP, dedicated webhook bucket ──
+    const ip = clientIpFromRequest(request);
+    const rateCheck = await checkRateLimit(`telegram:${ip}`, {
+      bucket: "telegram-webhook",
+      limit: 60,
+    });
     if (!rateCheck.success) {
       return NextResponse.json(
         { ok: false, error: "Too many requests" },
@@ -75,8 +90,23 @@ export async function POST(
       );
     }
 
-    // ── Parsear el update de Telegram ──
-    const update: TelegramUpdate = await request.json();
+    // ── Parsear el update de Telegram — body bounded before reading (F8) ──
+    const bounded = await readBoundedBody(request, 64 * 1024);
+    if (!bounded.ok) {
+      return NextResponse.json(
+        { ok: false, error: "Payload too large" },
+        { status: 413 }
+      );
+    }
+    let update: TelegramUpdate;
+    try {
+      update = JSON.parse(bounded.rawBody);
+    } catch {
+      return NextResponse.json(
+        { ok: false, error: "Invalid payload" },
+        { status: 400 }
+      );
+    }
 
     // ── Process message: text or media ──
     const message = update.message;
@@ -196,11 +226,11 @@ export async function POST(
     }
     setIdempotency(idempotencyKey);
 
-    // Structured log
+    // Structured log — opaque ids only; chat ids and message text are PII
+    // (F4) and stay out of logs.
     logRequestReceived(logger, {
       messageId: correlationId,
-      chatId,
-      text: text.slice(0, 50),
+      hasText: text.length > 0,
     });
 
     // ── DB-level deduplication ──

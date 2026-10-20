@@ -21,7 +21,10 @@
 import { createHash } from "node:crypto";
 
 import { sendDocument, sendImage, sendText } from "@/lib/ycloud";
-import { verifyYCloudSignature } from "@/lib/whatsapp/signature";
+import {
+  verifyYCloudSignature,
+  ycloudTimestampInWindow,
+} from "@/lib/whatsapp/signature";
 import { ECHO_EVENT_TYPES } from "@/lib/whatsapp/webhook-pipeline";
 import type {
   ChannelAccount,
@@ -111,7 +114,9 @@ function classifySignatureFailure(
   if (!parsed) return "malformed_signature_header";
   const timestamp = Number.parseInt(parsed.timestamp, 10);
   if (Number.isNaN(timestamp)) return "malformed_signature_header";
-  if (Math.abs(Date.now() / 1000 - timestamp) > MAX_SIGNATURE_AGE_SEC) {
+  // Same asymmetric window as verifyYCloudSignature: out-of-window in either
+  // direction (too old OR too far in the future) reports "expired_timestamp".
+  if (!ycloudTimestampInWindow(timestamp, MAX_SIGNATURE_AGE_SEC)) {
     return "expired_timestamp";
   }
   return "signature_mismatch";

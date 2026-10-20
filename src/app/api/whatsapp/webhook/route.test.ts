@@ -35,6 +35,20 @@ afterEach(() => {
 });
 
 describe("canonical WhatsApp webhook HTTP statuses", () => {
+  it("rejects an oversized declared body with 413 before signature verification", async () => {
+    // The declared Content-Length exceeds the ycloud cap — the body is never
+    // buffered, so no signature is needed to reject it.
+    const res = await POST(
+      request("{}", { "content-length": String(200 * 1024) })
+    );
+    assert.equal(res.status, 413);
+  });
+
+  it("rejects an oversized actual body with 413", async () => {
+    const res = await POST(request("x".repeat(200 * 1024)));
+    assert.equal(res.status, 413);
+  });
+
   it("rejects a missing signature with 401", async () => {
     const res = await POST(request("{}"));
     assert.equal(res.status, 401);
