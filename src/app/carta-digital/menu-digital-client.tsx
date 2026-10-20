@@ -19,11 +19,11 @@ type Product = { id: number; name: string; price: string | null; promoPrice?: st
 type Promo = { id: number; name: string; description: string | null; imageUrl: string | null; customPrice: string | null; items: { productId: number; productName: string; quantity: number }[] | null };
 type Selection = { type: "product"; data: Product } | { type: "promo"; data: Promo };
 const CATEGORIES = [
-  { key: "promos", label: "Promociones" }, { key: "hamburguesa", label: "Hamburguesas" },
-  { key: "pizzas", label: "Pizzas" }, { key: "empanadas", label: "Empanadas" },
-  { key: "acompanamiento", label: "Para acompañar" }, { key: "bebidas", label: "Bebidas" },
-  { key: "alcohol", label: "Alcohol" },
-  { key: "tragos_vip", label: "Tragos V.I.P." }, { key: "pan_mayorista", label: "Pan mayorista" },
+  { key: "promos", label: "Promociones" }, { key: "hamburguesa", label: "Productos" },
+  { key: "pizzas", label: "Especialidades" }, { key: "empanadas", label: "Clásicos" },
+  { key: "acompanamiento", label: "Extras" }, { key: "bebidas", label: "Bebidas" },
+  { key: "alcohol", label: "Alcohólicas" },
+  { key: "tragos_vip", label: "Premium" }, { key: "pan_mayorista", label: "Mayorista" },
 ];
 // Legacy / marketing deep-link values mapped onto the canonical category keys.
 const CATEGORY_ALIASES: Record<string, string> = {
