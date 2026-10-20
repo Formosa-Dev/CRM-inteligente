@@ -139,45 +139,4 @@ export async function downloadYCloudMedia(
   };
 }
 
-// Download media from Telegram Bot API
-export async function downloadTelegramMedia(
-  fileId: string,
-  botToken: string
-): Promise<{ buffer: Buffer; mimeType: string; filename: string }> {
-  // Step 1: Get file path
-  const fileResp = await fetch(
-    `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`,
-    { signal: AbortSignal.timeout(10_000) }
-  );
 
-  const fileData = (await fileResp.json()) as {
-    ok: boolean;
-    result?: { file_path?: string; file_size?: number };
-  };
-
-  if (!fileData.ok || !fileData.result?.file_path) {
-    throw new Error("Telegram getFile failed");
-  }
-
-  // Step 2: Download
-  const url = `https://api.telegram.org/file/bot${botToken}/${fileData.result.file_path}`;
-  const resp = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-  if (!resp.ok) throw new Error(`Telegram download failed: ${resp.status}`);
-
-  const buffer = Buffer.from(await resp.arrayBuffer());
-  const filename = path.basename(fileData.result.file_path);
-  const ext = path.extname(filename).toLowerCase();
-
-  const extToMime: Record<string, string> = {
-    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-    ".webp": "image/webp", ".gif": "image/gif", ".mp4": "video/mp4",
-    ".ogg": "audio/ogg", ".opus": "audio/opus", ".mp3": "audio/mpeg",
-    ".pdf": "application/pdf", ".doc": "application/msword",
-  };
-
-  return {
-    buffer,
-    mimeType: extToMime[ext] || "application/octet-stream",
-    filename,
-  };
-}

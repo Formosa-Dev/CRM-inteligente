@@ -13,7 +13,7 @@
  *   the legacy placeholder. Arbitrary DB errors are surfaced as retryable.
  */
 
-import { and, eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { channelAccounts } from "@/db/schema";
@@ -24,7 +24,6 @@ import { phoneMatches } from "@/lib/phone-utils";
 
 import { isRetryableDbError, isSchemaNotReady } from "./errors";
 import {
-  PROVIDER_IDS,
   isChannelKind,
   isProviderId,
   providerForChannel,
@@ -513,18 +512,3 @@ export async function matchSenderToChannelAccount(
   }
 }
 
-/** Non-resolved account-row query used by admin/config helpers. */
-export async function listActiveAccounts(
-  channel: ChannelKind
-): Promise<ChannelAccountRow[]> {
-  return db
-    .select()
-    .from(channelAccounts)
-    .where(
-      and(
-        eq(channelAccounts.channel, channel),
-        eq(channelAccounts.status, "active"),
-        inArray(channelAccounts.provider, PROVIDER_IDS)
-      )
-    );
-}
