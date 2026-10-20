@@ -1,35 +1,29 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
 import { db } from "@/db";
 import { orders } from "@/db/schema";
 import { eq, and, lte } from "drizzle-orm";
 import { getArgentinaHour } from "@/lib/argentina-time";
+import { authorizeCronRequest } from "@/lib/auth/cron-auth";
 
 /**
  * Endpoint para procesar follow-ups de pedidos entregados.
- * 
+ *
  * Busca pedidos con:
  * - status = "delivered"
  * - followupSent = false
  * - deliveredAt <= hace 30 minutos
- * 
+ *
  * Envía el mensaje y marca followupSent = true.
- * 
+ *
+ * Auth: `Authorization: Bearer <cronSecret>` (F12 — nunca `?key=` en la URL;
+ * queda en logs/historial). El query key solo se acepta con
+ * CRON_ALLOW_QUERY_KEY=1 para schedulers sin headers.
  * Llamar desde un cron job en Render cada 15 minutos:
- * GET https://muzapp.onrender.com/api/cron/followup?key=CRON_SECRET
+ * POST https://muzapp.onrender.com/api/cron/followup
  */
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const key = searchParams.get("key");
-
-  // Fail closed: without a cron secret configured (DB or env), nobody gets in.
-  const { getIntegrationSecrets } = await import("@/lib/integrations");
-  const secret = (await getIntegrationSecrets()).cronSecret;
-  const a = Buffer.from(key ?? "");
-  const b = Buffer.from(secret ?? "");
-  if (!secret || a.length !== b.length || !timingSafeEqual(a, b)) {
-    return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-  }
+async function handle(request: Request) {
+  const denied = await authorizeCronRequest(request);
+  if (denied) return denied;
 
   const now = new Date();
   const hora = getArgentinaHour();
@@ -219,3 +213,8 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+
+// POST is the preferred trigger (state changes); GET stays for schedulers
+// that cannot send a body — both require the Bearer header.
+export const GET = handle;
+export const POST = handle;

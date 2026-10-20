@@ -9,6 +9,8 @@ import { META_OAUTH_STATE_COOKIE } from "@/lib/meta/oauth";
 import { db } from "@/db";
 import { agentConfig } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { reportInternalError } from "@/lib/errors";
+import { invalidateIntegrationSecretsCache } from "@/lib/integrations";
 
 export type MetaConfigState = {
   success: boolean;
@@ -178,9 +180,11 @@ export async function testMetaConnection(): Promise<MetaConfigState> {
         "Conexión exitosa con Meta. App ID y Pixel ID verificados correctamente.",
     };
   } catch (err) {
+    // F13: internals stay in the server log under a correlation id.
+    const ref = reportInternalError("meta.testConnection", err);
     return {
       success: false,
-      message: `Error al conectar con Meta: ${err instanceof Error ? err.message : "desconocido"}`,
+      message: `Error al conectar con Meta (ref: ${ref})`,
     };
   }
 }
@@ -200,6 +204,8 @@ export async function disconnectMeta(): Promise<{ success: boolean; error?: stri
       })
       .where(eq(agentConfig.id, 1));
 
+    // Secret write path — drop cached secrets so nothing stale is accepted.
+    invalidateIntegrationSecretsCache();
     return { success: true };
   } catch (error) {
     console.error("[disconnectMeta] Error:", error);

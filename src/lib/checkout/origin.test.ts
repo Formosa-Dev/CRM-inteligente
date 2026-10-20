@@ -5,8 +5,13 @@ import { isAllowedCheckoutOrigin } from "./origin";
 const ENV_KEYS = [
   "NEXT_PUBLIC_APP_URL",
   "NEXTAUTH_URL",
+  "AUTH_URL",
   "RENDER_EXTERNAL_URL",
+  "NODE_ENV",
 ] as const;
+
+// NODE_ENV is readonly on ProcessEnv — writes go through a mutable view.
+const writableEnv = process.env as Record<string, string | undefined>;
 
 let saved: Record<(typeof ENV_KEYS)[number], string | undefined>;
 
@@ -22,7 +27,7 @@ afterEach(() => {
   for (const key of ENV_KEYS) {
     const value = saved[key];
     if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
+    else writableEnv[key] = value;
   }
 });
 
@@ -91,6 +96,26 @@ describe("isAllowedCheckoutOrigin", () => {
   it("still accepts a same-origin request with nothing configured", () => {
     const request = new Request("http://127.0.0.1:3000/api/checkout", {
       headers: { origin: "http://127.0.0.1:3000" },
+    });
+    assert.equal(isAllowedCheckoutOrigin(request), true);
+  });
+
+  it("fails closed in production when no public origin is configured", () => {
+    // request.url is derived from the client-controlled Host header — a
+    // scripted client can mint a matching Host/Origin pair, so in production
+    // it must not legitimize the request on its own.
+    writableEnv.NODE_ENV = "production";
+    const request = new Request("https://attacker.example/api/checkout", {
+      headers: { origin: "https://attacker.example" },
+    });
+    assert.equal(isAllowedCheckoutOrigin(request), false);
+  });
+
+  it("accepts the configured origin in production even if Host is spoofed", () => {
+    writableEnv.NODE_ENV = "production";
+    writableEnv.NEXT_PUBLIC_APP_URL = "https://tienda.example.com";
+    const request = new Request("https://attacker.example/api/checkout", {
+      headers: { origin: "https://tienda.example.com" },
     });
     assert.equal(isAllowedCheckoutOrigin(request), true);
   });

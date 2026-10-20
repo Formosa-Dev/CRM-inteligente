@@ -87,6 +87,15 @@ export async function getIntegrationSecrets(): Promise<IntegrationSecrets> {
 }
 
 /**
+ * F15: rotated secrets (ycloudWebhookSecret, metaAppSecret, cronSecret, ...)
+ * must take effect immediately — every admin write path that can change them
+ * calls this after saving so the 30s TTL cannot keep a revoked value valid.
+ */
+export function invalidateIntegrationSecretsCache(): void {
+  cached = null;
+}
+
+/**
  * YCloud API key — stored encrypted in agent_config (admin UI), env fallback.
  * Centralizes what used to be `process.env.YCLOUD_API_KEY || cfg?.ycloudApiKey`
  * scattered across ~10 call sites.

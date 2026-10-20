@@ -6,6 +6,7 @@ import { conversations, chatMessages, leads, orders } from "@/db/schema";
 import { eq, desc, sql, count } from "drizzle-orm";
 import { resolveClientNamesBatch } from "@/lib/lead-utils";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { reportInternalError } from "@/lib/errors";
 import { conversationListWhere } from "@/lib/conversations/filters";
 import type { CustomerProfile, OrderSummary } from "@/types/chat";
 
@@ -132,12 +133,10 @@ export async function sendReply(
     await sendOutboundMessage(conversationId, trimmed, "human");
     return { success: true };
   } catch (error) {
-    console.error("[sendReply] Error:", error);
-    // Surface the real failure (e.g. unresolvable channel account, no
-    // registered provider) so the operator sees why the send failed — the
-    // message itself carries no secrets.
-    const detail = error instanceof Error ? error.message : "desconocido";
-    return { success: false, error: `Error al enviar mensaje: ${detail}` };
+    // F13: the raw failure can carry provider/DB internals — it stays in the
+    // server log under a correlation id; the operator sees a generic message.
+    const ref = reportInternalError("conversations.sendReply", error);
+    return { success: false, error: `Error al enviar el mensaje (ref: ${ref})` };
   }
 }
 

@@ -49,10 +49,9 @@ services:
         sync: false
 
       # ---------- Cron auth (auto-generated; cron jobs below copy it via envVarKey) ----------
-      # Gates GET /api/cron/*. Not prompted — Render generates a random value.
-      # The generated value is base64 and can contain `+`/`/`/`=`, so the cron
-      # commands below URL-encode it (`--data-urlencode`) — interpolating it raw
-      # into the query string would decode `+` as a space and 401.
+      # Gates /api/cron/*. Not prompted — Render generates a random value.
+      # F12: the secret travels in an Authorization: Bearer header (see the cron
+      # startCommands) — never in the URL, where it would land in logs.
       # Note: a value set later in /admin/agent (DB) takes precedence over this
       # env var — keep them equal or leave the admin field empty (see guide).
       - key: CRON_SECRET
@@ -92,7 +91,7 @@ services:
     runtime: node
     schedule: "*/15 * * * *"
     buildCommand: "true"
-    startCommand: 'curl -fsS --get "${APP_URL%/}/api/cron/followup" --data-urlencode "key=${CRON_SECRET}"'
+    startCommand: 'curl -fsS -X POST -H "Authorization: Bearer ${CRON_SECRET}" "${APP_URL%/}/api/cron/followup"'
     envVars:
       - key: APP_URL
         fromService:
@@ -112,7 +111,7 @@ services:
     runtime: node
     schedule: "*/30 * * * *"
     buildCommand: "true"
-    startCommand: 'curl -fsS --get "${APP_URL%/}/api/cron/reconcile" --data-urlencode "key=${CRON_SECRET}"'
+    startCommand: 'curl -fsS -X POST -H "Authorization: Bearer ${CRON_SECRET}" "${APP_URL%/}/api/cron/reconcile"'
     envVars:
       - key: APP_URL
         fromService:
@@ -132,7 +131,7 @@ services:
     runtime: node
     schedule: "0 13 * * *"
     buildCommand: "true"
-    startCommand: 'curl -fsS --get "${APP_URL%/}/api/cron/reconcile" --data-urlencode "key=${CRON_SECRET}" --data-urlencode "mode=sweep"'
+    startCommand: 'curl -fsS -X POST -H "Authorization: Bearer ${CRON_SECRET}" "${APP_URL%/}/api/cron/reconcile?mode=sweep"'
     envVars:
       - key: APP_URL
         fromService:
