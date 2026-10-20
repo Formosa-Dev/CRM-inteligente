@@ -45,25 +45,25 @@ const benefits = [
     icon: "🏆",
     title: "Calidad Premium",
     description:
-      "Elaboración artesanal con harinas seleccionadas y procesos de fermentación lenta para un sabor y textura sin igual.",
+      "Elaboración artesanal con materias primas seleccionadas y procesos tradicionales para un resultado sin igual.",
   },
   {
     icon: "📦",
-    title: "Precios por Bulto",
+    title: "Precios Mayoristas",
     description:
-      "Precios competitivos en pedidos mayoristas. Trabajamos con restaurantes, hamburgueserías y cocinas de todo tipo.",
+      "Precios competitivos en pedidos mayoristas. Trabajamos con comercios y negocios gastronómicos de todo tipo.",
   },
   {
     icon: "🚚",
     title: "Entrega Confiable",
     description:
-      "Cumplimos con los plazos acordados. Tu cocina nunca se queda sin pan cuando trabajás con nosotros.",
+      "Cumplimos con los plazos acordados. Tu negocio nunca se queda sin stock cuando trabajás con nosotros.",
   },
   {
     icon: "🤝",
     title: "Relación Directa",
     description:
-      "Sin intermediarios. Hablás directo con quien hace el pan. Adaptamos formatos y cantidades a tu negocio.",
+      "Sin intermediarios. Hablás directo con quien elabora. Adaptamos formatos y cantidades a tu negocio.",
   },
 ];
 
@@ -103,7 +103,7 @@ export default function PanMayoristaPage() {
   return (
     <div className="min-h-screen bg-background relative">
       {/* Hero */}
-      <PageHero backgroundImage="/assets/images/pan-muzzarella.jpeg">
+      <PageHero backgroundImage="/assets/images/background/1.png">
         <motion.span
           variants={heroChild}
           className="inline-block text-xs font-semibold uppercase tracking-[0.3em] px-4 py-1.5 rounded-full bg-primary/10 border border-primary/30 text-primary"
@@ -115,7 +115,7 @@ export default function PanMayoristaPage() {
           variants={heroChild}
           className="text-gold-shimmer text-4xl sm:text-6xl font-black leading-tight font-heading"
         >
-          Pan Artesanal
+          Productos Artesanales
           <br />
           para tu <em>Negocio</em>
         </motion.h1>
@@ -124,9 +124,9 @@ export default function PanMayoristaPage() {
           variants={heroChild}
           className="text-lg text-foreground/65 max-w-2xl leading-relaxed"
         >
-          Proveemos pan artesanal de calidad premium para restaurantes,
-          hamburgueserías y cocinas profesionales. Sin conservantes, con
-          fermentación lenta y el sabor que tus clientes van a notar.
+          Proveemos productos artesanales de calidad premium para comercios y
+          negocios gastronómicos. Sin conservantes, con elaboración propia y el
+          detalle que tus clientes van a notar.
         </motion.p>
 
         <motion.div variants={heroChild} className="mt-2">
@@ -136,7 +136,7 @@ export default function PanMayoristaPage() {
         <motion.div variants={heroChild}>
           <WhatsAppCTA
             campaignSlug="mayorista"
-            message="Hola! Me interesa información sobre pan mayorista"
+            message="Hola! Me interesa información sobre venta mayorista"
             label="Consultá Precios y Disponibilidad"
             className="btn-gold inline-flex items-center justify-center gap-2 px-8 py-4 text-sm font-bold uppercase tracking-widest mt-4"
           />
@@ -203,7 +203,7 @@ export default function PanMayoristaPage() {
               Nuestras Variedades
             </h2>
             <p className="text-foreground/50 text-sm">
-              Todos los precios son por bulto cerrado. Consultá disponibilidad y
+              Todos los precios son por pedido cerrado. Consultá disponibilidad y
               pedido mínimo.
             </p>
           </motion.div>
@@ -252,7 +252,7 @@ export default function PanMayoristaPage() {
 
           {status === "ready" && products.length === 0 && (
             <p className="py-10 text-center text-sm text-foreground/60">
-              Estamos actualizando el catálogo de pan mayorista. Consultanos por
+              Estamos actualizando el catálogo mayorista. Consultanos por
               WhatsApp para precios y disponibilidad.
             </p>
           )}
@@ -287,7 +287,7 @@ export default function PanMayoristaPage() {
                   </p>
                   <WhatsAppCTA
                     campaignSlug="mayorista"
-                    message="Hola! Me interesa información sobre pan mayorista"
+                    message="Hola! Me interesa información sobre venta mayorista"
                     label="Consultar Precio"
                     className="mt-3 text-center text-xs font-semibold uppercase tracking-wider py-2.5 px-4 rounded-full transition-all duration-200 hover:scale-105"
                   />
@@ -322,7 +322,7 @@ export default function PanMayoristaPage() {
             </p>
             <WhatsAppCTA
               campaignSlug="mayorista"
-              message="Hola! Me interesa información sobre pan mayorista"
+              message="Hola! Me interesa información sobre venta mayorista"
               label="Escribinos por WhatsApp"
               variant="card"
               subtitle="Respondemos en el día"
