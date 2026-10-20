@@ -179,7 +179,7 @@ export async function runReconcile(opts: {
     lookbackHours,
   });
 
-  const biz = await getBusinessInfo().catch(() => ({ name: "Mrs Muzzarella" }));
+  const biz = await getBusinessInfo().catch(() => ({ name: "tu negocio" }));
   const systemPrompt = RECONCILE_SYSTEM_PROMPT.replace(/\{\{BUSINESS_NAME\}\}/g, biz.name);
 
   const outcomes: ConvOutcome[] = [];

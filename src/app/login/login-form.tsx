@@ -48,7 +48,7 @@ export default function LoginForm() {
           id="email"
           name="email"
           type="email"
-          placeholder="admin@mrsmuzzarella.com"
+          placeholder="admin@tu-dominio.com"
           required
           autoComplete="email"
         />

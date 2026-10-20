@@ -1,4 +1,4 @@
-// ─── Exporta todas las tools del Agente Interno Mrs Muzzarella ───
+// ─── Exporta todas las tools del Agente Interno ───
 // Arquitectura de tools maestras con sub-tools
 
 import { queryOrderTools } from "./toolsQuery";
