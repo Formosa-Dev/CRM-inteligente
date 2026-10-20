@@ -65,7 +65,7 @@ export default function ProductDetailPage() {
         id: String(p.id),
         name: p.name,
         price,
-        emoji: "🍔",
+        emoji: "🛍️",
       },
       1,
       { type: "product", imageUrl: getCatalogProductImage(p) },
