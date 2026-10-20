@@ -21,6 +21,20 @@ import {
 } from "@/lib/infra/webhook-guard";
 import { metaMessageToInboundEvent } from "./helpers";
 
+// Structural shapes for the Meta envelope fields this route reads.
+type MetaMessage = {
+  id?: string;
+  from?: string;
+  timestamp?: string;
+  text?: { body?: string };
+  caption?: string;
+};
+type MetaValue = {
+  messages?: MetaMessage[];
+  metadata?: { phone_number_id?: string; display_phone_number?: string };
+  contacts?: { profile?: { name?: string } }[];
+};
+
 // Meta signs webhook payloads with X-Hub-Signature-256: sha256=<hmac>
 // computed over the raw body using the app secret.
 async function verifyMetaSignature(rawBody: string, header: string | null): Promise<boolean> {
@@ -80,7 +94,7 @@ export async function POST(req: NextRequest) {
 
     // Collect work first so a single envelope can't exceed the event cap
     // through unbounded entry/change/message nesting (F8).
-    const pending: { msg: any; value: any }[] = [];
+    const pending: { msg: MetaMessage; value: MetaValue }[] = [];
     const entries = body?.entry || [];
     for (const entry of entries) {
       if (pending.length >= MAX_WEBHOOK_EVENTS) break;
@@ -104,7 +118,6 @@ export async function POST(req: NextRequest) {
     }
 
     for (const { msg, value } of pending) {
-      const from = msg.from; // phone number
       const text = msg.text?.body || msg.caption || "";
 
       // Account-aware attribution from the Meta routing keys. A
