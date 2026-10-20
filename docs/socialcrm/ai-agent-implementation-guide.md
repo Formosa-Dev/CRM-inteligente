@@ -26,8 +26,8 @@ Do NOT:
 - **Run migrations, seeds, or queries against a production database** — only
   against a dev DB/Neon branch the owner explicitly designates. Never run
   `db:push` against a real database; `db:migrate` is the only schema path.
-- **Modify `drizzle/` or `src/db/schema.ts`** unless explicitly scoped — the
-  migration journal is already damaged (G3; repair in flight).
+- **Modify `drizzle/` or `src/db/schema.ts`** unless explicitly scoped —
+  migrations remain production-sensitive even though the journal is repaired.
 - **Flip provider webhooks or the agent "enabled" switch in production** —
   prepare configuration, but the owner turns on live traffic.
 - **Create commits with AI attribution** — conventional commits only.
@@ -91,11 +91,11 @@ DATABASE_URL="<Neon URL>" ADMIN_EMAIL="<email>" ADMIN_PASSWORD="<pw>" npm run db
 ```
 
 - Migrate uses the **direct** (non-`-pooler`) Neon URL; runtime uses pooled.
-- If `db:migrate` fails on the journal, use the fresh-DB-only sequence in
-  `install-render-neon.md` §3 — never a `drizzle/*.sql` glob.
-- `/setup` is currently broken (neon-http has no transactions; fix in flight
-  as S7/G4) — `db:seed` is the working first-admin path. Do not present
-  `/setup` as done until that fix lands and you re-verified it.
+- For an existing `db:push`-managed database, stop and follow
+  [Migration Safety](./migration-safety.md#4-existing-databases) before running
+  `db:migrate`; never replay a `drizzle/*.sql` glob.
+- `/setup` is the interactive first-admin path after migration; `db:seed`
+  remains the supported non-interactive alternative.
 
 ## Phase 3 — Configure `agent_config` (via `/admin/agent`)
 

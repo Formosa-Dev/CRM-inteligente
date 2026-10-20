@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 
 const ROUTE = "src/app/api/telegram/webhook/[token]/route.ts";
 const BOT = "src/lib/telegram/bot.ts";
+const SCHEMA = "src/db/schema.ts";
 
 test("the route verifies X-Telegram-Bot-Api-Secret-Token before parsing", () => {
   const source = readFileSync(ROUTE, "utf8");
@@ -47,8 +48,9 @@ test("setTelegramWebhook registers secret_token with Telegram", () => {
 });
 
 test("the webhook token read path tolerates encrypted values", () => {
-  // At-rest encryption is pending a varchar(100)→text column widen; when it
-  // lands, decryptIfEncrypted already resolves both formats.
   const source = readFileSync(BOT, "utf8");
   assert.match(source, /decryptIfEncrypted\(config\.telegramWebhookToken\)/);
+  assert.match(source, /!isEncrypted\(config\.telegramWebhookToken\)/);
+  assert.match(source, /telegramWebhookToken: encrypt\(config\.telegramWebhookToken\)/);
+  assert.match(readFileSync(SCHEMA, "utf8"), /telegramWebhookToken: text\("telegram_webhook_token"\)/);
 });

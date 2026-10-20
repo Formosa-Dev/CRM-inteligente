@@ -95,9 +95,10 @@ npm run db:seed
 ```
 
 - `db:migrate` is the only supported schema path. `db:push` is dev-only.
-- If `db:migrate` fails on a journal error, see the emergency fresh-database
-  sequence in `docs/socialcrm/install-render-neon.md` §3 (a journal repair is
-  in flight).
+- The repaired migration journal is the canonical path. Existing installs that
+  were maintained with `db:push` must follow
+  [Migration Safety](./migration-safety.md#4-existing-databases) before their
+  first `db:migrate`.
 - Windows PowerShell: set vars per-command instead, e.g.
   `$env:DATABASE_URL="…"; npm run db:migrate`.
 

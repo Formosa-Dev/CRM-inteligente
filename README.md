@@ -1,4 +1,4 @@
-# Muzapp
+# SocialCRM
 
 **Open-source commerce + AI-agent platform for local businesses.**
 

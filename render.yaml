@@ -23,6 +23,13 @@ services:
     startCommand: npm start
     # Verified route: src/app/api/health/route.ts (200 when DB reachable, 500 otherwise).
     healthCheckPath: /api/health
+    # Durable private storage for inbound media. A disk-backed Render service
+    # runs a single instance and has a brief interruption during deploys; that
+    # trade-off is deliberate because media must survive restarts/redeploys.
+    disk:
+      name: socialcrm-media
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       # Pinned to the documented runtime (.env.example: NODE_VERSION=20;
       # package.json has no engines field and there is no .nvmrc).
@@ -31,6 +38,10 @@ services:
       # `next build --webpack` can OOM on default heap (see AGENTS.md).
       - key: NODE_OPTIONS
         value: "--max-old-space-size=8192"
+      # Inbound channel media is private and session-gated at /api/media.
+      # Keep it under the persistent disk mount, never public/.
+      - key: MEDIA_UPLOADS_DIR
+        value: "/var/data/uploads"
 
       # ---------- REQUIRED — prompted at deploy (leave none empty) ----------
       # Neon Postgres connection string (pooled host, sslmode=require).

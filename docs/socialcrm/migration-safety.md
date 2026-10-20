@@ -1,8 +1,9 @@
 # SocialCRM — Migration Safety
 
-Status: canonical ops reference for the Drizzle migration layer. Written by the
-S6 / A2 journal-repair slice (2026-10-19). Supersedes the "journal broken" note
-in `execution-control.md` §2.7 — the journal is repaired as of this commit.
+Status: canonical ops reference for the Drizzle migration layer. The S6 / A2
+repair reconstructed the legacy chain; the 2026-10-20 follow-up added an
+idempotent index recovery migration for 0022's historical timestamp inversion.
+This supersedes every earlier "journal broken" note.
 
 ## 1. What was broken
 
@@ -27,9 +28,10 @@ Audited in `repo-hygiene-report.md` §3 and `slices-review.md` C2. The tracked
 
 ## 2. What changed (reconstruction, not consolidation)
 
-The full 13-entry journal is preserved. `drizzle-kit generate` on the repaired
-chain reports "No schema changes, nothing to migrate" — i.e. the journaled
-chain's end-state is provably identical to `src/db/schema.ts`.
+The historical 13-entry chain was reconstructed and the current journal now
+continues through `0025_restore_hot_path_indexes`. `drizzle-kit check` and
+`drizzle-kit generate` validate the current journal/snapshot chain against
+`src/db/schema.ts`.
 
 - **Recreated `drizzle/0001_handy_tombstone.sql`** — content derived
   byte-exactly from the surviving state diff between `0000_snapshot` (recovered
@@ -62,8 +64,13 @@ chain's end-state is provably identical to `src/db/schema.ts`.
   journal order (real snapshots `0001`/`0004`/`0008` had `prevId` pointing at
   the zero sentinel or skipping missing files — a repair, not a rewrite of
   schema content).
-- `_journal.json` unchanged: 13 entries, original tags/whens preserved.
-  `drizzle.config.ts` unchanged.
+- `_journal.json` retains 0022's historical timestamp inversion. Changing an
+  already-published migration timestamp would make a deployment paused after
+  0022 re-run that non-idempotent migration, so it is not safe to rewrite.
+  Drizzle Kit reports this as a known warning.
+- `0025_restore_hot_path_indexes.sql` repeats 0022's additive indexes with
+  `CREATE INDEX IF NOT EXISTS`, so databases that previously skipped 0022
+  repair themselves on the next `db:migrate`.
 
 ## 3. Canonical migrate path
 
@@ -73,9 +80,9 @@ Fresh database (new install / ephemeral Neon branch):
 DATABASE_URL=... npm run db:migrate   # drizzle-kit migrate
 ```
 
-Replays `0000` → `0017` and produces exactly the schema in
-`src/db/schema.ts`. The app never migrates at boot (`src/db/index.ts` is a
-lazy query proxy); migration is always an ops step.
+Replays journaled migrations `0000` → `0025` and produces exactly the
+schema in `src/db/schema.ts`. The app never migrates at boot
+(`src/db/index.ts` is a lazy query proxy); migration is always an ops step.
 
 Schema changes from here on: edit `src/db/schema.ts`, `npm run db:generate`,
 review the emitted SQL, commit it, apply with `npm run db:migrate`. Do not use
@@ -83,61 +90,35 @@ review the emitted SQL, commit it, apply with `npm run db:migrate`. Do not use
 
 ## 4. Existing databases
 
-`drizzle-orm`'s migrator skips journaled entries whose `when` is ≤ the latest
-`created_at` in `drizzle.__drizzle_migrations` (it never compares hashes for
-already-applied entries). All 13 entries keep their original `when` values, so:
+- A database that was migrated normally can run `npm run db:migrate`. If it
+  ever skipped 0022 because of the former timestamp inversion, 0025 safely
+  creates the missing hot-path indexes with `IF NOT EXISTS`.
+- A database maintained only with `db:push` has no trustworthy Drizzle history.
+  Do **not** insert a synthetic catch-all migration marker and do **not** replay
+  a glob of SQL files. First compare it to `src/db/schema.ts` on a staging
+  branch, reconcile real drift, and record a reviewed migration baseline before
+  any production change.
+- A database that ran only part of the old chain likewise needs a reviewed,
+  database-specific reconciliation. There is no safe generic SQL shortcut.
 
-- A database that genuinely ran the old chain has `created_at` ≥
-  `1792000001000` (idx 12's `when`) → `db:migrate` is a no-op. Safe.
-- A database maintained only via `db:push` has an empty/absent migrations
-  table → `db:migrate` would attempt the full chain and fail on existing
-  objects. If the DB is already at the current schema, mark the journal
-  applied once:
+## 5. No manual fresh-DB fallback
 
-  ```sql
-  CREATE SCHEMA IF NOT EXISTS drizzle;
-  CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
-    id SERIAL PRIMARY KEY,
-    hash text NOT NULL,
-    created_at bigint
-  );
-  INSERT INTO drizzle.__drizzle_migrations ("hash", "created_at")
-  VALUES ('seeded-after-journal-repair', 1792000001000);
-  ```
-
-  (`hash` is informational for skipping; `created_at` must be ≥ the last
-  journal `when` = `1792000001000`. Future generated migrations get newer
-  `when` values and apply normally.)
-- Precondition for that seed: the DB must actually match `src/db/schema.ts`.
-  If unsure, run `drizzle-kit push --verbose` to preview the residual diff and
-  abort before confirming; reconcile real drift first.
-
-## 5. Emergency fresh-DB sequence (no drizzle-kit)
-
-Every SQL file replays under plain `psql` — `--> statement-breakpoint` markers
-are SQL line comments. Journal order = filename order here:
-
-```bash
-for f in drizzle/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"; done
-psql "$DATABASE_URL" -c "
-  CREATE SCHEMA IF NOT EXISTS drizzle;
-  CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
-    id SERIAL PRIMARY KEY, hash text NOT NULL, created_at bigint);
-  INSERT INTO drizzle.__drizzle_migrations (\"hash\", \"created_at\")
-  VALUES ('psql-bootstrapped', 1792000001000);"
-```
-
-Then `npm run db:migrate` is a no-op until the next generated migration.
+Use `npm run db:migrate` for every fresh installation. Do not run
+`drizzle/*.sql` with a shell glob: the directory contains the deliberately
+unjournaled `0023_timestamptz_DRAFT.sql`, and manual execution does not create
+Drizzle's migration records.
 
 ## 6. Verification performed (static — no real DB touched)
 
 - `drizzle-kit generate` → "No schema changes, nothing to migrate" (last
   snapshot == `src/db/schema.ts`; valid `prevId` chain).
-- `drizzle-kit check` → clean.
+- `drizzle-kit check` → passes, with the expected warning about 0022's
+  preserved historical timestamp inversion.
 - Snapshot synthesis cross-verified: `s3→s4`, `s7→s8`, `s12→current` diffs all
   equal the expected migration effects, nothing more.
-- Journal/SQL/snapshot cross-check script: 13 journaled entries ↔ 13 `.sql`
-  ↔ 13 `_snapshot.json`, contiguous idx, monotonic `when`, tag==prefix.
+- `drizzle-kit check` verifies the contiguous journal and snapshot ancestry;
+  0022's known timestamp warning remains documented above. 0025 is a custom
+  additive migration, intentionally without a schema delta.
 - `npm run test:agents` (233 pass, incl. the two tests that read
   `drizzle/0003_session_memory.sql` and `drizzle/0010_peaceful_rocket_racer.sql`
   as fixtures), `npm run typecheck`, `npm run lint`, `npm run build` — all green.
@@ -152,9 +133,8 @@ Then `npm run db:migrate` is a no-op until the next generated migration.
   schema-state verified against adjacent real snapshots, but not byte-products
   of a historical `generate`. This only matters for archaeology (`squash`/`up`);
   `generate`/`migrate`/`check` are fully functional.
-- A database that ran *part* of the old chain but is not at the schema
-  end-state has no automated path: reconcile to `src/db/schema.ts` manually,
-  then seed per §4.
+- A database that ran only part of the old chain has no automated path:
+  reconcile it to `src/db/schema.ts` in staging before any production change.
 - `0015_account_aware_conversations.sql` aborts (before DDL) when existing
   conversations collide under `+/digits` canonicalization; resolve the listed
   duplicates and re-run `db:migrate`.

@@ -169,6 +169,20 @@
       "when": 1792458015715,
       "tag": "0023_curvy_makkari",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792464971371,
+      "tag": "0024_swift_luckman",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792465277982,
+      "tag": "0025_restore_hot_path_indexes",
+      "breakpoints": true
     }
   ]
 }

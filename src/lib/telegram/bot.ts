@@ -227,7 +227,7 @@ export function getTelegramConfigFromEnv(): TelegramConfig {
 import { db } from "@/db";
 import { eq } from "drizzle-orm";
 import { agentConfig } from "@/db/schema";
-import { decrypt, decryptIfEncrypted } from "@/lib/encryption";
+import { decrypt, decryptIfEncrypted, encrypt, isEncrypted } from "@/lib/encryption";
 
 /**
  * Get Telegram config from database (with encrypted token)
@@ -247,14 +247,28 @@ export async function getTelegramConfigFromDB(): Promise<TelegramConfig> {
       const decryptedToken = decrypt(config.telegramBotToken);
       // No default: an empty webhook token disables the route (401 on every
       // request) rather than leaving a publicly guessable one.
-      // Stored plaintext today — telegram_webhook_token is varchar(100) and
-      // cannot hold the ~187-char AES-GCM ciphertext (F10 rotation note:
-      // widening the column to text enables at-rest encryption, which this
-      // decryptIfEncrypted read already tolerates).
+      // Legacy rows may be plaintext. The schema now allows the AES-GCM
+      // ciphertext, so convert each legacy value on its first successful read
+      // instead of requiring an operator to re-save it manually.
       const webhookToken =
         decryptIfEncrypted(config.telegramWebhookToken) ||
         process.env.TELEGRAM_WEBHOOK_TOKEN ||
         "";
+      if (config.telegramWebhookToken && !isEncrypted(config.telegramWebhookToken)) {
+        try {
+          await db
+            .update(agentConfig)
+            .set({
+              telegramWebhookToken: encrypt(config.telegramWebhookToken),
+              updatedAt: new Date(),
+            })
+            .where(eq(agentConfig.id, config.id));
+        } catch (migrationError) {
+          // Keep the compatible read path available even if the opportunistic
+          // write fails; a later read will retry the migration.
+          console.error("[telegram] Could not migrate legacy webhook token:", migrationError);
+        }
+      }
       // Soporta múltiples IDs separados por coma: "123456, 789012, 345678"
       const allowedChatIds = config.telegramChatId
         ? config.telegramChatId

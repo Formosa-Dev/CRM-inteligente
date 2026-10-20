@@ -58,10 +58,9 @@ architecture roadmap §1 cites `src/lib/db/index.ts`; the real driver file is
    if a real install needs non-Neon Postgres).
 6. **i18n**: Spanish-first accepted for v0. String extraction deferred;
    revisit before the P2 de-branding work doubles its cost.
-7. **Drizzle journal**: broken (confirmed: `0001_handy_tombstone` in journal
-   has no SQL file; `0002_unique_phone.sql` exists but is not in the journal;
-   two `0002` files). Treat migrations as untrusted until repaired by A2;
-   no new migration may be generated until the journal is fixed.
+7. **Drizzle journal**: repaired and validated. The canonical operational
+   reference is [Migration Safety](./migration-safety.md); new migrations may
+   follow the normal generate → review → migrate path.
 
 ## 3. Execution spine (dependency graph)
 

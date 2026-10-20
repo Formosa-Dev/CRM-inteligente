@@ -41,9 +41,10 @@ driver — a Render Postgres, RDS, or Supabase URL will not connect (roadmap G4)
    check stays 500 until the `users` table exists, so doing this during the
    first build makes the deploy go green on the first try. If the deploy was
    already cancelled, see "First-deploy recovery" (§4).
-4. **First admin** — `ADMIN_EMAIL=… ADMIN_PASSWORD=… npm run db:seed` from the
-   same local clone (§5). This is the supported path today; the `/setup` UI
-   flow depends on a bootstrap fix that is still in flight.
+4. **First admin** — open `/setup` after the schema migration (§5). It creates
+   exactly one administrator with a single conditional INSERT. For unattended
+   provisioning, `ADMIN_EMAIL=… ADMIN_PASSWORD=… npm run db:seed` remains the
+   supported CLI alternative.
 5. **/admin/agent** — log in and configure business identity, AI provider,
    YCloud credentials, Cloudinary (§6).
 6. **YCloud console** — paste `https://<app>.onrender.com/api/whatsapp/webhook`
@@ -112,52 +113,11 @@ override it with the direct one for the migration run.
   **`db:push` is dev-only** — never run it against a real database.
 - Time it during/right after the first build: `/api/health` queries `users`
   and returns 500 until the tables exist.
-- **Known issue (roadmap G3):** the migration journal is damaged — a journaled
-  entry (`0001_handy_tombstone`) has no SQL file, and an unjournaled orphan
-  (`0002_unique_phone.sql`) sits next to the journaled `0002_woozy_valkyrie`.
-  A journal-repair slice (S6) is fixing this in parallel. Until it lands,
-  `db:migrate` may fail on a fresh database — if it does, use the emergency
-  sequence below.
-
-### Emergency: fresh-database-only SQL sequence
-
-> **Use only on a database that has never had the schema applied, and only
-> while the journal is being repaired.** This is not an upgrade path — never
-> run it against a database that already contains data, and stop using it
-> once `db:migrate` works on a fresh database.
-
-Apply the journaled SQL files in journal order, skipping the missing
-`0001_handy_tombstone` and **excluding `0002_unique_phone.sql`** — it is an
-unjournaled orphan that deletes duplicate `leads`, rewrites `orders.lead_id`,
-and re-adds a unique constraint that `0002_woozy_valkyrie.sql` already adds:
-
-```bash
-for f in \
-  drizzle/0000_peaceful_chamber.sql \
-  drizzle/0002_woozy_valkyrie.sql \
-  drizzle/0003_session_memory.sql \
-  drizzle/0004_business_ai_config.sql \
-  drizzle/0005_integration_secrets.sql \
-  drizzle/0006_catalog_alcohol_empanadas.sql \
-  drizzle/0007_web_order_redirect.sql \
-  drizzle/0008_lame_lord_tyger.sql \
-  drizzle/0009_needy_pestilence.sql \
-  drizzle/0010_peaceful_rocket_racer.sql \
-  drizzle/0011_add_pizzas_category.sql \
-  drizzle/0012_drop_product_line.sql; do
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f" || exit 1
-done
-```
-
-Requires the `psql` client and the **direct** Neon URL. Do **not** use a
-`drizzle/*.sql` glob — alphabetical order puts `0002_unique_phone.sql` before
-`0002_woozy_valkyrie.sql`, so it fails on `orders.lead_id` and would be
-destructive on any non-empty database.
-
-Files applied this way are not recorded in Drizzle's migrations table, so a
-later `db:migrate` may re-attempt them. The journal-repair work (S6) covers
-reconciling manually-applied state; until then treat the manual sequence as a
-one-way bootstrap for fresh databases.
+- The migration journal is repaired and validated for fresh installs. For an
+  existing database that was maintained with `db:push` rather than migrations,
+  follow the reconciliation preconditions in
+  [Migration Safety](./migration-safety.md#4-existing-databases) before running
+  `db:migrate`; do not apply the migration SQL files manually.
 
 ## 4. First-deploy recovery
 
@@ -176,13 +136,13 @@ then redeploy.
 
 ## 5. First admin
 
-**Working path today — `npm run db:seed`.** `/setup` is currently **not
-usable**: it wraps first-admin creation in `db.transaction(...)`, and the
-`neon-http` driver has no transaction support — the action throws. A parallel
-slice (S7/G4) rewrites it without a transaction; once that lands, `/setup`
-becomes the UI path below. Do not wait on it — seed works now.
+**Interactive path — `/setup`.** After applying the schema, open
+`https://<app>.onrender.com/setup`. It validates the fields and creates the
+first administrator with one atomic `INSERT … SELECT … WHERE NOT EXISTS`; the
+neon-http driver never opens a transaction. It works only while `users` is
+empty, then correctly returns to `/login` for every later visit.
 
-From a local clone with `npm install` done:
+**Automation path — `db:seed`.** Use this for scripted or headless installs:
 
 ```bash
 DATABASE_URL="postgresql://…" \
@@ -198,11 +158,6 @@ npm run db:seed
   insert through the app's own driver.
 - `SEED_DEMO=1` additionally loads the demo product catalog; skip it for a
   real install.
-
-**Once the bootstrap fix lands — `/setup`:** open
-`https://<app>.onrender.com/setup`; it creates the first admin account and
-only works while the `users` table is empty, then locks itself permanently.
-If it says the tables are missing → §3 wasn't applied yet.
 
 ## 6. Configure the instance — /admin/agent
 
@@ -233,7 +188,7 @@ precedence over env vars.
 ## 8. Post-install checklist
 
 - [ ] `curl https://<app>.onrender.com/api/health` → `200` with `"db": "connected"`
-- [ ] `db:seed` ran (or `/setup` once the fix lands) → `/login` → admin session works
+- [ ] `/setup` created the first admin (or `db:seed` ran) → `/login` → admin session works
 - [ ] Send a WhatsApp message to the YCloud number → it lands in `/admin/conversations`
 - [ ] Reply from the conversation view → the reply is actually sent
 - [ ] Upload an image in `/admin` → works (requires `CLOUDINARY_*` configured)
@@ -243,7 +198,9 @@ precedence over env vars.
 
 If inbound media already lives under `public/uploads/` (pre-Round-2 layout),
 move it once into `MEDIA_UPLOADS_DIR` so it is served through the session-gated
-`/api/media/[...path]` route and can live on the persistent disk:
+`/api/media/[...path]` route and can live on the persistent disk. The shipped
+Blueprint mounts a 1 GB disk at `/var/data` and sets
+`MEDIA_UPLOADS_DIR=/var/data/uploads`:
 
 ```bash
 # From the app directory — dry-run first (default; prints what would move):
@@ -266,23 +223,35 @@ node scripts/migrate-uploads.mjs --apply
 |---|---|
 | Health check 500 on first deploy | Tables don't exist yet — apply §3. If it stays 500, `DATABASE_URL` is wrong, Neon is suspended, or the URL isn't the Neon endpoint (non-Neon drivers unsupported). |
 | First deploy cancelled / "deploy failed" | Health check timed out (~15 min) before migrations ran. Run §3, then Manual Deploy → Deploy latest commit (§4). |
-| `/setup` errors or throws | Known defect: `neon-http` has no transaction support (G4/S7 pending). Use `db:seed` (§5). |
-| `/setup` says tables missing | `db:migrate` hasn't run — see §3. |
-| `/setup` redirects to `/login` | A user already exists — the page locked itself as designed (once the fix lands). |
-| `db:migrate` errors on `0001_handy_tombstone` / journal mismatch | Known journal defect (G3; repair in flight as S6). Use the fresh-DB-only emergency sequence in §3 — never the `drizzle/*.sql` glob. |
+| `/setup` says setup is already complete | A user already exists — this is the permanent one-admin bootstrap lock. Use `/login`. |
+| `/setup` says tables are missing | `db:migrate` has not run — see §3. |
+| `db:migrate` detects existing objects on an old `db:push` install | Stop and follow [Migration Safety](./migration-safety.md#4-existing-databases); never replay the SQL files manually. |
 | `db:migrate` or `psql` fails on the pooled URL | Pooled connections lack session state — switch to the direct (non-`-pooler`) Neon URL for migrations. |
 | Cron runs fail with 401 | The secret the job sends ≠ the app's secret. Cron routes expect `POST` + `Authorization: Bearer ${CRON_SECRET}` — that is what `render.yaml` already does. If you later set a different value in `/admin/agent` (DB wins over env), update the web `CRON_SECRET` env var to match — the cron jobs inherit it. The legacy `?key=` query param is only honored with `CRON_ALLOW_QUERY_KEY=1`. |
 | Webhook 401 / signature errors | `YCLOUD_WEBHOOK_SECRET` must match the value in the YCloud console and `/admin/agent`. |
 | Service sleeps / slow first webhook | `plan: free` spins down. Upgrade the web service to `starter`. |
 | Build OOM during `next build` | Blueprint already sets `NODE_OPTIONS=--max-old-space-size=8192`; raise it or use a larger plan if it persists. |
 
-### ⚠️ AUTH_SECRET is effectively permanent (G6)
+### ⚠️ AUTH_SECRET rotation is a credential re-entry operation
 
-`AUTH_SECRET` derives the AES-256-GCM key encrypting every credential stored
-in `agent_config`. **Rotating it invalidates all sessions AND makes every
-stored secret undecryptable** — you would have to re-enter every credential in
-`/admin/agent`. There is no re-encryption runbook yet; treat the value as
-fixed for the life of the instance and store it somewhere safe.
+`AUTH_SECRET` derives the AES-256-GCM key for credentials in `agent_config` and
+also invalidates active sessions. The application intentionally does **not** keep
+an old decryption key, so rotation cannot preserve ciphertext automatically.
+
+1. Inventory the current values from their source systems (AI provider, YCloud,
+   Cloudinary, Meta, Telegram and any DB-backed cron or escalation secret). Do
+   not copy encrypted database values: they cannot be used after rotation.
+2. Schedule a short maintenance window and generate a new value with
+   `openssl rand -base64 32`. Update `AUTH_SECRET` in Render, deploy, and
+   expect every session and DB-backed integration to be unavailable until
+   reconfigured.
+3. Sign in with the existing administrator password, re-enter each credential
+   through its owning admin page, and leave no required integration on a stale
+   value. Environment-only credentials remain available if unchanged.
+4. Verify login, each configured webhook, one outbound send, and the cron
+   authorization flow before reopening normal traffic. Retain the old secret
+   only in the approved secret manager until verification completes, then revoke
+   it; never place it in the repository or logs.
 
 ### ⚠️ Inbound media needs a Render persistent disk (G5)
 
@@ -297,5 +266,4 @@ disk. See §9 for the one-time move of files still under `public/uploads`.
 ## Next step
 
 Provider setup details live in `/admin/agent`; the full operator runbook is
-`docs/socialcrm/implementer-onboarding.md`. Upgrade and rotation runbooks are
-planned in `docs/socialcrm/self-hosted-product-roadmap.md` (Phase 5).
+`docs/socialcrm/implementer-onboarding.md`. Upgrade and rotation operational references live in this guide and `docs/socialcrm/migration-safety.md`.
