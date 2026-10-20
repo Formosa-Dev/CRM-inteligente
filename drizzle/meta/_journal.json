@@ -162,6 +162,13 @@
       "when": 1792442890957,
       "tag": "0022_hot_path_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792458015715,
+      "tag": "0023_curvy_makkari",
+      "breakpoints": true
     }
   ]
 }

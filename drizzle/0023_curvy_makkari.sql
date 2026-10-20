@@ -1,0 +1,1 @@
+ALTER TABLE "agent_config" ALTER COLUMN "telegram_webhook_token" SET DATA TYPE varchar(255);

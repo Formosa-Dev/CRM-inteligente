@@ -1,6 +1,6 @@
 {
   "id": "1cac25af-bf07-4638-8519-a418b8fe8c3a",
-  "prevId": "445f32d2-dab6-4a52-a94d-879c858e34ae",
+  "prevId": "dbff5b45-87cf-4bef-9881-243b26e28c8d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1404,6 +1404,12 @@
         "idx_chat_messages_platform_id": {
           "name": "idx_chat_messages_platform_id",
           "columns": [
+            {
+              "expression": "coalesce(\"channel_account_id\", -1)",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
             {
               "expression": "platform_message_id",
               "isExpression": false,

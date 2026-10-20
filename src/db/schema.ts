@@ -118,7 +118,7 @@ export const agentConfig = pgTable("agent_config", {
   // ─── Telegram Bot (CRUD) ────────────────────────────────────────────────
   telegramBotToken: text("telegram_bot_token"), // encrypted
   telegramChatId: varchar("telegram_chat_id", { length: 50 }),
-  telegramWebhookToken: varchar("telegram_webhook_token", { length: 100 }),
+  telegramWebhookToken: varchar("telegram_webhook_token", { length: 255 }),
   telegramEnabled: boolean("telegram_enabled").notNull().default(false),
   // ─── WhatsApp Agent (Editable desde UI) ────────────────────────
   whatsappSystemPrompt: text("whatsapp_system_prompt"),
