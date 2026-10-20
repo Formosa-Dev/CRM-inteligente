@@ -9,8 +9,10 @@ import { CatalogImage } from "@/components/products/catalog-image";
 import { CatalogDialog } from "@/components/storefront/catalog-dialog";
 import { EditorialHeading, editorialEase, editorialSpring, useEditorialMotion } from "@/components/storefront/motion";
 import { CheckoutForm } from "@/components/cart/checkout-form";
+import { CheckoutConfirmation } from "@/components/cart/checkout-confirmation";
 import { getCatalogProductImage } from "@/lib/catalog-images";
 import { cartKey, useCart } from "@/lib/cart/cart-context";
+import { buildCatalogIndex, fetchPublicCatalog, orderReviewSignature, reconcileCart, type CatalogIndex } from "@/lib/cart/catalog";
 import { useBusiness } from "@/lib/hooks/use-business";
 
 type Product = { id: number; name: string; price: string | null; promoPrice?: string | null; isPromo?: boolean; imageUrl: string | null; category: string; description: string | null; comingSoon?: boolean; stock?: number | null };
@@ -47,7 +49,6 @@ function priceOf(item: Selection) {
   const value = item.type === "promo" ? item.data.customPrice : item.data.isPromo && item.data.promoPrice != null ? item.data.promoPrice : item.data.price;
   const price = Number(value); return Number.isFinite(price) && price > 0 ? price : 0;
 }
-function available(item: Selection) { return priceOf(item) > 0 && (item.type === "promo" || (!item.data.comingSoon && item.data.stock !== 0)); }
 function imageOf(item: Selection) { return item.type === "product" ? getCatalogProductImage(item.data) : item.data.imageUrl; }
 
 function QuantityControl({ quantity, onAdd, onRemove, max = 99 }: { quantity: number; onAdd: () => void; onRemove: () => void; max?: number }) {
@@ -76,7 +77,7 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
   const [query, setQuery] = useState("");
   const [detail, setDetail] = useState<Selection | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
-  const { items: cartItems, addItem, removeItem, updateQuantity } = useCart();
+  const { items: cartItems, addItem, removeItem, updateQuantity, clearCart, receipt, dismissReceipt } = useCart();
 
   const selections = useMemo<Selection[]>(() => [...promos.map(data => ({ type: "promo" as const, data })), ...products.map(data => ({ type: "product" as const, data }))], [products, promos]);
   // Every canonical category stays visible (empty ones show the "preparando"
@@ -95,20 +96,40 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
   }, [requestedCategory]);
   const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   const visible = selections.filter(item => query.trim() ? normalize(`${item.data.name} ${item.data.description ?? ""}`).includes(normalize(query.trim())) : item.type === "promo" ? activeCategory === "promos" : item.data.category === activeCategory);
-  const resolvedCart = useMemo(() => cartItems.flatMap(line => {
-    const selected = selections.find(s => s.type === line.type && String(s.data.id) === line.product.id);
-    return selected ? [{ selected, quantity: line.quantity }] : [];
-  }), [cartItems, selections]);
-  const hasUnavailable = resolvedCart.length !== cartItems.length || resolvedCart.some(item => !available(item.selected));
-  const total = resolvedCart.reduce((sum, item) => sum + Math.round(priceOf(item.selected) * 100) * item.quantity, 0) / 100;
+  // The SSR catalog can go stale while the page is open; opening the cart
+  // re-fetches it and that fresher index wins over the props-derived one.
+  const [liveCatalog, setLiveCatalog] = useState<CatalogIndex | null>(null);
+  useEffect(() => {
+    if (!cartOpen) return;
+    let cancelled = false;
+    fetchPublicCatalog()
+      .then((data) => {
+        if (!cancelled) setLiveCatalog(buildCatalogIndex(data));
+      })
+      .catch(() => { /* keep the SSR catalog — a failed refresh never locks the cart */ });
+    return () => { cancelled = true; };
+  }, [cartOpen]);
+  const catalogIndex = useMemo(() => liveCatalog ?? buildCatalogIndex({ products, promos }), [liveCatalog, products, promos]);
+  // Reconcile persisted lines against the live catalog: anything archived,
+  // deactivated or over-stock stays listed as a removable row instead of
+  // silently dead-ending the cart (F1 — the cart must never soft-lock).
+  const reconciled = useMemo(() => reconcileCart(cartItems, catalogIndex), [cartItems, catalogIndex]);
+  const hasBlocked = reconciled.hasBlocked;
+  const total = reconciled.total;
   const count = cartItems.reduce((sum, line) => sum + line.quantity, 0);
+  // Availability and quantity caps come from the catalog index — a promo is
+  // only orderable while every component can still be fulfilled, matching the
+  // checks the server runs in priceCheckout.
+  const entryOf = (item: Selection) => catalogIndex.get(cartKey(item.type, item.data.id)) ?? null;
+  const canOrder = (item: Selection) => entryOf(item)?.available ?? false;
+  const maxOf = (item: Selection) => entryOf(item)?.maxQuantity ?? 99;
   const quantity = (item: Selection) => cartItems.find(line => line.type === item.type && line.product.id === String(item.data.id))?.quantity ?? 0;
   function updateItem(item: Selection, delta: number) {
     const current = quantity(item);
-    const max = item.type === "product" ? Math.min(99, item.data.stock ?? 99) : 99;
+    const max = maxOf(item);
     const key = cartKey(item.type, item.data.id);
     if (delta > 0) {
-      if (!available(item) || current >= max) return;
+      if (!canOrder(item) || current >= max) return;
       addItem({ id: String(item.data.id), name: item.data.name.trim(), price: priceOf(item) }, 1, { type: item.type, imageUrl: imageOf(item), toast: false });
     } else if (current > 1) {
       updateQuantity(key, current - 1);
@@ -116,7 +137,7 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
       removeItem(key);
     }
   }
-  const controls = (item: Selection) => available(item) ? <QuantityControl quantity={quantity(item)} onAdd={() => updateItem(item, 1)} onRemove={() => updateItem(item, -1)} max={item.type === "product" ? Math.min(99, item.data.stock ?? 99) : 99} /> : <span className="menu-unavailable">{item.type === "product" && item.data.comingSoon ? "Próximamente" : priceOf(item) ? "No disponible" : "Precio a consultar"}</span>;
+  const controls = (item: Selection) => canOrder(item) ? <QuantityControl quantity={quantity(item)} onAdd={() => updateItem(item, 1)} onRemove={() => updateItem(item, -1)} max={maxOf(item)} /> : <span className="menu-unavailable">{item.type === "product" && item.data.comingSoon ? "Próximamente" : priceOf(item) ? "No disponible" : "Precio a consultar"}</span>;
   const heading = query.trim() ? "Tu búsqueda" : CATEGORIES.find(c => c.key === activeCategory)?.label ?? "La carta";
   // Hero carousel: rotates through a randomized pool of products with photos.
   // First paint is deterministic (index 0) so SSR/CSR match; the first tick
@@ -138,7 +159,30 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
   }, [reduced, heroPaused, heroPool.length]);
   const hero = heroPool.length ? heroPool[heroIndex % heroPool.length] : null;
   const heroSelection: Selection | null = hero ? { type: "product", data: hero } : null;
-  const checkoutLines = resolvedCart.filter(item => available(item.selected)).map(item => ({ type: item.selected.type, id: item.selected.data.id, quantity: item.quantity }));
+  const checkoutLines = reconciled.checkoutLines;
+  // One-tap recovery: drop lines whose catalog entry is gone and clamp lines
+  // that now exceed the available stock.
+  function fixBlocked() {
+    for (const line of reconciled.lines) {
+      if (line.orderable) continue;
+      const key = cartKey(line.item.type, line.item.product.id);
+      if (line.status === "out_of_range" && line.entry) updateQuantity(key, line.entry.maxQuantity);
+      else removeItem(key);
+    }
+  }
+  // Before the POST, verify the cart on screen is still what the live catalog
+  // allows — a drift aborts the submit so the updated prices get reviewed.
+  async function revalidateCart() {
+    try {
+      const fresh = buildCatalogIndex(await fetchPublicCatalog());
+      const drift = orderReviewSignature(cartItems, catalogIndex) !== orderReviewSignature(cartItems, fresh);
+      setLiveCatalog(fresh);
+      return !drift;
+    } catch {
+      // Can't verify — don't block; the server re-prices and rejects conflicts.
+      return true;
+    }
+  }
 
   return <LayoutGroup id="digital-menu"><div className="digital-menu">
     <div className="paint-veil" aria-hidden="true" />
@@ -185,7 +229,7 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
       </section>
       <footer className="menu-editorial-footer"><span>{brandName}</span><p>{brandTagline}</p><Link href="/">Conocé nuestros espacios <ArrowUpRight size={16} /></Link></footer>
     </main>
-    <AnimatePresence>{count > 0 && <motion.button type="button" className="menu-floating-cart" onClick={() => setCartOpen(true)} initial={{ opacity: 0, y: reduced ? 0 : 80 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduced ? 0 : 80 }} transition={reduced ? { duration: 0 } : editorialSpring}><span><ShoppingBag size={19} />Tu pedido <b>{count}</b></span><strong>{money(total)}</strong><ArrowUpRight size={20} /></motion.button>}</AnimatePresence>
+    <AnimatePresence>{(count > 0 || receipt) && <motion.button type="button" className="menu-floating-cart" onClick={() => setCartOpen(true)} initial={{ opacity: 0, y: reduced ? 0 : 80 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: reduced ? 0 : 80 }} transition={reduced ? { duration: 0 } : editorialSpring}><span><ShoppingBag size={19} />{receipt ? "Pedido confirmado" : "Tu pedido"}{count > 0 && <b>{count}</b>}</span><strong>{receipt ? `#${receipt.orderId}` : money(total)}</strong><ArrowUpRight size={20} /></motion.button>}</AnimatePresence>
     <AnimatePresence>{detail && <CatalogDialog key="detail" title={detail.data.name} onDismiss={() => setDetail(null)} wide>
       <div className="menu-detail-layout"><div className="menu-detail-photo"><CatalogImage src={imageOf(detail)} alt={detail.data.name} contain sizes="(max-width: 760px) 100vw, 50vw" /></div><div className="menu-detail-content"><p className="menu-eyebrow">{detail.type === "promo" ? "Para compartir" : "De nuestra cocina"}</p><h2>{detail.data.name}</h2><p>{detail.data.description}</p>
         {detail.type === "promo" && <div className="menu-detail-includes">{detail.data.items?.map(i => <p key={i.productId}><span>{i.quantity}×</span> {i.productName}</p>)}</div>}
@@ -194,11 +238,21 @@ export function MenuDigitalClient({ products, promos }: { products: Product[]; p
     </CatalogDialog>}</AnimatePresence>
     <AnimatePresence>{cartOpen && <CatalogDialog key="cart" title="Tu pedido" onDismiss={() => setCartOpen(false)}>
       <div className="menu-cart-content"><p className="menu-eyebrow">Un buen momento empieza acá</p><h2>Tu pedido.</h2>
-        {!count ? <div className="menu-empty"><ShoppingBag size={30} /><p>¿Qué te gustaría probar?</p><button className="menu-add-button" onClick={() => setCartOpen(false)}>Explorar la carta</button></div> : <>
-          <div className="menu-cart-lines"><AnimatePresence initial={false}>{resolvedCart.map(({ selected, quantity: qty }) => <motion.div layout={!reduced} key={keyOf(selected)} className="menu-cart-line" exit={{ opacity: 0, height: 0, margin: 0, paddingTop: 0, paddingBottom: 0 }} transition={{ duration: reduced ? 0 : .2 }}><div className="menu-cart-thumb"><CatalogImage src={imageOf(selected)} alt={selected.data.name} sizes="64px" /></div><div className="menu-cart-line-copy"><h3>{selected.data.name}</h3><p>{money(priceOf(selected) * qty)}</p></div><QuantityControl quantity={qty} onAdd={() => updateItem(selected, 1)} onRemove={() => updateItem(selected, -1)} /></motion.div>)}</AnimatePresence></div>
-          {hasUnavailable && <p role="alert" className="checkout-error">Hay productos que ya no están disponibles. <button type="button" onClick={() => resolvedCart.filter(item => !available(item.selected)).forEach(item => removeItem(cartKey(item.selected.type, item.selected.data.id)))}>Quitarlos del pedido</button></p>}
+        {receipt ? <CheckoutConfirmation receipt={receipt} onDone={() => { dismissReceipt(); setCartOpen(false); }} /> : !count ? <div className="menu-empty"><ShoppingBag size={30} /><p>¿Qué te gustaría probar?</p><button className="menu-add-button" onClick={() => setCartOpen(false)}>Explorar la carta</button></div> : <>
+          <div className="menu-cart-lines"><AnimatePresence initial={false}>{reconciled.lines.map((line) => {
+            const key = cartKey(line.item.type, line.item.product.id);
+            const selected = line.orderable ? selections.find(s => s.type === line.item.type && String(s.data.id) === line.item.product.id) : undefined;
+            return <motion.div layout={!reduced} key={key} className="menu-cart-line" exit={{ opacity: 0, height: 0, margin: 0, paddingTop: 0, paddingBottom: 0 }} transition={{ duration: reduced ? 0 : .2 }}>
+              <div className="menu-cart-thumb"><CatalogImage src={selected ? imageOf(selected) : (line.item.imageUrl ?? null)} alt={line.item.product.name} sizes="64px" /></div>
+              <div className="menu-cart-line-copy"><h3>{line.item.product.name}</h3>{line.orderable ? <p>{money(line.effectivePrice * line.item.quantity)}{line.status === "price_changed" && <span> · antes {money(line.item.product.price * line.item.quantity)}</span>}</p> : <p>{line.status === "out_of_range" ? `Quedan ${line.entry?.maxQuantity ?? 0} disponibles` : "Ya no está disponible"}</p>}</div>
+              {line.orderable && selected ? <QuantityControl quantity={line.item.quantity} onAdd={() => updateItem(selected, 1)} onRemove={() => updateItem(selected, -1)} max={maxOf(selected)} /> : <button type="button" style={{ flexShrink: 0, fontSize: ".68rem", letterSpacing: ".14em", textTransform: "uppercase", color: "#c8b899", borderBottom: "1px solid #8b806d", paddingBottom: ".15rem" }} onClick={() => line.status === "out_of_range" && line.entry ? updateQuantity(key, line.entry.maxQuantity) : removeItem(key)}>{line.status === "out_of_range" ? "Ajustar" : "Quitar"}</button>}
+            </motion.div>;
+          })}</AnimatePresence></div>
+          {hasBlocked && <p role="alert" className="checkout-error">Hay productos que ya no están disponibles. <button type="button" onClick={fixBlocked}>Quitarlos del pedido</button></p>}
+          {reconciled.pricesChanged && <p role="status" style={{ fontSize: ".72rem", lineHeight: 1.6, color: "#e7d8bd", margin: ".9rem 0 0", padding: ".8rem", border: "1px solid #e7d8bd38", borderRadius: 4 }}>Actualizamos los precios con la carta actual. Revisá el total antes de confirmar.</p>}
           <div className="menu-cart-total"><div><span>Subtotal</span><small>Envío a coordinar</small></div><motion.strong key={total} initial={reduced ? false : { opacity: .3, y: 8 }} animate={{ opacity: 1, y: 0 }}>{money(total)}</motion.strong></div>
-          {!hasUnavailable && <CheckoutForm key={cartItems.map(line => `${cartKey(line.type, line.product.id)}:${line.quantity}`).join(",")} items={checkoutLines} />}
+          {!hasBlocked && <CheckoutForm key={checkoutLines.map(line => `${line.type}:${line.id}`).join(",")} items={checkoutLines} revalidateCart={revalidateCart} />}
+          <button type="button" className="menu-text-link" onClick={() => { clearCart(); setCartOpen(false); }}>Vaciar carrito</button>
         </>}
       </div>
     </CatalogDialog>}</AnimatePresence>

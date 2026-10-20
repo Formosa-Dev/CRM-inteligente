@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     try { revalidatePath("/admin/orders"); } catch { /* order is already stored */ }
     return Response.json(receipt, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    if (error instanceof CheckoutError) return Response.json({ error: error.message }, { status: error.status });
+    if (error instanceof CheckoutError) return Response.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });
     console.error("[checkout] Could not persist order", error instanceof Error ? `${error.name}: ${error.message}` : "UnknownError");
     return Response.json({ error: "No pudimos confirmar el registro. Reintentá desde este mismo pedido." }, { status: 503 });
   }

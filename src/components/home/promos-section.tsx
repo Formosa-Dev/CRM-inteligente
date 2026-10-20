@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo } from "react";
 import { motion } from "framer-motion";
 import { ArrowRight, Plus } from "lucide-react";
 import { CatalogImage } from "@/components/products/catalog-image";
 import { staggerContainer } from "@/lib/animation-variants";
 import { useEditorialMotion } from "@/components/storefront/motion";
-import { useCart } from "@/lib/cart/cart-context";
+import { cartKey, useCart } from "@/lib/cart/cart-context";
+import { buildCatalogIndex } from "@/lib/cart/catalog";
 
 export type LandingPromo = {
   id: number;
@@ -14,7 +16,14 @@ export type LandingPromo = {
   description: string | null;
   imageUrl: string | null;
   price: number | null;
-  items: { productId: number; productName: string; quantity: number }[];
+  items: {
+    productId: number;
+    productName: string;
+    quantity: number;
+    /** Live annotations from /api/promotions. */
+    available?: boolean;
+    stock?: number | null;
+  }[];
 };
 
 /**
@@ -24,13 +33,35 @@ export type LandingPromo = {
  */
 export function PromosSection({ promos }: { promos: LandingPromo[] }) {
   const { reveal } = useEditorialMotion();
-  const { addItem } = useCart();
+  const { addItem, items: cartItems } = useCart();
+  // Component availability/stock comes annotated on each item; the index turns
+  // it into a single orderable flag + max quantity per promo.
+  const catalogIndex = useMemo(
+    () =>
+      buildCatalogIndex({
+        products: [],
+        promos: promos.map((promo) => ({
+          id: promo.id,
+          name: promo.name,
+          customPrice: promo.price,
+          active: true,
+          items: promo.items,
+        })),
+      }),
+    [promos],
+  );
   if (promos.length === 0) return null;
 
+  const entryOf = (promo: LandingPromo) => catalogIndex.get(cartKey("promo", promo.id));
+  const inCart = (promo: LandingPromo) =>
+    cartItems.find((line) => line.type === "promo" && line.product.id === String(promo.id))
+      ?.quantity ?? 0;
+
   function addPromo(promo: LandingPromo) {
-    if (promo.price === null || promo.price <= 0) return;
+    const entry = entryOf(promo);
+    if (!entry?.available || inCart(promo) >= entry.maxQuantity) return;
     addItem(
-      { id: String(promo.id), name: promo.name.trim(), price: promo.price },
+      { id: String(promo.id), name: promo.name.trim(), price: promo.price ?? 0 },
       1,
       { type: "promo", imageUrl: promo.imageUrl },
     );
@@ -71,7 +102,11 @@ export function PromosSection({ promos }: { promos: LandingPromo[] }) {
           whileInView="visible"
           viewport={{ once: true, margin: "-60px" }}
         >
-          {promos.map((promo) => (
+          {promos.map((promo) => {
+            const entry = entryOf(promo);
+            const canOrder = !!entry?.available;
+            const atMax = canOrder && inCart(promo) >= (entry?.maxQuantity ?? 0);
+            return (
             <motion.article
               key={promo.id}
               variants={reveal}
@@ -99,7 +134,7 @@ export function PromosSection({ promos }: { promos: LandingPromo[] }) {
                   </p>
                 )}
                 {promo.items.length > 0 && (
-                  <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-foreground/45">
+                  <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-foreground/50">
                     {promo.items.map((item) => (
                       <li key={`${promo.id}-${item.productId}`}>
                         <span className="tabular-nums text-foreground/70">
@@ -117,14 +152,26 @@ export function PromosSection({ promos }: { promos: LandingPromo[] }) {
                       : "Consultar"}
                   </strong>
                   {promo.price && promo.price > 0 ? (
-                    <button
-                      type="button"
-                      onClick={() => addPromo(promo)}
-                      className="btn-gold inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-wider"
-                    >
-                      <Plus size={14} aria-hidden="true" />
-                      Agregar
-                    </button>
+                    canOrder ? (
+                      <button
+                        type="button"
+                        onClick={() => addPromo(promo)}
+                        disabled={atMax}
+                        aria-label={
+                          atMax
+                            ? `${promo.name} ya está en tu pedido`
+                            : `Agregar ${promo.name}`
+                        }
+                        className="btn-gold inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-wider disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Plus size={14} aria-hidden="true" />
+                        {atMax ? "En tu pedido" : "Agregar"}
+                      </button>
+                    ) : (
+                      <span className="text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        No disponible
+                      </span>
+                    )
                   ) : (
                     <Link
                       href="/carta-digital?category=promos"
@@ -137,7 +184,8 @@ export function PromosSection({ promos }: { promos: LandingPromo[] }) {
                 </div>
               </div>
             </motion.article>
-          ))}
+            );
+          })}
         </motion.div>
       </div>
     </section>

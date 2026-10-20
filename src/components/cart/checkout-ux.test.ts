@@ -121,19 +121,54 @@ test("only clearing after success rotates the id", () => {
 test("response mapping clears only on confirmed success", () => {
   assert.equal(interpretCheckoutOutcome(true, 200), "success");
   assert.equal(shouldClearAfter("success"), true);
-  for (const [status, expected] of [
-    [400, "rejected"],
-    [413, "rejected"],
-    [415, "rejected"],
-    [429, "rejected"],
-    [409, "ambiguous"],
-    [500, "ambiguous"],
-    [503, "ambiguous"],
+  for (const [status, code, expected] of [
+    [400, null, "rejected"],
+    // The origin check runs before anything is created — a 403 is a definite rejection.
+    [403, null, "rejected"],
+    [413, null, "rejected"],
+    [415, null, "rejected"],
+    [422, null, "rejected"],
+    [422, "catalog_changed", "rejected"],
+    [429, null, "rejected"],
+    // The 409 idempotency/replay path stays ambiguous — an order may exist.
+    [409, null, "ambiguous"],
+    [500, null, "ambiguous"],
+    [503, null, "ambiguous"],
+    // A missing WhatsApp destination rejects before any order is created.
+    [503, "no_destination", "rejected"],
   ] as const) {
-    const outcome = interpretCheckoutOutcome(false, status);
+    const outcome = interpretCheckoutOutcome(false, status, code);
     assert.equal(outcome, expected, `status ${status}`);
     assert.equal(shouldClearAfter(outcome), false, `status ${status} must not clear`);
   }
+});
+
+test("catalog conflicts are rejected with an update-the-cart message, never ambiguous", () => {
+  const outcome = interpretCheckoutOutcome(false, 422, "catalog_changed");
+  assert.equal(outcome, "rejected");
+  assert.equal(shouldClearAfter(outcome), false);
+  // The server tells the customer what changed; the fallback asks to fix the cart.
+  assert.equal(
+    checkoutFailureMessage(outcome, "Genesis no tiene disponibilidad para esa cantidad.", "catalog_changed"),
+    "Genesis no tiene disponibilidad para esa cantidad.",
+  );
+  assert.match(checkoutFailureMessage(outcome, null, "catalog_changed"), /Actualizá tu carrito/);
+  assert.doesNotMatch(checkoutFailureMessage(outcome, null, "catalog_changed"), /Verificá el estado/);
+});
+
+test("a missing WhatsApp destination tells the customer to consult, not to verify", () => {
+  const outcome = interpretCheckoutOutcome(false, 503, "no_destination");
+  assert.equal(outcome, "rejected");
+  assert.equal(shouldClearAfter(outcome), false);
+  const message = checkoutFailureMessage(outcome, null, "no_destination");
+  assert.match(message, /Consultanos por WhatsApp/);
+  assert.doesNotMatch(message, /Verificá el estado/);
+});
+
+test("a catalog conflict still carries the code at status 409", () => {
+  // Even if a proxy rewrites the status, an explicit catalog_changed code is
+  // always a pre-creation rejection — never the ambiguous replay path.
+  assert.equal(interpretCheckoutOutcome(false, 409, "catalog_changed"), "rejected");
 });
 
 test("a reused-confirmation 409 is reported as ambiguous, never auto-retried", () => {
@@ -171,22 +206,81 @@ test("checkout form issues exactly one POST and never schedules a retry", () => 
   assert.doesNotMatch(formSource, /setTimeout|setInterval|location\.reload/);
 });
 
-test("checkout form only clears on confirmed success, exactly once", () => {
-  assert.equal((formSource.match(/clearCart\(\)/g) ?? []).length, 1);
+test("checkout form only completes the order on confirmed success, exactly once", () => {
+  assert.equal((formSource.match(/completeOrder\(/g) ?? []).length, 1);
   assert.equal((formSource.match(/clearAttempt\(/g) ?? []).length, 1);
   const guard = formSource.indexOf("shouldClearAfter(outcome)");
-  const clear = formSource.indexOf("clearCart()");
+  const clear = formSource.indexOf("completeOrder(");
   assert.ok(guard !== -1 && clear !== -1 && guard < clear, "clear must be gated by success");
   const catchStart = formSource.lastIndexOf("} catch {");
   const catchBlock = formSource.slice(catchStart, formSource.indexOf("} finally {"));
   assert.ok(catchBlock.length > 0, "form must catch transport failures");
-  assert.doesNotMatch(catchBlock, /clearCart|clearAttempt/);
+  assert.doesNotMatch(catchBlock, /completeOrder|clearCart|clearAttempt/);
+});
+
+test("checkout form remounts on line-set changes only, not quantity edits", () => {
+  // Keying the form on `key:qty` remounted it on every stepper tap and wiped
+  // the customer's name/phone mid-checkout.
+  for (const file of [
+    "src/components/cart/cart-drawer.tsx",
+    "src/app/carta-digital/menu-digital-client.tsx",
+  ]) {
+    const src = readFileSync(file, "utf8");
+    const keyStart = src.indexOf("CheckoutForm key=");
+    assert.notEqual(keyStart, -1, `${file} must render CheckoutForm`);
+    const keyExpr = src.slice(keyStart, src.indexOf("items=", keyStart));
+    assert.doesNotMatch(keyExpr, /quantity/, `${file} key must use line identity only`);
+  }
+});
+
+test("checkout submits only after revalidating the cart against the live catalog", () => {
+  // A stale price snapshot must never reach /api/checkout unreviewed: both
+  // surfaces re-fetch the catalog when the cart opens and the form re-checks
+  // the reviewed signature right before posting.
+  assert.match(formSource, /revalidateCart\?: \(\) => Promise<boolean>/);
+  const call = formSource.indexOf("await revalidateCart()");
+  const post = formSource.indexOf('fetch("/api/checkout"');
+  assert.ok(call !== -1 && post !== -1 && call < post, "revalidate must run before the POST");
+  for (const file of [
+    "src/components/cart/cart-drawer.tsx",
+    "src/app/carta-digital/menu-digital-client.tsx",
+  ]) {
+    const src = readFileSync(file, "utf8");
+    assert.match(src, /fetchPublicCatalog/, `${file} must re-fetch the catalog`);
+    assert.match(src, /orderReviewSignature/, `${file} must compare the reviewed signature`);
+    assert.match(src, /revalidateCart=\{revalidateCart\}/, `${file} must gate the form`);
+  }
 });
 
 test("checkout form keeps one stable attempt id per signature", () => {
   assert.match(formSource, /normalizeAttemptSignature\(/);
   assert.match(formSource, /resolveAttempt\(/);
   assert.doesNotMatch(formSource, /crypto\.randomUUID|newRequestId\(/);
+});
+
+test("checkout form detects offline and forwards the server error code", () => {
+  // navigator.onLine gates both the pre-flight guard and the catch path so an
+  // offline customer never sees the ambiguous "maybe registered" message.
+  assert.match(formSource, /navigator\.onLine === false/);
+  assert.match(formSource, /interpretCheckoutOutcome\(response\.ok, response\.status, data\.code\)/);
+  assert.match(formSource, /checkoutFailureMessage\(outcome, data\.error, data\.code\)/);
+});
+
+test("the confirmation is lifted to the provider and rendered by cart parents", () => {
+  // Success empties the cart — if the confirmation lived in CheckoutForm's own
+  // state, the parents' empty-cart branch would unmount it before it paints.
+  const context = readFileSync("src/lib/cart/cart-context.tsx", "utf8");
+  assert.match(context, /completeOrder/);
+  assert.match(context, /setReceipt\(orderReceipt\)/);
+  assert.doesNotMatch(formSource, /if \(receipt\) return/, "form must not own the receipt surface");
+  for (const file of [
+    "src/components/cart/cart-drawer.tsx",
+    "src/app/carta-digital/menu-digital-client.tsx",
+  ]) {
+    const src = readFileSync(file, "utf8");
+    assert.match(src, /CheckoutConfirmation/, `${file} must render the lifted confirmation`);
+    assert.match(src, /dismissReceipt/, `${file} must be able to dismiss the receipt`);
+  }
 });
 
 test("cart clear persists synchronously so a redirect cannot resurrect it", () => {

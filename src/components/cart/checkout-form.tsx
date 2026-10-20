@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ArrowUpRight, LoaderCircle, Check } from "lucide-react";
+import { ArrowUpRight, LoaderCircle } from "lucide-react";
 import { useCart } from "@/lib/cart/cart-context";
 import {
   checkoutPhone,
@@ -23,24 +23,41 @@ import {
   type CheckoutAttempt,
 } from "./checkout-attempt";
 import {
+  CART_DRIFT_MESSAGE,
   checkoutFailureMessage,
   interpretCheckoutOutcome,
+  OFFLINE_MESSAGE,
   shouldClearAfter,
 } from "./checkout-outcome";
+import { useBusiness } from "@/lib/hooks/use-business";
 
 function attemptStorage(): AttemptStorage | null {
   return typeof window === "undefined" ? null : window.sessionStorage;
 }
 
-export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
-  const { clearCart } = useCart();
+export function CheckoutForm({
+  items,
+  revalidateCart,
+}: {
+  items: CheckoutLine[];
+  /**
+   * Re-reconciles the cart against a freshly fetched catalog right before the
+   * POST. Returning false means the cart being submitted drifted from what the
+   * customer last reviewed (price or availability changed) — the submit is
+   * aborted so the updated cart gets seen instead of a stale snapshot reaching
+   * /api/checkout unreviewed.
+   */
+  revalidateCart?: () => Promise<boolean>;
+}) {
+  const { completeOrder } = useCart();
+  const business = useBusiness();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [fulfillmentMode, setFulfillmentMode] = useState<FulfillmentMode>("delivery");
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [receipt, setReceipt] = useState<CheckoutReceipt | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   // Hard guards: one request at a time, one terminal success per attempt.
   const inFlight = useRef(false);
   const completed = useRef(false);
@@ -59,6 +76,13 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
     event.preventDefault();
     if (inFlight.current || completed.current || !items.length) return;
     setError("");
+    setErrorCode(null);
+    // Offline pre-flight: nothing reaches the server, so this can never be an
+    // ambiguous "maybe registered" failure — tell the customer to reconnect.
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setError(OFFLINE_MESSAGE);
+      return;
+    }
     const fulfillmentError = validateFulfillment(fulfillmentMode, deliveryAddress);
     if (fulfillmentError) {
       setError(fulfillmentError);
@@ -87,6 +111,17 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
     inFlight.current = true;
     setBusy(true);
     try {
+      if (revalidateCart) {
+        try {
+          if (!(await revalidateCart())) {
+            setError(CART_DRIFT_MESSAGE);
+            return;
+          }
+        } catch {
+          // The catalog could not be re-fetched — proceed anyway: the server
+          // still re-prices and rejects catalog conflicts before persisting.
+        }
+      }
       const response = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -95,52 +130,43 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
           ...fulfillmentPayload(fulfillmentMode, deliveryAddress),
         }),
       });
-      let data: Partial<CheckoutReceipt> & { error?: string } = {};
+      let data: Partial<CheckoutReceipt> & { error?: string; code?: string } = {};
       try {
         data = await response.json();
       } catch {
         data = {};
       }
-      const outcome = interpretCheckoutOutcome(response.ok, response.status);
+      const outcome = interpretCheckoutOutcome(response.ok, response.status, data.code);
       if (!shouldClearAfter(outcome)) {
         // Keep the stable attempt id and the cart. No automatic retry.
-        setError(checkoutFailureMessage(outcome, data.error));
+        setErrorCode(typeof data.code === "string" ? data.code : null);
+        setError(checkoutFailureMessage(outcome, data.error, data.code));
         return;
       }
       if (completed.current) return;
       completed.current = true;
       clearAttempt(attemptStorage());
       attemptRef.current = null;
-      clearCart();
-      setReceipt(data as CheckoutReceipt);
+      // The receipt is lifted to the provider in the same commit that empties
+      // the cart, so the confirmation survives the cart-lines branch unmounting.
+      completeOrder(data as CheckoutReceipt);
       // The business URL is only opened after the server confirmed the order.
       if (typeof data.whatsappUrl === "string" && data.whatsappUrl) {
         window.location.assign(data.whatsappUrl);
       }
     } catch {
-      // Network error: the request may have reached the server. Preserve the
-      // cart, keep the id, and ask the customer to verify before retrying.
-      setError(checkoutFailureMessage("ambiguous"));
+      // Offline mid-request can never have created an order. Any other network
+      // failure may have reached the server: preserve the cart, keep the id,
+      // and ask the customer to verify before retrying.
+      setError(
+        typeof navigator !== "undefined" && navigator.onLine === false
+          ? OFFLINE_MESSAGE
+          : checkoutFailureMessage("ambiguous"),
+      );
     } finally {
       inFlight.current = false;
       setBusy(false);
     }
-  }
-
-  if (receipt) {
-    return (
-      <div className="checkout-confirmation" role="status">
-        <Check size={20} />
-        <strong>Pedido #{receipt.orderId} registrado</strong>
-        <p>
-          Subtotal confirmado: ${receipt.total.toLocaleString("es-AR")}. Enviá el mensaje para
-          coordinar {fulfillmentMode === "pickup" ? "el retiro" : "la entrega"} y el pago.
-        </p>
-        <a className="menu-whatsapp-button" href={receipt.whatsappUrl}>
-          Continuar en WhatsApp <ArrowUpRight size={18} />
-        </a>
-      </div>
-    );
   }
 
   return (
@@ -224,7 +250,17 @@ export function CheckoutForm({ items }: { items: CheckoutLine[] }) {
 
       {error && (
         <p className="checkout-error" role="alert">
-          {error}
+          {error}{" "}
+          {errorCode === "no_destination" && business?.whatsappPhone ? (
+            <a
+              href={`https://wa.me/${business.whatsappPhone}`}
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2"
+            >
+              Escribinos por WhatsApp
+            </a>
+          ) : null}
         </p>
       )}
       <button className="menu-whatsapp-button" type="submit" disabled={busy || !items.length}>

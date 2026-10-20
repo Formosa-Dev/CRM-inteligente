@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { type CheckoutInput, type CheckoutReceipt, type PricedItem, priceCheckout, WEB_ORDER_TAG, webOrderKey, webReference } from "./contract";
 import { createDbCheckoutDeps, type CheckoutDeps, type OrderRow } from "./store";
 
-export class CheckoutError extends Error { constructor(message: string, public status = 409) { super(message); } }
+export class CheckoutError extends Error { constructor(message: string, public status = 409, public code?: string) { super(message); } }
 
 function buildReceipt(order: OrderRow, input: CheckoutInput, fingerprint: string, destination: string): CheckoutReceipt {
   // A requestId is bound to its exact payload+phone; anything else is a replay.
@@ -39,7 +39,7 @@ export async function submitCheckout(input: CheckoutInput, deps: CheckoutDeps = 
   const key = webOrderKey(input.requestId);
   const fingerprint = `web-payload:${createHash("sha256").update(JSON.stringify({ ...input, items: [...input.items].sort((a, b) => `${a.type}:${a.id}`.localeCompare(`${b.type}:${b.id}`)) })).digest("hex")}`;
   const destination = ((await deps.getDestinationPhone()) || process.env.WHATSAPP_PHONE_NUMBER || "").replace(/\D/g, "");
-  if (!/^\d{10,15}$/.test(destination)) throw new CheckoutError("No podemos abrir WhatsApp en este momento. Intentá nuevamente más tarde.", 503);
+  if (!/^\d{10,15}$/.test(destination)) throw new CheckoutError("No pudimos generar el enlace de WhatsApp. Consultanos por WhatsApp con tu pedido.", 503, "no_destination");
   const noBurgers = await deps.getBurgersUnavailable();
   const address = input.fulfillmentMode === "delivery" ? (input.deliveryAddress?.trim() || null) : null;
   const reference = webReference(input.requestId);
@@ -50,8 +50,10 @@ export async function submitCheckout(input: CheckoutInput, deps: CheckoutDeps = 
 
   const [catalog, offers] = await Promise.all([deps.listProducts(), deps.listPromos()]);
   let priced: ReturnType<typeof priceCheckout>;
+  // Catalog conflicts (gone/archived/sold-out) reject before anything is
+  // persisted — they are never the ambiguous 409 idempotency path.
   try { priced = priceCheckout(input.items, catalog, offers, noBurgers); }
-  catch (error) { throw new CheckoutError(error instanceof Error ? error.message : "Revisá los productos."); }
+  catch (error) { throw new CheckoutError(error instanceof Error ? error.message : "Revisá los productos.", 422, "catalog_changed"); }
 
   // Conditional stock decrement. `stock IS NULL` means unlimited — no reservation.
   const reserved: Array<[number, number]> = [];
@@ -65,7 +67,7 @@ export async function submitCheckout(input: CheckoutInput, deps: CheckoutDeps = 
       const updated = await deps.reserveStock(productId, qty);
       if (updated === 0) {
         const p = await deps.getProductStock(productId);
-        if (p && p.stock !== null) throw new CheckoutError(`${p.name} no tiene disponibilidad para esa cantidad.`, 409);
+        if (p && p.stock !== null) throw new CheckoutError(`${p.name} no tiene disponibilidad para esa cantidad.`, 422, "catalog_changed");
       } else {
         reserved.push([productId, qty]);
       }

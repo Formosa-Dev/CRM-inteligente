@@ -3,18 +3,33 @@
  *
  * "success"   — the order is persisted; clear cart + stored attempt exactly once.
  * "rejected"  — the server rejected before creating anything (bad payload,
- *               oversized body, rate limit). Cart is kept and a manual retry
- *               with the SAME attempt id is safe.
- * "ambiguous" — the request may already have created an order (409 conflict,
- *               server/proxy error, or a lost response). The cart is preserved,
- *               the attempt id stays stable, and no automatic retry happens:
- *               the customer is told to verify the order status first.
+ *               catalog drift, oversized body, rate limit, disallowed origin).
+ *               Cart is kept and a manual retry with the SAME attempt id is safe.
+ * "ambiguous" — the request may already have created an order (409 conflict on
+ *               the idempotency path, server/proxy error, or a lost response).
+ *               The cart is preserved, the attempt id stays stable, and no
+ *               automatic retry happens: the customer is told to verify the
+ *               order status first.
  */
 export type CheckoutOutcome = "success" | "rejected" | "ambiguous";
 
-export function interpretCheckoutOutcome(ok: boolean, status: number): CheckoutOutcome {
+export function interpretCheckoutOutcome(
+  ok: boolean,
+  status: number,
+  code?: string | null,
+): CheckoutOutcome {
   if (ok) return "success";
-  if (status === 400 || status === 413 || status === 415 || status === 429) {
+  // Server-tagged pre-creation rejections: nothing was persisted, so the cart
+  // stays editable and the message can tell the customer how to fix it.
+  if (code === "catalog_changed" || code === "no_destination") return "rejected";
+  if (
+    status === 400 ||
+    status === 403 ||
+    status === 413 ||
+    status === 415 ||
+    status === 422 ||
+    status === 429
+  ) {
     return "rejected";
   }
   return "ambiguous";
@@ -31,14 +46,35 @@ export const AMBIGUOUS_ORDER_MESSAGE =
 export const VERIFY_STATUS_HINT =
   "Verificá el estado del pedido antes de volver a confirmar.";
 
+export const CATALOG_CHANGED_FALLBACK =
+  "Actualizá tu carrito: cambió la disponibilidad o el precio de algún producto.";
+
+export const OFFLINE_MESSAGE =
+  "Sin conexión. Revisá tu internet y reintentá desde este mismo pedido.";
+
+export const NO_DESTINATION_MESSAGE =
+  "No pudimos iniciar el pedido desde el sitio. Consultanos por WhatsApp y lo armamos juntos.";
+
+export const CART_DRIFT_MESSAGE =
+  "Actualizamos tu pedido: cambiaron precios o disponibilidad. Revisá el total antes de confirmar.";
+
 const REUSED_CONFIRMATION = /ya fue usada/i;
 
 export function checkoutFailureMessage(
   outcome: CheckoutOutcome,
   serverError?: string | null,
+  code?: string | null,
 ): string {
   const error = (serverError ?? "").trim();
-  if (outcome === "rejected") return error || "Revisá los datos del pedido e intentá de nuevo.";
+  // A missing WhatsApp destination can never have created an order — point the
+  // customer at the business chat instead of the verify-status warning.
+  if (code === "no_destination") return error || NO_DESTINATION_MESSAGE;
+  if (outcome === "rejected") {
+    if (error) return error;
+    return code === "catalog_changed"
+      ? CATALOG_CHANGED_FALLBACK
+      : "Revisá los datos del pedido e intentá de nuevo.";
+  }
   if (REUSED_CONFIRMATION.test(error)) return AMBIGUOUS_ORDER_MESSAGE;
   return `${error || "No pudimos confirmar el pedido."} ${VERIFY_STATUS_HINT}`.trim();
 }

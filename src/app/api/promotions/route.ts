@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { promotions } from "@/db/schema";
+import { products, promotions } from "@/db/schema";
 import { checkRateLimit, clientIpFromRequest } from "@/lib/infra/rate-limit";
 
 // ─── GET /api/promotions ────────────────────────────────────────────────────
@@ -38,7 +38,44 @@ export async function GET(req: NextRequest) {
       .where(activeOnly ? eq(promotions.active, true) : undefined)
       .orderBy(desc(promotions.createdAt));
 
-    return NextResponse.json(rows);
+    // Annotate each component with live availability/stock so storefronts can
+    // disable promos whose parts can no longer be fulfilled — checkout still
+    // re-validates everything server-side.
+    const componentIds = [
+      ...new Set(
+        rows.flatMap((row) => (row.items ?? []).map((item) => item.productId)),
+      ),
+    ];
+    const components = componentIds.length
+      ? await db
+          .select({
+            id: products.id,
+            available: products.available,
+            comingSoon: products.comingSoon,
+            stock: products.stock,
+          })
+          .from(products)
+          .where(inArray(products.id, componentIds))
+      : [];
+    const componentsById = new Map(components.map((component) => [component.id, component]));
+
+    return NextResponse.json(
+      rows.map((row) => ({
+        ...row,
+        items: (row.items ?? []).map((item) => {
+          const component = componentsById.get(item.productId);
+          return {
+            ...item,
+            available:
+              !!component &&
+              component.available &&
+              !component.comingSoon &&
+              component.stock !== 0,
+            stock: component?.stock ?? null,
+          };
+        }),
+      })),
+    );
   } catch (err) {
     console.error("[GET /api/promotions]", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
