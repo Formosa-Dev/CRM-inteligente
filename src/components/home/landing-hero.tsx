@@ -31,7 +31,7 @@ export function LandingHero() {
           variants={heroChild}
           className="inline-block rounded-full border border-primary/30 bg-primary/10 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.3em] text-primary"
         >
-          Hamburguesas Artesanales Premium
+          Productos Artesanales Premium
         </motion.span>
 
         <TextReveal
@@ -55,7 +55,7 @@ export function LandingHero() {
           className="max-w-xl text-lg font-light leading-relaxed text-foreground/70 sm:text-xl"
         >
           {business?.tagline ||
-            "Sabores únicos, ingredientes de primera. Cada mordida es una experiencia que no vas a olvidar."}
+            "Sabores únicos, ingredientes de primera. Cada pedido es una experiencia que no vas a olvidar."}
         </motion.p>
 
         <motion.div

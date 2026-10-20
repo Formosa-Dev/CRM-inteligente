@@ -10,15 +10,15 @@ import { useBusiness } from "@/lib/hooks/use-business";
 const PHOTOS = [
   {
     src: "/assets/images/clientes/0e8b8f68-b346-4eba-9425-dd8aeb190717.jpg",
-    alt: "Dos hamburguesas vista desde arriba",
+    alt: "Productos vista desde arriba",
   },
   {
     src: "/assets/images/clientes/141af1da-1d38-47a3-ab71-9ce2590ec6ee.jpg",
-    alt: "Hamburguesa con palillo",
+    alt: "Producto destacado",
   },
   {
     src: "/assets/images/clientes/5dd2b730-fe87-4ccf-abe5-67b1b06900c8.jpg",
-    alt: "Hamburguesas, papas fritas y Coca-Cola",
+    alt: "Productos y bebidas",
   },
   {
     src: "/assets/images/clientes/779de895-c46b-448a-83db-ecf9479af136.jpg",

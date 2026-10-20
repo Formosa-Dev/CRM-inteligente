@@ -15,8 +15,8 @@ import { Marquee } from "@/components/motion/marquee";
 import { useBusiness } from "@/lib/hooks/use-business";
 
 const MARQUEE_ITEMS = [
-  "Hamburguesas artesanales",
-  "Pan de elaboración propia",
+  "Productos artesanales",
+  "Elaboración propia",
   "Ingredientes frescos",
   "Hecho al momento",
   "Envío a domicilio",
@@ -24,8 +24,8 @@ const MARQUEE_ITEMS = [
 
 const STATS = [
   { value: "100%", label: "Ingredientes frescos" },
-  { value: "6+", label: "Variedades de hamburguesa" },
-  { value: "Pan", label: "Artesanal propio" },
+  { value: "6+", label: "Variedades de producto" },
+  { value: "Propia", label: "Elaboración artesanal" },
   { value: "♥", label: "Hecho con amor" },
 ];
 
@@ -80,14 +80,14 @@ export default function HomePage() {
                   Sobre Nosotros
                 </span>
                 <h2 className="font-heading text-3xl font-black leading-tight text-foreground sm:text-4xl">
-                  Más que una <em className="marker-gold">hamburguesa</em>
+                  Más que una <em className="marker-gold">producto</em>
                 </h2>
                 <p className="leading-relaxed text-foreground/65">
                   {business?.description ||
-                    `En ${business?.name ?? "nuestra cocina"} creemos que cada ingrediente importa. Trabajamos con productores locales, elaboramos nuestro propio pan y preparamos cada hamburguesa al momento. Sin compromiso. Sin atajos.`}
+                    `En ${business?.name ?? "nuestro negocio"} creemos que cada ingrediente importa. Trabajamos con productores locales, elaboramos nuestros propios productos y preparamos cada pedido al momento. Sin compromiso. Sin atajos.`}
                 </p>
                 <p className="leading-relaxed text-foreground/65">
-                  También proveemos pan artesanal a restaurantes y cocinas que, como nosotros, no se conforman con lo mediocre.
+                  También proveemos productos artesanales a comercios y cocinas que, como nosotros, no se conforman con lo mediocre.
                 </p>
                 <div className="mt-2 flex flex-wrap gap-4">
                   <Link
@@ -119,7 +119,7 @@ export default function HomePage() {
         <div className="mx-auto max-w-2xl text-center">
           <span className="mx-auto mb-6 block h-px w-24 bg-gradient-to-br from-gold via-gold-bright to-gold-ember" />
           <p className="font-heading text-xl font-black leading-snug text-foreground sm:text-2xl">
-            &quot;Cada mordida cuenta una historia.{" "}
+            &quot;Cada pedido cuenta una historia.{" "}
             <span className="text-primary">
               La <em>nuestra</em> empieza con ingredientes reales.&quot;
             </span>

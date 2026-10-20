@@ -10,26 +10,26 @@ export interface Campaign {
 export const CAMPAIGNS: Campaign[] = [
   {
     slug: "hamburguesas",
-    name: "Menu Hamburguesas (Orgánico)",
-    whatsappMessage: "Hola! Me gustaría hacer un pedido de hamburguesas",
+    name: "Menú principal (Orgánico)",
+    whatsappMessage: "Hola! Me gustaría hacer un pedido",
     active: true,
   },
   {
     slug: "mayorista",
-    name: "Pan Mayorista (Orgánico)",
-    whatsappMessage: "Hola! Me interesa información sobre pan mayorista",
+    name: "Venta mayorista (Orgánico)",
+    whatsappMessage: "Hola! Me interesa información sobre venta mayorista",
     active: true,
   },
   {
     slug: "promo-muzza",
-    name: "Promo Muzzarella - Meta Ads",
-    whatsappMessage: "Hola! Vi la promo de muzza y me interesa",
+    name: "Promo destacada - Meta Ads",
+    whatsappMessage: "Hola! Vi la promo y me interesa",
     active: true,
   },
   {
     slug: "2x1-empanadas",
-    name: "2x1 Empanadas - Meta Ads",
-    whatsappMessage: "Hola! Vi la promo de 2x1 empanadas",
+    name: "Promo 2x1 - Meta Ads",
+    whatsappMessage: "Hola! Vi la promo 2x1 y me interesa",
     active: true,
   },
 ];
@@ -55,15 +55,15 @@ export const LINEA_CARNE: Product[] = [
     name: "La Clásica",
     price: null,
     ingredients: "Próximamente — receta secreta en desarrollo",
-    emoji: "🥩",
+    emoji: "🛍️",
     comingSoon: true,
   },
   {
     id: "carne-2",
     name: "La Doble",
     price: null,
-    ingredients: "Próximamente — doble burguer de autor",
-    emoji: "🍔",
+    ingredients: "Próximamente — versión doble de autor",
+    emoji: "🛍️",
     comingSoon: true,
   },
   {

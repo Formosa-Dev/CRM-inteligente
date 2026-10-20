@@ -28,9 +28,9 @@ interface PromoPageClientProps {
 }
 
 const trustItems = [
-  { icon: "🏆", label: "Calidad Artesanal" },
+  { icon: "🏆", label: "Calidad Premium" },
   { icon: "⚡", label: "Respuesta Inmediata" },
-  { icon: "❤️", label: "100% Sin Conservantes" },
+  { icon: "❤️", label: "Elaboración Propia" },
 ];
 
 export function PromoPageClient({ slug, campaign, meta }: PromoPageClientProps) {

@@ -42,7 +42,7 @@ export function Footer() {
                 Carta Digital
               </Link>
               <Link href="/pan-mayorista" className="text-sm text-foreground/60 hover:text-gold-light transition-all duration-200">
-                Pan Mayorista
+                Mayorista
               </Link>
             </nav>
           </div>

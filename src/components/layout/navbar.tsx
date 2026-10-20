@@ -21,12 +21,12 @@ import { useBusiness } from "@/lib/hooks/use-business";
 const NAV_LINKS = [
   { href: "/", label: "Inicio" },
   { href: "/carta-digital", label: "Carta Digital" },
-  { href: "/carta-digital?category=hamburguesa", label: "Hamburguesas" },
-  { href: "/carta-digital?category=pizzas", label: "Pizzas" },
-  { href: "/carta-digital?category=empanadas", label: "Empanadas" },
-  { href: "/carta-digital?category=alcohol", label: "Alcohol" },
-  { href: "/carta-digital?category=tragos_vip", label: "Tragos VIP" },
-  { href: "/pan-mayorista", label: "Pan Mayorista" },
+  { href: "/carta-digital?category=hamburguesa", label: "Productos" },
+  { href: "/carta-digital?category=pizzas", label: "Especialidades" },
+  { href: "/carta-digital?category=empanadas", label: "Clásicos" },
+  { href: "/carta-digital?category=alcohol", label: "Alcohólicas" },
+  { href: "/carta-digital?category=tragos_vip", label: "Premium" },
+  { href: "/pan-mayorista", label: "Mayorista" },
 ];
 
 export function Navbar() {
