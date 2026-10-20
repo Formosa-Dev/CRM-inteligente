@@ -580,14 +580,21 @@ test("webhook delegates signature verify + envelope parsing to the provider adap
 
   // Signature verification stays first and goes through the provider
   // boundary — the route no longer calls the signature module directly.
-  const verify = post.indexOf("provider.verifyWebhook(");
-  const parse = post.indexOf("provider.parseWebhook(");
-  const dispatch = post.indexOf("handleNormalizedEvent(event)");
-  assert.ok(verify !== -1, "POST must verify the signature via the provider");
-  assert.ok(parse !== -1, "POST must parse the envelope via the provider");
+  // F7 moved verify+parse into verifyAndResolveEvents so the account named
+  // by each event is resolved before processing (per-account secret check);
+  // the helper runs provider.verifyWebhook then provider.parseWebhook, so
+  // the ordering contract below is asserted on the helper's own body.
+  const verifyHelper = post.indexOf("verifyAndResolveEvents(provider,");
+  const dispatch = post.indexOf("handleNormalizedEvent(event");
+  assert.ok(verifyHelper !== -1, "POST must verify the signature via the provider");
   assert.ok(dispatch !== -1, "POST must dispatch normalized events");
+  assert.ok(verifyHelper < dispatch, "signature verification must run before per-event handling");
+
+  const helper = readFileSync("src/lib/messaging/ingress.ts", "utf8");
+  const verify = helper.indexOf("provider.verifyWebhook(");
+  const parse = helper.indexOf("provider.parseWebhook(");
+  assert.ok(verify !== -1 && parse !== -1, "helper must verify + parse via the provider");
   assert.ok(verify < parse, "signature verification must run before parsing");
-  assert.ok(parse < dispatch, "parsing must run before per-event handling");
 
   // Envelope-shape reads belong to the adapter now: POST must not pick
   // YCloud keys or event types out of the raw payload itself.
