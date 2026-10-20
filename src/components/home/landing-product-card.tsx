@@ -20,13 +20,13 @@ export type LandingProduct = {
 };
 
 const CATEGORY_EMOJI: Record<string, string> = {
-  hamburguesa: "🍔",
-  acompanamiento: "🍟",
-  empanadas: "🥟",
-  bebidas: "🥤",
-  pan_mayorista: "🍞",
-  tragos_vip: "🍹",
-  alcohol: "🍺",
+  hamburguesa: "🛍️",
+  acompanamiento: "🛍️",
+  empanadas: "🛍️",
+  bebidas: "🛍️",
+  pan_mayorista: "🛍️",
+  tragos_vip: "🛍️",
+  alcohol: "🛍️",
 };
 
 /**

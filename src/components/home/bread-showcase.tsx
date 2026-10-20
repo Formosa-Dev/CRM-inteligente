@@ -8,9 +8,9 @@ import { reducedMotionVariant } from "@/lib/animation-variants";
 import { WhatsAppCTA } from "@/components/attribution/whatsapp-cta";
 
 const BREAD_FEATURES = [
-  "Pan de muzzarella artesanal",
-  "Pan con semillas negro",
-  "Pan tipo brioche largo",
+  "Elaboración artesanal",
+  "Materias primas seleccionadas",
+  "Formatos para cada negocio",
 ];
 
 export function BreadShowcase() {
@@ -44,7 +44,7 @@ export function BreadShowcase() {
             variants={itemVariants}
             className="self-start text-xs font-semibold uppercase tracking-[0.3em] px-4 py-1.5 rounded-full border border-primary/40 text-primary bg-primary/[0.06]"
           >
-            Pan Artesanal
+            Elaboración Artesanal
           </motion.span>
 
           {/* Heading */}
@@ -52,12 +52,12 @@ export function BreadShowcase() {
             variants={itemVariants}
             className="text-4xl sm:text-5xl font-black leading-tight font-heading text-gold-gradient"
           >
-            Pan al Por Mayor
+            Al por Mayor
           </motion.h2>
 
           {/* Description */}
           <motion.p variants={itemVariants} className="text-foreground/65 leading-relaxed">
-            Proveemos pan artesanal a restaurantes, rotiserías y negocios gastronómicos que no se conforman con lo mediocre. Elaboración propia, ingredientes frescos, entrega directa.
+            Proveemos productos artesanales a comercios y negocios gastronómicos que no se conforman con lo mediocre. Elaboración propia, ingredientes frescos, entrega directa.
           </motion.p>
 
           {/* Features */}
@@ -77,8 +77,8 @@ export function BreadShowcase() {
           {/* CTA */}
           <motion.div variants={itemVariants} className="mt-2">
             <WhatsAppCTA
-              campaignSlug="pan-mayorista-landing"
-              message="Hola! Me interesa información sobre pan mayorista"
+              campaignSlug="mayorista-landing"
+              message="Hola! Me interesa información sobre venta mayorista"
               label="Consultar Precios"
               className="btn-gold inline-flex items-center justify-center gap-2 px-8 py-4 text-sm font-bold uppercase tracking-widest"
             />
@@ -109,7 +109,7 @@ export function BreadShowcase() {
           >
             <Image
               src="/assets/images/pan-mayorista/097707a3-f17b-4399-a6d0-66f6457ee64a.jpg"
-              alt="Panes redondos en bandeja"
+              alt="Productos artesanales en bandeja"
               fill
               className="object-cover"
               sizes="(max-width: 768px) 100vw, 50vw"
@@ -135,7 +135,7 @@ export function BreadShowcase() {
           >
             <Image
               src="/assets/images/pan-mayorista/5ee3b05e-fb3b-4bbc-a17f-67ceaeb509eb.jpg"
-              alt="Pancitos con semillas de sesamo"
+              alt="Productos con semillas"
               fill
               className="object-cover"
               sizes="(max-width: 768px) 50vw, 192px"
@@ -161,7 +161,7 @@ export function BreadShowcase() {
           >
             <Image
               src="/assets/images/pan-mayorista/4f61b737-04bf-42d9-b033-a958cd791f6a.jpg"
-              alt="Panes largos tipo baguette"
+              alt="Productos alargados"
               fill
               className="object-cover"
               sizes="(max-width: 768px) 50vw, 144px"
