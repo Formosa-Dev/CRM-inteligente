@@ -7,8 +7,10 @@
  * - A-12: chat_messages platform-message-id dedup is scoped per channel
  *   account — (coalesce(channel_account_id, -1), platform_message_id) — so
  *   dual-provider/dual-account setups never drop each other's messages.
- * - A-53: a non-ycloud channel_accounts row with credentialsRef 'agent_config'
- *   is a strict mismatch (fail closed), never silently empty credentials.
+ * - A-53/S2: a non-ycloud channel_accounts row with credentialsRef
+ *   'agent_config' resolves provider credentials per FIELD across the
+ *   scope chain (account → channel → global); blank on every scope plus
+ *   env stays a strict mismatch (fail closed), never empty credentials.
  *
  * Synthetic ids only — no real phones, no DATABASE_URL, no network.
  */
@@ -114,14 +116,74 @@ describe("A-05 — send-account resolution is provider-agnostic", () => {
   });
 });
 
-describe("A-53 — non-ycloud agent_config credentialsRef fails closed", () => {
-  it("a kapso row with credentialsRef 'agent_config' resolves to mismatch", async () => {
+describe("A-53/S2 — agent_config refs resolve per-field across the scope chain", () => {
+  it("a kapso row resolves its scoped kapsoApiKeyEnc from the channel scope", async () => {
     seedAccountRow({ id: 301, provider: "kapso" });
+    fake.rows("agent_config").push({
+      id: 41,
+      channel: "whatsapp",
+      channelAccountId: null,
+      kapsoApiKeyEnc: "kapso-channel-key",
+      kapsoWebhookSecretEnc: "kapso-channel-secret",
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
     const resolution = await resolveChannelAccountByIdStrict(301);
+    assert.equal(resolution.kind, "resolved");
+    if (resolution.kind === "resolved") {
+      assert.equal(resolution.account.credentials.apiKey, "kapso-channel-key");
+      assert.equal(
+        resolution.account.credentials.webhookSecret,
+        "kapso-channel-secret"
+      );
+    }
+  });
+
+  it("a flag-only scoped row inherits fields it does not set (per-field merge)", async () => {
+    seedAccountRow({ id: 303, provider: "zernio" });
+    // Account row exists but carries no zernio fields; the whatsapp
+    // channel-scope row above carries only kapso — the zernio key must come
+    // from the global row, proving each field inherits independently.
+    fake.rows("agent_config").push({
+      id: 42,
+      channel: "whatsapp",
+      channelAccountId: 303,
+      kapsoApiKeyEnc: "",
+      enabled: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    fake.rows("agent_config").push({
+      id: 1,
+      channel: null,
+      channelAccountId: null,
+      zernioApiKeyEnc: "zernio-global-key",
+      zernioWebhookSecretEnc: "zernio-global-secret",
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const resolution = await resolveChannelAccountByIdStrict(303);
+    assert.equal(resolution.kind, "resolved");
+    if (resolution.kind === "resolved") {
+      assert.equal(resolution.account.credentials.apiKey, "zernio-global-key");
+      assert.equal(
+        resolution.account.credentials.webhookSecret,
+        "zernio-global-secret"
+      );
+    }
+  });
+
+  it("blank on every scope and env is an explicit failure (fail closed)", async () => {
+    seedAccountRow({ id: 305, provider: "kapso", channel: "sms" });
+    delete process.env.KAPSO_API_KEY;
+    delete process.env.KAPSO_ACCESS_TOKEN;
+    const resolution = await resolveChannelAccountByIdStrict(305);
     assert.equal(resolution.kind, "mismatch");
     if (resolution.kind === "mismatch") {
-      assert.match(resolution.reason, /agent_config/);
       assert.match(resolution.reason, /kapso/);
+      assert.match(resolution.reason, /no usable credential/);
     }
   });
 

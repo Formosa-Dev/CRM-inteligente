@@ -183,22 +183,23 @@ export async function updateOrderStatus(
         .where(eq(orders.id, orderId));
     }
 
-    // Send WhatsApp notification + save to conversation history. A send
+    // Send WhatsApp notification. The transport persists the outbound fact
+    // itself (sent or failed) on the account-scoped conversation. A send
     // failure is surfaced to the caller — the status update itself succeeded,
     // but the UI must not claim the customer was notified.
     const message = await buildWhatsAppMessage(newStatus, order as OrderRow);
-    if (message && order.phoneNumber) {
+    const { resolveOrderNotificationPhone, sendOrderStatusNotification } =
+      await import("@/lib/whatsapp/order-status-notify");
+    const phone = message ? await resolveOrderNotificationPhone(order) : null;
+    if (message && phone) {
       try {
         const { messenger } = await import("@/lib/messaging");
         const {
           resolveConversationAccountForPhone,
           resolveDefaultWhatsAppAccount,
         } = await import("@/lib/channels/router");
-        const { sendOrderStatusNotification } = await import(
-          "@/lib/whatsapp/order-status-notify"
-        );
         const notified = await sendOrderStatusNotification(
-          { phoneNumber: order.phoneNumber, message },
+          { phoneNumber: phone, message, orderId: order.id, status: newStatus },
           {
             resolveBinding: resolveConversationAccountForPhone,
             resolveDefaultAccount: resolveDefaultWhatsAppAccount,
@@ -213,34 +214,6 @@ export async function updateOrderStatus(
             message: `Estado actualizado, pero no se pudo notificar al cliente (ref: ${ref})`,
           };
         }
-
-        // Save the outgoing message in the SAME account-scoped conversation
-        // identity used for the send — never a phone-only limit(1).
-        const { findOrCreateConversation, insertMessage } = await import(
-          "@/lib/channels/router"
-        );
-        const phone = order.phoneNumber.startsWith("+")
-          ? order.phoneNumber
-          : `+${order.phoneNumber}`;
-        const conversationId =
-          notified.conversationId ??
-          (
-            await findOrCreateConversation(
-              "whatsapp",
-              phone,
-              order.customerName ?? undefined,
-              phone,
-              notified.channelAccountId
-            )
-          ).id;
-        await insertMessage(
-          conversationId,
-          "system",
-          message,
-          undefined,
-          notified.providerMessageId,
-          notified.channelAccountId
-        );
       } catch (e) {
         revalidatePath("/admin/orders");
         // F13: internals stay in the server log under a correlation id.
@@ -275,23 +248,26 @@ export async function notifyCustomer(
       .limit(1);
 
     if (!order) return { success: false, message: "Pedido no encontrado" };
-    if (!order.phoneNumber) return { success: false, message: "Sin teléfono" };
 
     const msg = await buildWhatsAppMessage(order.status, order as OrderRow);
     if (!msg) return { success: false, message: "No hay mensaje para este estado" };
 
     // Send through the conversation's account (or the single active account);
-    // ambiguous/unresolvable bindings fail closed and are surfaced.
+    // ambiguous/unresolvable bindings fail closed and are surfaced. No
+    // orderId/status — a manual re-notify is a deliberate NEW send, not a
+    // retry, so it gets a fresh idempotency key. The transport persists the
+    // outbound fact itself.
     const { messenger } = await import("@/lib/messaging");
     const {
       resolveConversationAccountForPhone,
       resolveDefaultWhatsAppAccount,
     } = await import("@/lib/channels/router");
-    const { sendOrderStatusNotification } = await import(
-      "@/lib/whatsapp/order-status-notify"
-    );
+    const { sendOrderStatusNotification, resolveOrderNotificationPhone } =
+      await import("@/lib/whatsapp/order-status-notify");
+    const phone = await resolveOrderNotificationPhone(order);
+    if (!phone) return { success: false, message: "Sin teléfono" };
     const notified = await sendOrderStatusNotification(
-      { phoneNumber: order.phoneNumber, message: msg },
+      { phoneNumber: phone, message: msg },
       {
         resolveBinding: resolveConversationAccountForPhone,
         resolveDefaultAccount: resolveDefaultWhatsAppAccount,
@@ -305,34 +281,6 @@ export async function notifyCustomer(
         message: `Error al enviar la notificación (ref: ${ref})`,
       };
     }
-
-    // Save notification in the account-scoped conversation identity used for
-    // the send, not an arbitrary phone-only row.
-    const { findOrCreateConversation, insertMessage } = await import(
-      "@/lib/channels/router"
-    );
-    const phone = order.phoneNumber.startsWith("+")
-      ? order.phoneNumber
-      : `+${order.phoneNumber}`;
-    const conversationId =
-      notified.conversationId ??
-      (
-        await findOrCreateConversation(
-          "whatsapp",
-          phone,
-          order.customerName ?? undefined,
-          phone,
-          notified.channelAccountId
-        )
-      ).id;
-    await insertMessage(
-      conversationId,
-      "system",
-      msg,
-      undefined,
-      notified.providerMessageId,
-      notified.channelAccountId
-    );
 
     return { success: true, message: "Notificación enviada" };
   } catch (e) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import test, { describe } from "node:test";
+import test, { describe, mock } from "node:test";
 import {
   extractYCloudEchoMessage,
   toSendResult,
@@ -667,6 +667,12 @@ describe("toSendResult — retryable classification", () => {
     }
   });
 
+  test("429 rate-limits are retryable — a throttle, not a rejection", () => {
+    const res = toSendResult({ ok: false, error: "YCloud error 429: rate limited" });
+    assert.equal(res.ok, false);
+    if (!res.ok) assert.equal(res.retryable, true);
+  });
+
   test("missing credentials/config is not retryable", () => {
     const res = toSendResult({
       ok: false,
@@ -722,6 +728,156 @@ describe("ycloud sendMessage — contract surface", () => {
       });
       assert.equal(res.ok, false, `${type} must be rejected for now`);
       if (!res.ok) assert.equal(res.retryable, false);
+    }
+  });
+
+  test("429 from sendDirectly is retryable, other 4xx are not", async () => {
+    for (const [status, retryable] of [
+      [429, true],
+      [400, false],
+      [503, true],
+    ] as const) {
+      mock.method(
+        globalThis,
+        "fetch",
+        async () => new Response("upstream says no", { status })
+      );
+      try {
+        const res = await provider.sendMessage(ACCOUNT, {
+          to: "+15550001234",
+          type: "text",
+          text: "hola",
+        });
+        assert.equal(res.ok, false, `status ${status}`);
+        if (!res.ok) {
+          assert.equal(res.retryable, retryable, `status ${status}`);
+        }
+      } finally {
+        mock.restoreAll();
+      }
+    }
+  });
+});
+
+describe("ycloud sendTemplate — Meta-shaped sendDirectly templates", () => {
+  test("rejects templates without name/language without calling upstream", async () => {
+    const res = await provider.sendTemplate!(ACCOUNT, {
+      to: "+15550001234",
+      type: "template",
+      template: { name: "", language: "es_AR" },
+    });
+    assert.equal(res.ok, false);
+    if (!res.ok) {
+      assert.match(res.error, /template\.name and msg\.template\.language/);
+      assert.equal(res.retryable, false);
+    }
+  });
+
+  test("sends the Meta-shaped template body with scoped credentials", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ id: "wamid.TPL1", status: "sent" }));
+    });
+    try {
+      const res = await provider.sendTemplate!(ACCOUNT, {
+        to: "+15550001234",
+        type: "template",
+        template: {
+          name: "order_confirm",
+          language: "es_AR",
+          components: [
+            { type: "body", parameters: [{ type: "text", text: "Martina" }] },
+          ],
+        },
+        idempotencyKey: "tpl-idem-1",
+      });
+      assert.deepEqual(res, {
+        ok: true,
+        providerMessageId: "wamid.TPL1",
+        status: "sent",
+      });
+    } finally {
+      mock.restoreAll();
+    }
+    assert.equal(calls.length, 1);
+    assert.equal(
+      calls[0].url,
+      "https://api.ycloud.com/v2/whatsapp/messages/sendDirectly"
+    );
+    const headers = calls[0].init?.headers as Record<string, string>;
+    assert.equal(headers["X-API-Key"], "fake-api-key");
+    assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
+      from: "+15550009999",
+      to: "+15550001234",
+      type: "template",
+      template: {
+        name: "order_confirm",
+        language: { code: "es_AR", policy: "deterministic" },
+        components: [
+          { type: "body", parameters: [{ type: "text", text: "Martina" }] },
+        ],
+      },
+      externalId: "tpl-idem-1",
+    });
+  });
+
+  test("429 from sendDirectly is retryable", async () => {
+    mock.method(
+      globalThis,
+      "fetch",
+      async () => new Response("throttled", { status: 429 })
+    );
+    try {
+      const res = await provider.sendTemplate!(ACCOUNT, {
+        to: "+15550001234",
+        type: "template",
+        template: { name: "order_confirm", language: "es_AR" },
+      });
+      assert.equal(res.ok, false);
+      if (!res.ok) {
+        assert.match(res.error, /429/);
+        assert.equal(res.retryable, true);
+      }
+    } finally {
+      mock.restoreAll();
+    }
+  });
+
+  test("a real account without scoped apiKey fails closed", async () => {
+    const res = await provider.sendTemplate!(
+      { ...ACCOUNT, id: "42", credentials: { apiKey: "", webhookSecret: SECRET } },
+      {
+        to: "+15550001234",
+        type: "template",
+        template: { name: "order_confirm", language: "es_AR" },
+      }
+    );
+    assert.equal(res.ok, false);
+    if (!res.ok) {
+      assert.match(res.error, /no scoped ycloud apiKey/);
+      assert.equal(res.retryable, false);
+    }
+  });
+
+  test("a credential-less placeholder account cannot delegate template sends", async () => {
+    const res = await provider.sendTemplate!(
+      {
+        ...ACCOUNT,
+        id: "whatsapp:agent-config",
+        senderAddress: "",
+        credentials: { apiKey: "", webhookSecret: "" },
+      },
+      {
+        to: "+15550001234",
+        type: "template",
+        template: { name: "order_confirm", language: "es_AR" },
+      }
+    );
+    assert.equal(res.ok, false);
+    if (!res.ok) {
+      assert.match(res.error, /'template'/);
+      assert.equal(res.retryable, false);
     }
   });
 });

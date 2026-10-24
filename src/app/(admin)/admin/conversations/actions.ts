@@ -123,14 +123,21 @@ export async function sendReply(
   conversationId: number,
   content: string
 ): Promise<{ success: boolean; error?: string }> {
-  if (!(await requireAdmin())) return { success: false, error: "No autorizado" };
+  // The session carries the operator id — it gets stamped as sender_ref on
+  // the persisted outbound fact so human replies stay attributable.
+  const session = await auth();
+  if ((session?.user as { role?: string } | undefined)?.role !== "admin") {
+    return { success: false, error: "No autorizado" };
+  }
   const trimmed = (content ?? "").trim();
   if (!trimmed) return { success: false, error: "Mensaje vacío" };
   // WhatsApp API rejects oversized payloads; cap well below the hard limit.
   if (trimmed.length > 4000) return { success: false, error: "Mensaje demasiado largo" };
   try {
     const { sendOutboundMessage } = await import("@/lib/channels/router");
-    await sendOutboundMessage(conversationId, trimmed, "human");
+    await sendOutboundMessage(conversationId, trimmed, "human", undefined, undefined, {
+      operatorRef: session?.user?.id ?? null,
+    });
     return { success: true };
   } catch (error) {
     // F13: the raw failure can carry provider/DB internals — it stays in the

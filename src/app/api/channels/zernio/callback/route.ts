@@ -5,10 +5,10 @@ import { timingSafeEqual } from "node:crypto";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { db } from "@/db";
 import { channelAccounts } from "@/db/schema";
-import { isChannelKind } from "@/lib/messaging/registry";
 import {
   connectStateCookieName,
   fetchZernioAccount,
+  isZernioConnectPlatform,
 } from "@/lib/messaging/providers/zernio-connect";
 
 /**
@@ -47,8 +47,10 @@ export async function GET(req: NextRequest) {
   const username = sp.get("username") ?? "";
   const state = sp.get("state") ?? "";
 
-  // Platform first: it names the per-platform state cookie below.
-  if (!isChannelKind(platform)) {
+  // Platform first: it names the per-platform state cookie below. Gate on
+  // the connect-reachable platforms — sms/telegram are valid channels but
+  // Zernio connect can never produce them.
+  if (!isZernioConnectPlatform(platform)) {
     return backToChannels(req, { error: "connect-params" });
   }
 

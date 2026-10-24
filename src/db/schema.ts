@@ -13,6 +13,7 @@ import {
   index,
   unique,
   uniqueIndex,
+  check,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
@@ -63,6 +64,14 @@ export const sessionAssetKindEnum = pgEnum("conversation_session_asset_kind", ["
 export const sessionEventTypeEnum = pgEnum("conversation_session_event_type", ["commercial_detected", "personal_acknowledged", "ambiguous_clarified", "handoff_requested"]);
 export const sessionSignalEnum = pgEnum("conversation_session_signal", ["commercial", "personal", "ambiguous"]);
 export const sessionEffectKindEnum = pgEnum("conversation_session_effect_kind", ["human_override", "owner_notification", "customer_reply"]);
+
+// ─── Sender-attribution enums (S0 channel port — AH parity, additive) ──────
+// `content_type` extends AH's set with audio/video: SC persists richer media
+// kinds (voice-note echoes, video inbound) that must stamp honestly.
+export const messageDirectionEnum = pgEnum("message_direction", ["inbound", "outbound"]);
+export const messageSenderKindEnum = pgEnum("message_sender_kind", ["customer", "agent", "operator"]);
+export const messageContentTypeEnum = pgEnum("message_content_type", ["text", "image", "audio", "document", "video", "system"]);
+export const messageDeliveryStateEnum = pgEnum("message_delivery_state", ["received", "queued", "sent", "failed", "imported"]);
 
 // ─── Tables ───────────────────────────────────────────────────────────────────
 
@@ -189,6 +198,19 @@ export const agentConfig = pgTable("agent_config", {
   telegramNotifyChatId: varchar("telegram_notify_chat_id", { length: 50 }),
   cronSecret: varchar("cron_secret", { length: 200 }),
   escalationEmail: varchar("escalation_email", { length: 200 }),
+  // ─── Per-provider encrypted credentials (S0 channel port) ────────────────
+  // AES-GCM ciphertexts resolved by the scoped credential chain (S2). The
+  // telegram pair already exists as telegramBotToken/telegramWebhookToken —
+  // not duplicated here. ycloudApiKey stays the legacy plaintext field.
+  zernioApiKeyEnc: text("zernio_api_key_enc"),
+  zernioWebhookSecretEnc: text("zernio_webhook_secret_enc"),
+  kapsoApiKeyEnc: text("kapso_api_key_enc"),
+  kapsoWebhookSecretEnc: text("kapso_webhook_secret_enc"),
+  ycloudWebhookSecretEnc: text("ycloud_webhook_secret_enc"),
+  // 24h-window template fallback. AH keeps this in a `settings` k/v table;
+  // SC has none, so the scoped agent_config surface is its home. Accepts a
+  // template name string (default es_AR) or { name, language }.
+  waTemplateFallback: jsonb("wa_template_fallback").$type<{ name: string; language?: string } | string>(),
   // ─── Scope (S13) ───────────────────────────────────────────────────────────
   // Both null = the global default row — identical semantics to the pre-S13
   // single row. channel set + channelAccountId null = channel-scoped row.
@@ -402,6 +424,17 @@ export const chatMessages = pgTable("chat_messages", {
   }[]>().default([]),
   platformMessageId: varchar("platform_message_id", { length: 255 }),
   channelAccountId: integer("channel_account_id").references(() => channelAccounts.id),
+  // ─── Honest attribution (S0 channel port — additive/nullable) ────────────
+  // `role` stays populated during the transition (dual-write); readers migrate
+  // to these columns gradually. direction/senderKind replace the lossy
+  // user/assistant/human mapping; deliveryState makes persist-before-send
+  // visible; providerConversationId lets echoes fold onto the pending row.
+  direction: messageDirectionEnum("direction"),
+  senderKind: messageSenderKindEnum("sender_kind"),
+  senderRef: text("sender_ref"),
+  deliveryState: messageDeliveryStateEnum("delivery_state"),
+  providerConversationId: text("provider_conversation_id"),
+  contentType: messageContentTypeEnum("content_type"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   // Dedup is per ACCOUNT: dual-provider/dual-account setups can deliver the
@@ -415,6 +448,59 @@ export const chatMessages = pgTable("chat_messages", {
   convCreatedIdx: index("chat_messages_conversation_created_idx").on(
     table.conversationId,
     table.createdAt
+  ),
+}));
+
+// ─── Agent inbound jobs (durable inbound-turn queue — S0 channel port) ──────
+// Postgres-backed turn queue (AH `agent_inbound_jobs` port): every accepted
+// inbound enqueues `turn:<conversation_id>` alongside the in-process debounce
+// flush, so a restart/deploy can never silently drop a pending agent turn.
+// A drain pass (webhook-triggered or instrumentation) claims live rows.
+//   dedup_key        : `turn:<conversation_id>` — the partial unique index
+//                      keeps at most ONE live (queued/running) job per
+//                      conversation, so debounce coalesces at the durable
+//                      layer too.
+//   conversation_key : buffer key (account-scoped sender id) — ops
+//                      correlation only, never logged raw.
+//   payload          : minimal turn context to rebuild a dispatch after
+//                      restart; the batch itself is rebuilt from chat_messages.
+//   status           : queued → running → done | dead ('dead' = DLQ).
+//   run_after        : earliest claim time — debounce window + grace margin;
+//                      retries use exponential backoff.
+// Un-migrated installs degrade to the in-memory buffer (the queue layer
+// swallows 42P01).
+export const agentInboundJobs = pgTable("agent_inbound_jobs", {
+  id: serial("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().default("default"),
+  dedupKey: text("dedup_key").notNull(),
+  channel: channelEnum("channel").notNull(),
+  channelAccountId: integer("channel_account_id").references(
+    () => channelAccounts.id,
+    { onDelete: "set null" }
+  ),
+  conversationId: integer("conversation_id").notNull().references(
+    () => conversations.id,
+    { onDelete: "cascade" }
+  ),
+  conversationKey: text("conversation_key").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>(),
+  status: text("status").notNull().default("queued"), // queued | running | done | dead — see CHECK in migration
+  attempts: integer("attempts").notNull().default(0),
+  runAfter: timestamp("run_after", { withTimezone: true }).notNull().defaultNow(),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  liveDedupUq: uniqueIndex("agent_inbound_jobs_live_dedup_uq")
+    .on(table.dedupKey)
+    .where(sql`${table.status} in ('queued', 'running')`),
+  claimIdx: index("agent_inbound_jobs_claim_idx")
+    .on(table.runAfter)
+    .where(sql`${table.status} = 'queued'`),
+  statusCreatedIdx: index("agent_inbound_jobs_status_created_idx").on(table.status, table.createdAt),
+  statusCheck: check(
+    "agent_inbound_jobs_status_check",
+    sql`${table.status} in ('queued', 'running', 'done', 'dead')`
   ),
 }));
 

@@ -11,7 +11,7 @@ import { db } from "@/db";
 import { orders } from "@/db/schema";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { getArgentinaHour } from "@/lib/argentina-time";
-import { isValidPhone, normalizePhone } from "@/lib/phone-utils";
+import { isValidPhone } from "@/lib/phone-utils";
 import { getStatusNotificationMessage } from "@/lib/whatsapp/status-utils";
 
 export type OrderStatusTransition =
@@ -123,15 +123,17 @@ async function scheduleOrderFollowUp(orderId: number): Promise<void> {
 }
 
 /**
- * Notificación de estado al cliente: mismo mensaje, mismo transporte y mismo
- * registro en historial que el camino admin (sendOrderStatusNotification +
- * findOrCreateConversation/insertMessage con la cuenta resuelta). Leads sin
- * teléfono real ("sin-telefono-*") no tienen destino — se omite sin error.
+ * Notificación de estado al cliente: mismo mensaje y mismo transporte que el
+ * camino admin (`sendOrderStatusNotification` resuelve cuenta + ventana y
+ * persiste el hecho saliente, enviado o fallido, en el historial). El teléfono
+ * se resuelve por el leads model igual que en admin. Leads sin teléfono real
+ * ("sin-telefono-*") no tienen destino — se omite sin error.
  */
 async function notifyCustomerOfStatusChange(
   order: {
     id: number;
     phoneNumber: string | null;
+    leadId: number | null;
     customerName: string | null;
     orderType: string | null;
     address: string | null;
@@ -150,22 +152,21 @@ async function notifyCustomerOfStatusChange(
     );
     if (!message) return { notified: false };
 
-    const phone = order.phoneNumber ? normalizePhone(order.phoneNumber) : "";
+    const {
+      sendOrderStatusNotification,
+      resolveOrderNotificationPhone,
+    } = await import("@/lib/whatsapp/order-status-notify");
+    const phone = await resolveOrderNotificationPhone(order);
     if (!phone || !isValidPhone(phone)) return { notified: false };
 
     const { messenger } = await import("@/lib/messaging");
     const {
-      findOrCreateConversation,
-      insertMessage,
       resolveConversationAccountForPhone,
       resolveDefaultWhatsAppAccount,
     } = await import("@/lib/channels/router");
-    const { sendOrderStatusNotification } = await import(
-      "@/lib/whatsapp/order-status-notify"
-    );
 
     const notified = await sendOrderStatusNotification(
-      { phoneNumber: phone, message },
+      { phoneNumber: phone, message, orderId: order.id, status: newStatus },
       {
         resolveBinding: resolveConversationAccountForPhone,
         resolveDefaultAccount: resolveDefaultWhatsAppAccount,
@@ -175,27 +176,6 @@ async function notifyCustomerOfStatusChange(
     if (!notified.ok) {
       return { notified: false, error: notified.error };
     }
-
-    const phoneWithPlus = phone.startsWith("+") ? phone : `+${phone}`;
-    const conversationId =
-      notified.conversationId ??
-      (
-        await findOrCreateConversation(
-          "whatsapp",
-          phoneWithPlus,
-          order.customerName ?? undefined,
-          phoneWithPlus,
-          notified.channelAccountId
-        )
-      ).id;
-    await insertMessage(
-      conversationId,
-      "system",
-      message,
-      undefined,
-      notified.providerMessageId,
-      notified.channelAccountId
-    );
     return { notified: true };
   } catch (e) {
     return {
@@ -220,6 +200,7 @@ export async function applyOrderStatusTransition(
     .select({
       id: orders.id,
       status: orders.status,
+      leadId: orders.leadId,
       phoneNumber: orders.phoneNumber,
       customerName: orders.customerName,
       orderType: orders.orderType,

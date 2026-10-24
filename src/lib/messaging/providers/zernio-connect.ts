@@ -8,7 +8,8 @@
  * `{authUrl}` — the operator's browser is sent there, and after approval
  * Zernio redirects back to `redirect_url` with
  * `connected={platform}&profileId&accountId&username` appended. WhatsApp
- * adds `onboarding=api` for the Embedded Signup variant. Facebook keeps
+ * adds an `onboarding` mode (`api` Cloud-API signup by default,
+ * `business_app` for WhatsApp Business app coexistence). Facebook keeps
  * STANDARD mode: Zernio hosts the Page-selection screen itself, so the
  * callback still lands with a final `accountId`.
  *
@@ -49,6 +50,17 @@ export const ZERNIO_CONNECT_PLATFORMS = [
 ] as const satisfies readonly ChannelKind[];
 
 export type ZernioConnectPlatform = (typeof ZERNIO_CONNECT_PLATFORMS)[number];
+
+/**
+ * `onboarding` picks which screen Meta shows during WhatsApp Embedded
+ * Signup: `api` = WABA/number picker (Cloud API only — new numbers, numbers
+ * already on Cloud API, or when groups/calling are needed);
+ * `business_app` = coexistence — Meta shows a QR the operator scans with
+ * the WhatsApp Business app so the number keeps working there while also
+ * serving the API (capped at 20 msg/s, no Groups/calling).
+ */
+export const ZERNIO_WHATSAPP_ONBOARDING = ["api", "business_app"] as const;
+export type ZernioWhatsappOnboarding = (typeof ZERNIO_WHATSAPP_ONBOARDING)[number];
 
 export function isZernioConnectPlatform(
   value: string
@@ -115,19 +127,23 @@ export async function resolveZernioProfileId(
 
 /**
  * Start OAuth/embedded-signup: returns the `authUrl` the admin's browser
- * must visit. `whatsapp` uses `onboarding=api` (Embedded Signup).
+ * must visit. `whatsapp` passes the chosen `onboarding` mode (defaults to
+ * `api` — Cloud API only; `business_app` enables app coexistence).
  */
 export async function getZernioConnectUrl(input: {
   platform: ZernioConnectPlatform;
   profileId: string;
   redirectUrl: string;
   apiKey: string;
+  onboarding?: ZernioWhatsappOnboarding;
 }): Promise<{ ok: true; authUrl: string } | { ok: false; error: string }> {
   const params = new URLSearchParams({
     profileId: input.profileId,
     redirect_url: input.redirectUrl,
   });
-  if (input.platform === "whatsapp") params.set("onboarding", "api");
+  if (input.platform === "whatsapp") {
+    params.set("onboarding", input.onboarding ?? "api");
+  }
   const res = await zernioGet<{ authUrl?: string }>(
     `/connect/${input.platform}?${params}`,
     input.apiKey
