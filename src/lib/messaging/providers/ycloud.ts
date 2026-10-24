@@ -8,6 +8,9 @@
  *   (sendDirectly + retry-on-5xx + 20s timeout + wamid capture, unchanged;
  *   credentials still resolve agent_config → env inside those functions
  *   until `channel_accounts` lands in slice B3)
+ * - sendTemplate  → sendDirectly template body (Meta-shaped, built by
+ *   `buildTemplateBody`); requires resolved account credentials — the
+ *   delegated env senders carry no template path
  * - parseWebhook  → normalizes the payloads handled today by
  *   `src/app/api/whatsapp/webhook/route.ts` (inbound, echo, status).
  *   Dedup mirrors the route exactly: inbound `platformMessageId` prefers
@@ -364,7 +367,8 @@ function normalizeStatus(
 /**
  * Maps the delegated senders' result to SendResult. `retryable` reports the
  * error CLASS, not remaining attempts: 4xx/validation/config errors are
- * permanent; 5xx and network errors are transient even though the sender
+ * permanent (except 429 — a rate-limit is a retry request, not a
+ * rejection); 5xx and network errors are transient even though the sender
  * already spent its own 3-attempt budget (a later caller retry may still
  * succeed).
  */
@@ -380,7 +384,7 @@ export function toSendResult(
   const retryable = res.error.startsWith("Missing ")
     ? false
     : status !== undefined
-      ? status >= 500
+      ? status === 429 || status >= 500
       : true; // fetch/network/max-retries errors are transient
   return { ok: false, error: res.error, retryable };
 }
@@ -419,7 +423,9 @@ async function sendDirectlyWithAccount(
     return {
       ok: false,
       error: `YCloud API error (${response.status}): ${error}`,
-      retryable: response.status >= 500,
+      // 429 is a rate-limit, not a rejection — as retryable as a 5xx. A
+      // non-retryable 429 silently drops the send the provider asked to retry.
+      retryable: response.status === 429 || response.status >= 500,
     };
   }
 
@@ -500,6 +506,37 @@ function sendDocumentWithAccount(
     },
     ...(msg.idempotencyKey ? { externalId: msg.idempotencyKey } : {}),
   });
+}
+
+/**
+ * YCloud sendDirectly template body — same Meta-shaped template object the
+ * docs use (`name`, `language.code` + `policy`, optional `components`).
+ * Returns a validation error instead of a request when the caller did not
+ * provide an approved template name + language.
+ */
+function buildTemplateBody(
+  msg: OutboundMessage
+): { ok: true; body: Record<string, unknown> } | { ok: false; error: string } {
+  const template = msg.template;
+  if (!template?.name || !template.language) {
+    return {
+      ok: false,
+      error: "template message requires msg.template.name and msg.template.language",
+    };
+  }
+  return {
+    ok: true,
+    body: {
+      to: msg.to,
+      type: "template",
+      template: {
+        name: template.name,
+        language: { code: template.language, policy: "deterministic" },
+        ...(template.components ? { components: template.components } : {}),
+      },
+      ...(msg.idempotencyKey ? { externalId: msg.idempotencyKey } : {}),
+    },
+  };
 }
 
 export const ycloudProvider: MessagingProvider = {
@@ -607,6 +644,29 @@ export const ycloudProvider: MessagingProvider = {
           retryable: false,
         };
     }
+  },
+
+  async sendTemplate(account, msg) {
+    if (isRealChannelAccount(account) && !account.credentials.apiKey) {
+      return scopedCredentialsFailure(account);
+    }
+    const built = buildTemplateBody(msg);
+    if (!built.ok) {
+      return { ok: false, error: built.error, retryable: false };
+    }
+    if (accountHasCredentials(account)) {
+      return sendDirectlyWithAccount(account, built.body);
+    }
+    // The delegated src/lib/ycloud.ts senders carry no template path, so a
+    // placeholder account cannot resolve credentials for a 'template' send
+    // — fail closed instead of silently sending as the install-global
+    // sender through a half-duplicated credential seam.
+    return {
+      ok: false,
+      error:
+        "ycloud adapter cannot delegate 'template' sends — the legacy env senders carry no template path; resolve account credentials",
+      retryable: false,
+    };
   },
 
   async resolveMedia(account, ref) {
