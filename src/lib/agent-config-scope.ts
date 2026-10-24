@@ -10,6 +10,13 @@
  *   2. `channel` match (channel-scoped row, `channel_account_id IS NULL`)
  *   3. global row (`channel IS NULL AND channel_account_id IS NULL`, lowest id)
  *
+ * `resolveAgentConfigStrict` returns the FIRST row of that chain (whole-row
+ * granularity — admin editor / single-row consumers). `resolveAgentConfigChain`
+ * returns ALL rows in scope order so credential fields merge per field: a
+ * scoped row that only toggles a flag no longer hides a parent's credentials
+ * (S2, AH R4-MED-2). Blank on a scoped row means "inherit" for chain-resolved
+ * fields; fail-closed still applies when NO scope supplies a field.
+ *
  * Everything is wrapped in try/catch: on an un-migrated deploy (no scope
  * columns) every scoped lookup fails and callers get the legacy id=1 row —
  * i.e. today's behavior, unchanged.
@@ -241,6 +248,145 @@ async function resolveScopedRowId(
     : { kind: "not-found" };
 }
 
+/**
+ * R4-MED-2 — the FULL scope chain (account → channel → global), ordered from
+ * most to least specific. Credential fields resolve per field across this
+ * chain: a scoped row created only to toggle `enabled` no longer hides the
+ * dedicated provider credential stored on a broader scope.
+ */
+async function resolveScopedRowIds(
+  scope: AgentConfigScope
+): Promise<
+  | {
+      kind: "resolved";
+      entries: { id: number; source: AgentConfigResolutionSource }[];
+    }
+  | { kind: "not-found" }
+> {
+  const entries: { id: number; source: AgentConfigResolutionSource }[] = [];
+  let channel = scope.channel ?? undefined;
+
+  if (scope.channelAccountId != null) {
+    const [scoped] = await db
+      .select({ id: agentConfig.id })
+      .from(agentConfig)
+      .where(eq(agentConfig.channelAccountId, scope.channelAccountId))
+      .limit(1);
+    if (scoped) entries.push({ id: scoped.id, source: "account" });
+
+    // S11 binding seam: an account row can point straight at any config row.
+    // Only consulted when no direct per-account row exists — same precedence
+    // as `resolveScopedRowId` so both helpers agree. When a direct row exists
+    // and the channel is already known, the account lookup is unnecessary.
+    if (!scoped || channel == null) {
+      const [account] = await db
+        .select({
+          channel: channelAccounts.channel,
+          boundConfigId: channelAccounts.agentConfigId,
+        })
+        .from(channelAccounts)
+        .where(eq(channelAccounts.id, scope.channelAccountId))
+        .limit(1);
+      channel ??= account?.channel;
+      if (!scoped && account?.boundConfigId != null) {
+        const [bound] = await db
+          .select({ id: agentConfig.id })
+          .from(agentConfig)
+          .where(eq(agentConfig.id, account.boundConfigId))
+          .limit(1);
+        if (bound) entries.push({ id: bound.id, source: "account" });
+      }
+    }
+  }
+
+  if (channel) {
+    const [row] = await db
+      .select({ id: agentConfig.id })
+      .from(agentConfig)
+      .where(
+        and(
+          eq(agentConfig.channel, channel),
+          isNull(agentConfig.channelAccountId)
+        )
+      )
+      .limit(1);
+    if (row) entries.push({ id: row.id, source: "channel" });
+  }
+
+  const [global] = await db
+    .select({ id: agentConfig.id })
+    .from(agentConfig)
+    .where(
+      and(isNull(agentConfig.channel), isNull(agentConfig.channelAccountId))
+    )
+    .orderBy(asc(agentConfig.id))
+    .limit(1);
+  if (global) entries.push({ id: global.id, source: "global" });
+
+  return entries.length > 0
+    ? { kind: "resolved", entries }
+    : { kind: "not-found" };
+}
+
+export type AgentConfigChainResolution =
+  | {
+      kind: "resolved";
+      /** Rows ordered from most to least specific (account → channel → global). */
+      rows: AgentConfigRow[];
+      sources: AgentConfigResolutionSource[];
+    }
+  | { kind: "not-found" }
+  | { kind: "schema-not-ready"; error: unknown }
+  | { kind: "db-error"; error: unknown };
+
+/**
+ * Credential-oriented resolution: returns every row in the scope chain instead
+ * of just the first one. Callers resolve each credential field independently
+ * with `firstScopedValue` and only fall to env / `MissingScopedCredentialError`
+ * when every scope is empty for that field.
+ */
+export async function resolveAgentConfigChain(
+  scope: AgentConfigScope = currentAgentConfigScope()
+): Promise<AgentConfigChainResolution> {
+  try {
+    const resolved = await resolveScopedRowIds(scope);
+    if (resolved.kind === "not-found") return { kind: "not-found" };
+
+    const rows: AgentConfigRow[] = [];
+    const sources: AgentConfigResolutionSource[] = [];
+    const seen = new Set<number>();
+    for (const entry of resolved.entries) {
+      if (seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      const row = await fetchConfigById(entry.id);
+      if (!row) continue;
+      rows.push(row);
+      sources.push(entry.source);
+    }
+    return rows.length > 0
+      ? { kind: "resolved", rows, sources }
+      : { kind: "not-found" };
+  } catch (error) {
+    if (isSchemaNotReady(error)) return { kind: "schema-not-ready", error };
+    return { kind: "db-error", error };
+  }
+}
+
+/**
+ * First non-empty value for a single field across an ordered scope chain.
+ * Used by credential resolution so each field inherits independently.
+ */
+export function firstScopedValue(
+  rows: readonly AgentConfigRow[],
+  read: (row: AgentConfigRow) => unknown
+): string {
+  for (const row of rows) {
+    const value = read(row);
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return "";
+}
+
 async function fetchConfigById(id: number): Promise<AgentConfigRow | undefined> {
   const [row] = await db
     .select()
@@ -302,11 +448,22 @@ export async function resolveAgentConfigStrict(
 
 /**
  * Legacy-shaped read for un-migrated deploys: selects every column EXCEPT the
- * new scope columns, which don't exist pre-migration.
+ * scope columns and the S0 channel-port columns, which don't exist
+ * pre-migration. Callers must treat the absent fields as unset (provider
+ * creds → blank, template fallback → none).
  */
 function legacyColumns() {
-  const { channel: _channel, channelAccountId: _account, ...rest } =
-    getTableColumns(agentConfig);
+  const {
+    channel: _channel,
+    channelAccountId: _account,
+    zernioApiKeyEnc: _zernioKey,
+    zernioWebhookSecretEnc: _zernioSecret,
+    kapsoApiKeyEnc: _kapsoKey,
+    kapsoWebhookSecretEnc: _kapsoSecret,
+    ycloudWebhookSecretEnc: _ycloudSecret,
+    waTemplateFallback: _waTemplate,
+    ...rest
+  } = getTableColumns(agentConfig);
   return rest;
 }
 
@@ -321,6 +478,13 @@ async function fetchLegacyRowById(
   return row
     ? ({ ...row, channel: null, channelAccountId: null } as AgentConfigRow)
     : undefined;
+}
+
+/** The legacy global row read without scope/S0 columns (un-migrated deploys). */
+export async function fetchLegacyGlobalAgentConfig(): Promise<
+  AgentConfigRow | undefined
+> {
+  return fetchLegacyRowById(GLOBAL_CONFIG_ID);
 }
 
 /**

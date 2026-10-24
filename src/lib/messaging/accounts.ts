@@ -17,9 +17,15 @@ import { eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { channelAccounts } from "@/db/schema";
-import { resolveAgentConfigStrict } from "@/lib/agent-config-scope";
+import {
+  AgentConfigResolutionError,
+  fetchLegacyGlobalAgentConfig,
+  firstScopedValue,
+  resolveAgentConfigChain,
+  type AgentConfigRow,
+} from "@/lib/agent-config-scope";
 import { decryptIfEncrypted } from "@/lib/encryption";
-import { getIntegrationSecrets, getYCloudApiKey } from "@/lib/integrations";
+import { getIntegrationSecrets } from "@/lib/integrations";
 import { phoneMatches } from "@/lib/phone-utils";
 
 import { isRetryableDbError, isSchemaNotReady } from "./errors";
@@ -81,65 +87,136 @@ function credentialsFromEnv(
   };
 }
 
-/** A scoped account exists but has no usable ycloud key. Fail closed. */
+/** A scoped account exists but has no usable credential. Fail closed. */
 export class MissingScopedCredentialError extends Error {
   readonly accountId: number;
 
   constructor(accountId: number, detail: string) {
-    super(`channel_accounts #${accountId} has no usable ycloudApiKey (${detail})`);
+    super(`channel_accounts #${accountId} has no usable credential (${detail})`);
     this.name = "MissingScopedCredentialError";
     this.accountId = accountId;
   }
 }
 
 /**
- * `agent_config`/unset credentials resolve through the account's own scope so
- * a per-account API key is actually used. A blank key on an account/channel
- * row is an explicit failure: only `schema-not-ready` (un-migrated install) or
- * a resolved `global` source row may fall back to the install-wide key/env.
+ * S2 — per-provider credential columns on the scoped `agent_config` rows.
+ * The dedicated `<provider>*Enc` fields win; telegram maps to the pre-existing
+ * encrypted pair and ycloud keeps `ycloudApiKey` as its legacy send field.
+ * The generic `aiApiKey` is the AI-provider credential — it is NEVER used as
+ * a channel credential.
+ *
+ * R4-MED-2 — every field walks the whole scope chain independently
+ * (account → channel → global): an account row that only carries `enabled`
+ * no longer hides a parent scope's credential.
  */
-async function credentialsFromAgentConfig(
+const SCOPED_PROVIDER_FIELDS: Record<
+  string,
+  { apiKey: keyof AgentConfigRow; webhookSecret: keyof AgentConfigRow }
+> = {
+  ycloud: { apiKey: "ycloudApiKey", webhookSecret: "ycloudWebhookSecretEnc" },
+  kapso: { apiKey: "kapsoApiKeyEnc", webhookSecret: "kapsoWebhookSecretEnc" },
+  zernio: { apiKey: "zernioApiKeyEnc", webhookSecret: "zernioWebhookSecretEnc" },
+  telegram: {
+    apiKey: "telegramBotToken",
+    webhookSecret: "telegramWebhookToken",
+  },
+};
+
+function decryptColumn(value: unknown): string {
+  return typeof value === "string" ? decryptIfEncrypted(value) : "";
+}
+
+/** Last-resort env scope for `agent_config` refs with no scoped secrets. */
+function credentialsFromProviderEnvScope(
+  row: ChannelAccountRow
+): ChannelAccount["credentials"] | null {
+  const scope = row.provider.toUpperCase();
+  const apiKey = decryptIfEncrypted(process.env[`${scope}_API_KEY`] ?? "");
+  const accessToken = decryptIfEncrypted(
+    process.env[`${scope}_ACCESS_TOKEN`] ?? ""
+  );
+  if (!apiKey && !accessToken) return null;
+  return {
+    apiKey,
+    webhookSecret: decryptIfEncrypted(
+      process.env[`${scope}_WEBHOOK_SECRET`] ?? ""
+    ),
+    ...(accessToken ? { accessToken } : {}),
+  };
+}
+
+/**
+ * `agent_config`/unset credentials resolve through the account's own scope so
+ * a per-account credential is actually used (S2): the scoped chain's provider
+ * fields first, resolved per FIELD (account → channel → global) so a scoped
+ * row that only toggles a flag cannot hide a parent scope's credential; the
+ * provider env scope second. Blank on every scope AND env is an explicit
+ * failure — materializing empty credentials would bind the account fine but
+ * break every send far from the cause.
+ */
+async function credentialsFromAgentConfigScope(
   row: ChannelAccountRow
 ): Promise<ChannelAccount["credentials"]> {
-  if (row.provider !== "ycloud") {
-    // agent_config only carries ycloud keys — materializing empty credentials
-    // binds the account fine but breaks every send far from the cause. Fail
-    // closed at resolution so the row surfaces as a strict mismatch instead.
-    throw new MissingScopedCredentialError(
-      row.id,
-      `provider '${row.provider}' cannot resolve credentialsRef 'agent_config' (ycloud keys only)`
-    );
-  }
-
-  const resolution = await resolveAgentConfigStrict({
+  const resolution = await resolveAgentConfigChain({
     channel: row.channel,
     channelAccountId: row.id,
   });
 
-  let apiKey = "";
-  if (resolution.kind === "resolved") {
-    apiKey = decryptIfEncrypted(resolution.row.ycloudApiKey);
-    if (!apiKey && resolution.source !== "global") {
-      throw new MissingScopedCredentialError(row.id, `${resolution.source} row #${resolution.id} is blank`);
+  let configRows: AgentConfigRow[] = [];
+  let source = "";
+  switch (resolution.kind) {
+    case "resolved":
+      configRows = resolution.rows;
+      source = resolution.sources
+        .map((entry, index) => `${entry} row #${resolution.rows[index].id}`)
+        .join(" -> ");
+      break;
+    case "schema-not-ready": {
+      // Partial migration: scope columns missing — the legacy global row
+      // still carries the credential fields, exactly like pre-migration
+      // installs.
+      const legacy = await fetchLegacyGlobalAgentConfig();
+      configRows = legacy ? [legacy] : [];
+      source = "global row (legacy read)";
+      break;
     }
-  } else if (resolution.kind === "not-found") {
-    throw new MissingScopedCredentialError(row.id, "no scoped/global agent_config row");
-  } else if (resolution.kind === "db-error") {
-    // A transient DB error must not be silently replaced by global creds.
-    throw resolution.error;
+    case "not-found":
+      configRows = [];
+      break;
+    case "db-error":
+      // A transient DB error must not be silently replaced by other creds.
+      throw new AgentConfigResolutionError(resolution);
   }
 
-  const envAllowed =
-    resolution.kind === "schema-not-ready" ||
-    (resolution.kind === "resolved" && resolution.source === "global");
-  const [globalKey, secrets] = await Promise.all([
-    apiKey || !envAllowed ? Promise.resolve("") : getYCloudApiKey(),
-    getIntegrationSecrets(),
-  ]);
-  return {
-    apiKey: apiKey || globalKey,
-    webhookSecret: secrets.ycloudWebhookSecret,
-  };
+  const scopedFields = SCOPED_PROVIDER_FIELDS[row.provider];
+  const apiKey = firstScopedValue(configRows, (config) =>
+    decryptColumn(scopedFields ? config[scopedFields.apiKey] : null)
+  );
+  let webhookSecret = firstScopedValue(configRows, (config) =>
+    decryptColumn(scopedFields ? config[scopedFields.webhookSecret] : null)
+  );
+  if (apiKey) {
+    if (!webhookSecret && row.provider === "ycloud") {
+      // The admin-edited `ycloudWebhookSecret` column predates the *Enc set;
+      // getIntegrationSecrets also covers the YCLOUD_WEBHOOK_SECRET env var.
+      webhookSecret =
+        firstScopedValue(configRows, (config) =>
+          decryptColumn(config.ycloudWebhookSecret)
+        ) || (await getIntegrationSecrets()).ycloudWebhookSecret;
+    }
+    return { apiKey, webhookSecret };
+  }
+
+  // No scoped send credential → provider env scope (env:PREFIX stays the
+  // explicit form; this fallback keeps 'agent_config' rows working on
+  // env-managed installs).
+  const envScoped = credentialsFromProviderEnvScope(row);
+  if (envScoped) return envScoped;
+
+  throw new MissingScopedCredentialError(
+    row.id,
+    `${source || "agent_config"} has no usable '${row.provider}' credential`
+  );
 }
 
 async function resolveCredentials(
@@ -147,7 +224,7 @@ async function resolveCredentials(
 ): Promise<ChannelAccount["credentials"]> {
   const ref = row.credentialsRef?.trim();
   if (!ref || ref === "agent_config") {
-    return credentialsFromAgentConfig(row);
+    return credentialsFromAgentConfigScope(row);
   }
   if (ref.startsWith("env:")) return credentialsFromEnv(row, ref);
   // Unknown refs (vault:, ssm:, typos) must NOT silently materialize an
