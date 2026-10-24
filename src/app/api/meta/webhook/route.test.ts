@@ -4,7 +4,11 @@ import { describe, it } from "node:test";
 import { NextRequest } from "next/server";
 
 import { GET, POST } from "./route";
-import { metaMessageToInboundEvent } from "./helpers";
+import {
+  metaEchoToInboundEvent,
+  metaMessageToInboundEvent,
+  metaStatusToInboundEvent,
+} from "./helpers";
 
 // Env must be set before the first getIntegrationSecrets() call — the module
 // caches for 30s once resolved. getIntegrationSecrets reads env lazily inside
@@ -99,6 +103,93 @@ describe("metaMessageToInboundEvent", () => {
     assert.match(a.deliveryId, /^meta:synth:[0-9a-f]{24}$/);
     assert.equal(a.deliveryId, b.deliveryId);
     assert.equal(a.platformMessageId, undefined);
+  });
+
+  it("maps media messages to a mediaRef with caption as text", () => {
+    const msg = {
+      id: "wamid.IMG",
+      from: "5492222222222",
+      timestamp: "1700000000",
+      type: "image",
+      image: { id: "media-1", mime_type: "image/jpeg", caption: "mirá" },
+    };
+    const event = metaMessageToInboundEvent(msg, {
+      providerAccountId: "1",
+      text: "mirá",
+      provider: "ycloud",
+    });
+    assert.equal(event.type, "image");
+    assert.deepEqual(event.mediaRefs, [
+      { id: "media-1", mimeType: "image/jpeg", filename: undefined },
+    ]);
+    // context.id lands on replyToMessageId when present
+    const withReply = metaMessageToInboundEvent(
+      { ...msg, context: { id: "wamid.PARENT" } },
+      { providerAccountId: "1", text: "mirá", provider: "ycloud" }
+    );
+    assert.equal(withReply.replyToMessageId, "wamid.PARENT");
+  });
+});
+
+describe("metaEchoToInboundEvent", () => {
+  it("normalizes an smb_message_echoes entry as a message.echo", () => {
+    const msg = {
+      id: "wamid.ECHO",
+      from: "5491111111111", // business/operator
+      to: "5492222222222", // customer
+      timestamp: "1700000000",
+      type: "text",
+      text: { body: "respuesta humana" },
+    };
+    const event = metaEchoToInboundEvent(msg, {
+      providerAccountId: "123456789",
+      provider: "ycloud",
+    });
+
+    assert.equal(event.kind, "message.echo");
+    assert.equal(event.direction, "outbound");
+    assert.equal(event.deliveryId, "meta:echo:wamid.ECHO");
+    assert.equal(event.platformMessageId, "wamid.ECHO");
+    // Echo contract: sender = business, providerConversationId = customer.
+    assert.equal(event.sender.phone, "5491111111111");
+    assert.equal(event.providerConversationId, "5492222222222");
+    assert.equal(event.text, "respuesta humana");
+    // raw.type uses the shared SMB echo marker so the pipeline's echo
+    // extractor + protocol-artifact gate treat it like a ycloud echo.
+    const raw = event.raw as Record<string, unknown>;
+    assert.equal(raw.type, "whatsapp.smb.message.echoes");
+    assert.equal(raw.whatsappSmbMessageEchoes, msg);
+  });
+});
+
+describe("metaStatusToInboundEvent", () => {
+  it("normalizes a status receipt and discriminates deliveryId per status", () => {
+    const status = {
+      id: "wamid.ORIG",
+      recipient_id: "5492222222222",
+      status: "delivered",
+      timestamp: "1700000001",
+    };
+    const event = metaStatusToInboundEvent(status, {
+      providerAccountId: "123456789",
+      provider: "ycloud",
+    });
+
+    assert.equal(event.kind, "message.status");
+    assert.equal(event.direction, "outbound");
+    assert.equal(event.status, "delivered");
+    assert.equal(event.platformMessageId, "wamid.ORIG");
+    assert.equal(event.providerConversationId, "5492222222222");
+    assert.equal(event.deliveryId, "meta:status:wamid.ORIG:delivered");
+
+    // Same wamid under a different status value → a different deliveryId,
+    // so sent→delivered→read each persist instead of deduping into one.
+    const read = metaStatusToInboundEvent(
+      { ...status, status: "read" },
+      { providerAccountId: "123456789", provider: "ycloud" }
+    );
+    assert.equal(read.deliveryId, "meta:status:wamid.ORIG:read");
+    assert.notEqual(read.deliveryId, event.deliveryId);
   });
 });
 

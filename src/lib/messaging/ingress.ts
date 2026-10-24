@@ -49,7 +49,9 @@ import {
 import { MAX_WEBHOOK_EVENTS } from "@/lib/infra/webhook-guard";
 
 import { persistChannelEvent } from "./channel-events";
+import { canonicalExternalUserId } from "./conversation-identity";
 import { classifyError } from "./errors";
+import { ensureLeadIdentity } from "./lead-identity";
 import { channelForProvider, isChannelKind } from "./registry";
 import type {
   ChannelAccount,
@@ -550,6 +552,25 @@ export async function handlePassiveChannelEvent(
         ? `[ingress] Duplicate ${event.kind} ${event.platformMessageId} — already persisted`
         : `[ingress] Persisted ${event.kind} on ${ctx.channel} conv=${conversationId} account=${ctx.account.id} role=${role}`
     );
+
+    // Lead bookkeeping for phone-less channels (§2.4): the canonical identity
+    // keys the lead; echoes never contribute name/phone (theirs are the
+    // operator's, not the customer's). Best-effort — never throws.
+    const isEcho = event.kind === "message.echo";
+    await ensureLeadIdentity({
+      channel: ctx.channel,
+      externalUserId,
+      externalUserIdNormalized: canonicalExternalUserId(
+        ctx.channel,
+        externalUserId
+      ),
+      customerName: isEcho
+        ? null
+        : (event.sender.name ?? event.sender.username ?? null),
+      customerPhone: isEcho ? null : (event.sender.phone ?? null),
+      channelAccountId: ctx.channelAccountId ?? null,
+      conversationId,
+    });
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (error) {
     // Transient persistence failures must be retried, not acked/dropped.

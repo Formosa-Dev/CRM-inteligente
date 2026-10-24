@@ -23,8 +23,8 @@ import { readBoundedBody } from "@/lib/infra/webhook-guard";
  * channel_accounts resolution BEFORE processing, signature verified against
  * the named account's own `credentials.webhookSecret` when it carries one
  * (else the provider-level secret) — 401 when nothing verifies → per event:
- * WhatsApp/YCloud events run the same shared app pipeline as
- * /api/whatsapp/webhook; events on other channels get passive persistence
+ * WhatsApp-channel events from ANY provider run the same shared app
+ * pipeline as /api/whatsapp/webhook; events on other channels get passive persistence
  * (conversation + message) or a structured ack log when no persistence
  * table exists for the kind. Events whose account can't be resolved are
  * fail-closed skips (logged inside resolution).
@@ -94,7 +94,7 @@ export async function POST(
   for (const { event, ctx } of resolved.events) {
     if (!ctx) continue; // fail-closed — reason already logged in resolution
     const response =
-      provider.id === "ycloud" && ctx.channel === "whatsapp"
+      ctx.channel === "whatsapp"
         ? await handleNormalizedEvent(event, ctx)
         : await handlePassiveChannelEvent(event, ctx);
     statuses.push(response.status);
