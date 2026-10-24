@@ -4,6 +4,7 @@ import test, { describe, mock } from "node:test";
 import {
   ZERNIO_CONNECT_PLATFORMS,
   ZERNIO_CONNECT_STATE_COOKIE,
+  ZERNIO_WHATSAPP_ONBOARDING,
   connectStateCookieName,
   getZernioConnectUrl,
   isZernioConnectPlatform,
@@ -24,6 +25,10 @@ describe("zernio-connect platform set", () => {
     assert.ok(isZernioConnectPlatform("instagram"));
     assert.ok(!isZernioConnectPlatform("telegram"));
     assert.ok(!isZernioConnectPlatform("sms"));
+  });
+
+  test("whatsapp onboarding modes are api + business_app", () => {
+    assert.deepEqual([...ZERNIO_WHATSAPP_ONBOARDING], ["api", "business_app"]);
   });
 });
 
@@ -156,6 +161,48 @@ describe("getZernioConnectUrl", () => {
     const url = new URL(calls[0].url);
     assert.equal(url.pathname, "/api/v1/connect/whatsapp");
     assert.equal(url.searchParams.get("onboarding"), "api");
+  });
+
+  test("whatsapp passes an explicit onboarding mode through", async () => {
+    const calls: { url: string }[] = [];
+    mock.method(globalThis, "fetch", async (url: string) => {
+      calls.push({ url });
+      return new Response(JSON.stringify({ authUrl: "https://wa.test/es" }));
+    });
+    try {
+      await getZernioConnectUrl({
+        platform: "whatsapp",
+        profileId: "p",
+        redirectUrl: "https://crm.test/cb",
+        apiKey: "k",
+        onboarding: "business_app",
+      });
+    } finally {
+      mock.restoreAll();
+    }
+    const url = new URL(calls[0].url);
+    assert.equal(url.searchParams.get("onboarding"), "business_app");
+  });
+
+  test("non-whatsapp platforms never send an onboarding param", async () => {
+    const calls: { url: string }[] = [];
+    mock.method(globalThis, "fetch", async (url: string) => {
+      calls.push({ url });
+      return new Response(JSON.stringify({ authUrl: "https://ig.test/oauth" }));
+    });
+    try {
+      await getZernioConnectUrl({
+        platform: "instagram",
+        profileId: "p",
+        redirectUrl: "https://crm.test/cb",
+        apiKey: "k",
+        onboarding: "business_app",
+      });
+    } finally {
+      mock.restoreAll();
+    }
+    const url = new URL(calls[0].url);
+    assert.equal(url.searchParams.get("onboarding"), null);
   });
 
   test("missing authUrl is a failure, upstream errors pass through", async () => {

@@ -63,8 +63,21 @@ const PROVIDER_HINTS: Record<string, string> = {
 };
 
 /** Zernio embedded-connect buttons (OAuth / WhatsApp Embedded Signup). */
-const ZERNIO_CONNECT: { platform: string; label: string }[] = [
-  { platform: "whatsapp", label: "WhatsApp (Embedded Signup)" },
+const ZERNIO_CONNECT: {
+  platform: string;
+  label: string;
+  onboarding?: "api" | "business_app";
+}[] = [
+  {
+    platform: "whatsapp",
+    label: "WhatsApp — coexistencia (tu app actual)",
+    onboarding: "business_app",
+  },
+  {
+    platform: "whatsapp",
+    label: "WhatsApp — número nuevo / Cloud API",
+    onboarding: "api",
+  },
   { platform: "instagram", label: "Instagram" },
   { platform: "facebook", label: "Facebook" },
   { platform: "reddit", label: "Reddit" },
@@ -156,9 +169,12 @@ export function ChannelsView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function connectZernio(platform: string) {
+  function connectZernio(
+    platform: string,
+    onboarding?: "api" | "business_app"
+  ) {
     startTransition(async () => {
-      const res = await startZernioConnect(platform);
+      const res = await startZernioConnect({ platform, onboarding });
       if (!res.ok || !res.authUrl) {
         toast.error(res.error ?? "No se pudo iniciar la conexión");
         return;
@@ -297,7 +313,7 @@ export function ChannelsView({
               placeholder="env:ZERNIO_"
             />
             <p className="text-[11px] text-muted-foreground">
-              {"env:PREFIX resuelve PREFIX+API_KEY (con _ final: env:ZERNIO_ → ZERNIO_API_KEY). Vacío = sin credenciales (fail-closed)."}
+              {"env:PREFIX resuelve PREFIX+API_KEY (con _ final: env:ZERNIO_ → ZERNIO_API_KEY). 'agent_config' o vacío usa las credenciales del scope (cuenta → canal → global) de /admin/agent — hoy solo YCloud; el resto queda fail-closed."}
             </p>
           </div>
         </div>
@@ -324,16 +340,20 @@ export function ChannelsView({
           Requiere <code className="font-mono text-xs">ZERNIO_API_KEY</code> en el
           entorno. Te redirige a Zernio para autorizar la cuenta; al volver se
           crea la fila automáticamente (credenciales vía{" "}
-          <code className="font-mono text-xs">env:ZERNIO_</code>). Facebook
-          incluye la selección de página dentro del flujo.
+          <code className="font-mono text-xs">env:ZERNIO_</code>). WhatsApp
+          ofrece dos modos: <strong>coexistencia</strong> (tu número sigue
+          funcionando en la app WhatsApp Business del celu — Meta muestra un
+          QR para escanear) o <strong>Cloud API</strong> (número nuevo o ya
+          migrado, sin app). Facebook incluye la selección de página dentro
+          del flujo.
         </p>
         <div className="flex flex-wrap gap-2">
           {ZERNIO_CONNECT.map((c) => (
             <Button
-              key={c.platform}
+              key={`${c.platform}:${c.onboarding ?? "default"}`}
               variant="outline"
               disabled={pending}
-              onClick={() => connectZernio(c.platform)}
+              onClick={() => connectZernio(c.platform, c.onboarding)}
             >
               <PlugIcon className="size-3.5" />
               {c.label}

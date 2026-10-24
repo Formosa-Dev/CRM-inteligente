@@ -5,15 +5,16 @@ export function publicBaseUrl(): string | null {
   const raw =
     process.env.AUTH_URL ??
     process.env.NEXT_PUBLIC_APP_URL ??
-    process.env.RENDER_EXTERNAL_URL ??
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ??
+    process.env.RENDER_EXTERNAL_URL;
   return raw ? raw.replace(/\/$/, "") : null;
 }
 
 /**
  * Webhook endpoints to paste into each provider's console. Shown on
  * /admin/channels — the values need the public URL to be reachable from
- * the internet (AUTH_URL / NEXT_PUBLIC_APP_URL / RENDER_EXTERNAL_URL).
+ * the internet (AUTH_URL / NEXT_PUBLIC_APP_URL / VERCEL_URL /
+ * RENDER_EXTERNAL_URL).
  */
 export function webhookEndpoints(baseUrl: string): {
   provider: ProviderId;

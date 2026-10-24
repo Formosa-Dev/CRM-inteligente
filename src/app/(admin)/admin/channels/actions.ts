@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { desc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
+import { z } from "zod";
 
 import { db } from "@/db";
 import { channelAccounts } from "@/db/schema";
@@ -20,6 +21,7 @@ import {
   isZernioConnectPlatform,
   registerZernioWebhook,
   resolveZernioProfileId,
+  ZERNIO_WHATSAPP_ONBOARDING,
 } from "@/lib/messaging/providers/zernio-connect";
 import type { ChannelKind, ProviderId } from "@/lib/messaging/types";
 import { publicBaseUrl } from "./webhook-endpoints";
@@ -67,7 +69,10 @@ export interface CreateChannelAccountInput {
   credentialsRef?: string;
 }
 
-const CREDENTIALS_REF_RE = /^[a-z]+:[A-Za-z0-9_.-]+$/;
+// `prefix:value` refs (env:ZERNIO_, vault:…) plus the bare `agent_config`
+// token that resolves scoped credentials — same grammar resolveCredentials
+// accepts in src/lib/messaging/accounts.ts.
+const CREDENTIALS_REF_RE = /^(agent_config|[a-z]+:[A-Za-z0-9_.-]+)$/;
 
 export async function createChannelAccount(
   input: CreateChannelAccountInput
@@ -94,7 +99,7 @@ export async function createChannelAccount(
     return {
       ok: false,
       error:
-        "credentialsRef debe tener formato 'prefix:VALUE' (ej. env:ZERNIO_MAIN)",
+        "credentialsRef debe ser 'agent_config' o tener formato 'prefix:VALUE' (ej. env:ZERNIO_MAIN)",
     };
   }
 
@@ -136,6 +141,11 @@ export async function setChannelAccountStatus(
   return { ok: true };
 }
 
+const startConnectSchema = z.strictObject({
+  platform: z.string().trim().min(1).max(32),
+  onboarding: z.enum(ZERNIO_WHATSAPP_ONBOARDING).optional(),
+});
+
 /**
  * Embedded connect for Zernio: returns Zernio's `authUrl` so the client
  * navigates the operator there. The callback lands on
@@ -144,11 +154,16 @@ export async function setChannelAccountStatus(
  * env:ZERNIO_) — this action never sees or stores the key itself.
  */
 export async function startZernioConnect(
-  platform: string
+  input: unknown
 ): Promise<{ ok: boolean; authUrl?: string; error?: string }> {
   if (!(await requireAdmin())) {
     return { ok: false, error: "Solo administradores pueden conectar cuentas" };
   }
+  const parsed = startConnectSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "Datos inválidos" };
+  }
+  const { platform, onboarding } = parsed.data;
   if (!isZernioConnectPlatform(platform)) {
     return { ok: false, error: `Conexión embebida no disponible para '${platform}'` };
   }
@@ -189,8 +204,14 @@ export async function startZernioConnect(
     profileId: profile.profileId,
     redirectUrl: `${baseUrl}/api/channels/zernio/callback?state=${state}`,
     apiKey,
+    onboarding,
   });
-  if (!connect.ok) return { ok: false, error: connect.error };
+  if (!connect.ok) {
+    // No authUrl to return — drop the nonce instead of leaving a dead
+    // one-shot cookie that could only ever fail verification later.
+    cookieStore.delete(connectStateCookieName(platform));
+    return { ok: false, error: connect.error };
+  }
   return { ok: true, authUrl: connect.authUrl };
 }
 
