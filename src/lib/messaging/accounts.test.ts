@@ -108,7 +108,19 @@ describe("channel account resolvers — never degrade on DB failure", () => {
   });
 
   test("surfaces DB failure before channel-provider fallback", async () => {
-    for (const channel of ["instagram", "facebook", "sms", "reddit"] as const) {
+    for (const channel of [
+      "instagram",
+      "facebook",
+      "sms",
+      "reddit",
+      "linkedin",
+      "tiktok",
+      "youtube",
+      "threads",
+      "pinterest",
+      "discord",
+      "slack",
+    ] as const) {
       await assert.rejects(() => resolveChannelAccount(channel));
     }
   });

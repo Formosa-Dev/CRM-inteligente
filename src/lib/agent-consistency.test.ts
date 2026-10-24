@@ -1182,7 +1182,19 @@ test("S15 handoff transport derives from the conversation channel", () => {
   // Channels without a registered provider fail closed: the customer reply
   // is suppressed and the transport field surfaces why; override/notify are
   // channel-independent and unaffected.
-  for (const channel of ["instagram", "facebook", "sms", "reddit"] as const) {
+  for (const channel of [
+    "instagram",
+    "facebook",
+    "sms",
+    "reddit",
+    "linkedin",
+    "tiktok",
+    "youtube",
+    "threads",
+    "pinterest",
+    "discord",
+    "slack",
+  ] as const) {
     const d = resolveHandoffTransport({
       notifyClaim: true,
       replyClaim: true,

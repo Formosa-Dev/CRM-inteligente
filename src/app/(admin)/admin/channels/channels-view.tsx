@@ -54,6 +54,13 @@ const CHANNELS = [
   { value: "telegram", label: "Telegram" },
   { value: "sms", label: "SMS" },
   { value: "reddit", label: "Reddit" },
+  { value: "linkedin", label: "LinkedIn" },
+  { value: "tiktok", label: "TikTok" },
+  { value: "youtube", label: "YouTube" },
+  { value: "threads", label: "Threads" },
+  { value: "pinterest", label: "Pinterest" },
+  { value: "discord", label: "Discord" },
+  { value: "slack", label: "Slack" },
 ];
 
 const PROVIDER_HINTS: Record<string, string> = {
@@ -80,7 +87,13 @@ const ZERNIO_CONNECT: {
   },
   { platform: "instagram", label: "Instagram" },
   { platform: "facebook", label: "Facebook" },
-  { platform: "reddit", label: "Reddit" },
+  { platform: "linkedin", label: "LinkedIn" },
+  { platform: "tiktok", label: "TikTok" },
+  { platform: "youtube", label: "YouTube" },
+  { platform: "threads", label: "Threads" },
+  { platform: "pinterest", label: "Pinterest" },
+  { platform: "discord", label: "Discord" },
+  { platform: "slack", label: "Slack" },
 ];
 
 const FLASH_ERRORS: Record<string, string> = {
@@ -361,10 +374,10 @@ export function ChannelsView({
           ))}
         </div>
         <p className="mt-3 text-[11px] text-amber-400/80">
-          Ojo: las cuentas de WhatsApp conectadas por Zernio o Kapso guardan
-          los mensajes, pero el agente no responde automáticamente; hoy el
-          auto-reply solo funciona con la cuenta WhatsApp de YCloud. Instagram,
-          Facebook y Reddit también guardan mensajes, pero todavía no tienen
+          Ojo: el agente responde automáticamente en WhatsApp (cualquier
+          proveedor) y Telegram. Los demás canales — Instagram, Facebook,
+          Reddit, LinkedIn, TikTok, YouTube, Threads, Pinterest, Discord y
+          Slack — guardan los mensajes en la bandeja de entrada, sin
           auto-reply del agente.
         </p>
       </div>

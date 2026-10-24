@@ -4,7 +4,14 @@ export type Channel =
   | "instagram"
   | "facebook"
   | "sms"
-  | "reddit";
+  | "reddit"
+  | "linkedin"
+  | "tiktok"
+  | "youtube"
+  | "threads"
+  | "pinterest"
+  | "discord"
+  | "slack";
 
 export type MessageRole = "user" | "assistant" | "system" | "human";
 

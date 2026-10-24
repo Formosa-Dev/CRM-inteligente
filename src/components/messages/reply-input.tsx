@@ -21,6 +21,13 @@ const channelLabels: Record<Channel, string> = {
   facebook: "Facebook",
   sms: "SMS",
   reddit: "Reddit",
+  linkedin: "LinkedIn",
+  tiktok: "TikTok",
+  youtube: "YouTube",
+  threads: "Threads",
+  pinterest: "Pinterest",
+  discord: "Discord",
+  slack: "Slack",
 };
 
 export function ReplyInput({
