@@ -183,6 +183,13 @@
       "when": 1792465277982,
       "tag": "0025_restore_hot_path_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792811169819,
+      "tag": "0026_s0_schema_foundation",
+      "breakpoints": true
     }
   ]
 }
