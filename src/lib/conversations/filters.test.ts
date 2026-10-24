@@ -46,6 +46,13 @@ describe("normalizeChannelParam", () => {
       "facebook",
       "sms",
       "reddit",
+      "linkedin",
+      "tiktok",
+      "youtube",
+      "threads",
+      "pinterest",
+      "discord",
+      "slack",
     ]) {
       assert.equal(normalizeChannelParam(channel), channel);
     }

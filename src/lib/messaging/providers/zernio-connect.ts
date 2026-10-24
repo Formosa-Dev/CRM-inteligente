@@ -38,15 +38,24 @@ export function connectStateCookieName(platform: string): string {
 }
 
 /**
- * Platforms offered a one-click connect button. Telegram/Bluesky etc. are
- * credential-connect platforms (bot token), not OAuth — they stay on the
- * manual form. Reddit is OAuth-capable per the scopes table.
+ * Platforms offered a one-click connect button — the live-verified set whose
+ * `/v1/connect/{platform}` returns an `authUrl` on the real Zernio account.
+ * Telegram is credential-connect (bot token), not OAuth — it stays on the
+ * manual form; same for `sms`/`twitter`/`snapchat`/`google`/`messenger`
+ * (upstream-unavailable). Reddit is OAuth-capable but currently 503
+ * upstream — manual-only until Zernio restores it.
  */
 export const ZERNIO_CONNECT_PLATFORMS = [
   "whatsapp",
   "instagram",
   "facebook",
-  "reddit",
+  "linkedin",
+  "tiktok",
+  "youtube",
+  "threads",
+  "pinterest",
+  "discord",
+  "slack",
 ] as const satisfies readonly ChannelKind[];
 
 export type ZernioConnectPlatform = (typeof ZERNIO_CONNECT_PLATFORMS)[number];

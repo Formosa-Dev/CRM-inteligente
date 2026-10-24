@@ -57,6 +57,13 @@ const CHANNEL_LABELS: Record<ConversationChannel, string> = {
   facebook: "Facebook",
   sms: "SMS",
   reddit: "Reddit",
+  linkedin: "LinkedIn",
+  tiktok: "TikTok",
+  youtube: "YouTube",
+  threads: "Threads",
+  pinterest: "Pinterest",
+  discord: "Discord",
+  slack: "Slack",
 };
 
 export function conversationChannelLabel(channel: string): string {

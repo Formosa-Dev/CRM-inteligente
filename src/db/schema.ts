@@ -55,6 +55,13 @@ export const channelEnum = pgEnum("channel", [
   "facebook",
   "sms",
   "reddit",
+  "linkedin",
+  "tiktok",
+  "youtube",
+  "threads",
+  "pinterest",
+  "discord",
+  "slack",
 ]);
 export const messageRoleEnum = pgEnum("message_role", ["user", "assistant", "system", "human"]);
 export const sessionModeEnum = pgEnum("conversation_session_mode", ["commercial", "personal_acknowledged", "handed_off"]);

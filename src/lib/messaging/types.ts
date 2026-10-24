@@ -16,7 +16,14 @@ export type ChannelKind =
   | "facebook"
   | "telegram"
   | "sms"
-  | "reddit";
+  | "reddit"
+  | "linkedin"
+  | "tiktok"
+  | "youtube"
+  | "threads"
+  | "pinterest"
+  | "discord"
+  | "slack";
 
 export interface ChannelAccount {
   id: string;

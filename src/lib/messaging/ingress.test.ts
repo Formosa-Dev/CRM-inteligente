@@ -63,6 +63,13 @@ describe("registry constants + guards", () => {
       "telegram",
       "sms",
       "reddit",
+      "linkedin",
+      "tiktok",
+      "youtube",
+      "threads",
+      "pinterest",
+      "discord",
+      "slack",
     ]);
     assert.ok(isChannelKind("instagram"));
     assert.ok(!isChannelKind("myspace"));

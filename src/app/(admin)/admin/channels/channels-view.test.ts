@@ -8,14 +8,31 @@ const source = readFileSync(
 );
 
 describe("admin channels warning copy", () => {
-  it("states that Instagram/Facebook/Reddit persist messages without agent auto-reply", () => {
-    assert.doesNotMatch(source, /Para IG\/FB\/Reddit no aplica/);
-    assert.match(source, /Instagram,\s+Facebook y Reddit también guardan/);
-    assert.match(source, /todavía no tienen\s+auto-reply del agente/);
+  it("states the agent auto-replies on WhatsApp (any provider) and Telegram", () => {
+    assert.match(source, /responde automáticamente en WhatsApp \(cualquier\s+proveedor\) y Telegram/);
   });
 
-  it("keeps the WhatsApp Zernio/Kapso caveat accurate", () => {
-    assert.match(source, /Zernio o Kapso guardan/);
-    assert.match(source, /solo funciona con la cuenta WhatsApp de YCloud/);
+  it("states other channels persist to the inbox without agent auto-reply", () => {
+    assert.match(source, /guardan los mensajes en la bandeja de entrada, sin\s+auto-reply del agente/);
+  });
+
+  it("offers a connect button per live-verified Zernio platform", () => {
+    for (const platform of [
+      "instagram",
+      "facebook",
+      "linkedin",
+      "tiktok",
+      "youtube",
+      "threads",
+      "pinterest",
+      "discord",
+      "slack",
+    ]) {
+      assert.match(
+        source,
+        new RegExp(`platform: "${platform}"`),
+        `missing connect button for ${platform}`
+      );
+    }
   });
 });

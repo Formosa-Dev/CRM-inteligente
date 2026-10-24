@@ -22,8 +22,8 @@
  * Channel hint: zernio is not in the channel→provider map; every event stamps
  * `raw.platform` with the payload's `message.platform`/`comment.platform`/
  * `account.platform`, and `resolveEventChannel` maps it through
- * `isChannelKind`. Platforms outside ChannelKind (tiktok, slack, …) derive no
- * channel → the event is skipped fail-closed by design.
+ * `isChannelKind`. Platforms outside ChannelKind (twitter, google, …) derive
+ * no channel → the event is skipped fail-closed by design.
  *
  * Conversation keying (mirrors kapso): inbound `message.received` carries the
  * zernio thread in `providerConversationId` (last-resort identity + thread

@@ -15,16 +15,25 @@ import {
 // Synthetic values only — no real keys/ids.
 
 describe("zernio-connect platform set", () => {
-  test("offers OAuth-capable channels only (telegram/sms stay manual)", () => {
+  test("offers the live-verified OAuth set (telegram/sms/reddit stay manual)", () => {
     assert.deepEqual([...ZERNIO_CONNECT_PLATFORMS], [
       "whatsapp",
       "instagram",
       "facebook",
-      "reddit",
+      "linkedin",
+      "tiktok",
+      "youtube",
+      "threads",
+      "pinterest",
+      "discord",
+      "slack",
     ]);
     assert.ok(isZernioConnectPlatform("instagram"));
+    assert.ok(isZernioConnectPlatform("linkedin"));
+    assert.ok(isZernioConnectPlatform("slack"));
     assert.ok(!isZernioConnectPlatform("telegram"));
     assert.ok(!isZernioConnectPlatform("sms"));
+    assert.ok(!isZernioConnectPlatform("reddit"));
   });
 
   test("whatsapp onboarding modes are api + business_app", () => {
@@ -209,7 +218,7 @@ describe("getZernioConnectUrl", () => {
     mock.method(globalThis, "fetch", async () => new Response("{}"));
     try {
       const res = await getZernioConnectUrl({
-        platform: "reddit",
+        platform: "linkedin",
         profileId: "p",
         redirectUrl: "https://crm.test/cb",
         apiKey: "k",
@@ -227,7 +236,7 @@ describe("getZernioConnectUrl", () => {
     );
     try {
       const res = await getZernioConnectUrl({
-        platform: "reddit",
+        platform: "linkedin",
         profileId: "p",
         redirectUrl: "https://crm.test/cb",
         apiKey: "k",

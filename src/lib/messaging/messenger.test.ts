@@ -19,7 +19,19 @@ describe("messenger.send — channel resolution", () => {
   });
 
   test("unregistered channels fail closed without calling a provider", async () => {
-    for (const channel of ["telegram", "instagram", "sms"] as const) {
+    for (const channel of [
+      "telegram",
+      "instagram",
+      "sms",
+      "reddit",
+      "linkedin",
+      "tiktok",
+      "youtube",
+      "threads",
+      "pinterest",
+      "discord",
+      "slack",
+    ] as const) {
       const res = await messenger.send(
         { to: "+15550001234", type: "text", text: "hola" },
         { channel },
