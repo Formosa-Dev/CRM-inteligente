@@ -9,10 +9,16 @@ import {
   saveAgentConfig,
   testAgentConnection,
   copyAgentConfig,
+  listAiProviderModels,
   type AgentConfigState,
   type PhoneIdEntry,
 } from "./actions";
 import type { AgentConfigScopeOption } from "@/lib/agent-config-scope";
+import {
+  AI_PROVIDERS,
+  findAiProvider,
+  type AiProviderCatalogEntry,
+} from "@/lib/ai/providers-catalog";
 import { useIsAdmin } from "@/components/admin/role-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -98,6 +104,7 @@ export type AgentConfigFormData = {
   businessWebsite: string;
   businessDescription: string;
   // ─── AI provider — the key itself is never sent back to the browser ────
+  aiProvider: string;
   aiApiKeySet: boolean;
   aiBaseUrl: string;
   aiModel: string;
@@ -130,6 +137,99 @@ const DEFAULT_DAYS: BusinessHour[] = [
   { day: "Sábado", open: true, openTime: "09:00", closeTime: "22:00" },
   { day: "Domingo", open: false, openTime: "09:00", closeTime: "22:00" },
 ];
+
+// ─── AI provider catalog UI ─────────────────────────────────────────────────
+
+const CUSTOM_PROVIDER = "__custom__";
+const CUSTOM_MODEL = "__other__";
+
+type ModelListState = { source: "live" | "static"; models: string[] };
+
+function isCatalogDefaultBaseUrl(value: string): boolean {
+  const v = value.trim().replace(/\/+$/, "").toLowerCase();
+  return AI_PROVIDERS.some(
+    (entry) => entry.defaultBaseUrl.toLowerCase() === v
+  );
+}
+
+/**
+ * One model field backed by the provider's model list: a select when the
+ * current value is listed, a free-text input otherwise (or when "Otro…" was
+ * chosen). `name` rides whichever control renders so FormData always posts it.
+ */
+function ModelSelectField({
+  id,
+  name,
+  label,
+  value,
+  onChange,
+  modelList,
+  custom,
+  onCustomChange,
+  placeholder,
+}: {
+  id: string;
+  name: string;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  modelList: ModelListState;
+  custom: boolean;
+  onCustomChange: (v: boolean) => void;
+  placeholder: string;
+}) {
+  const listed = value !== "" && modelList.models.includes(value);
+  const showInput =
+    custom || (value !== "" && !listed) || modelList.models.length === 0;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      {showInput ? (
+        <div className="flex items-center gap-2">
+          <Input
+            id={id}
+            name={name}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+          />
+          {modelList.models.length > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onCustomChange(false)}
+            >
+              Lista
+            </Button>
+          )}
+        </div>
+      ) : (
+        <Select
+          id={id}
+          name={name}
+          value={value}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === CUSTOM_MODEL) {
+              onCustomChange(true);
+              return;
+            }
+            onChange(v);
+          }}
+        >
+          <SelectOption value="">Elegir modelo…</SelectOption>
+          {modelList.models.map((modelId) => (
+            <SelectOption key={modelId} value={modelId}>
+              {modelId}
+            </SelectOption>
+          ))}
+          <SelectOption value={CUSTOM_MODEL}>Otro…</SelectOption>
+        </Select>
+      )}
+    </div>
+  );
+}
 
 export default function AgentConfigForm({
   config,
@@ -198,6 +298,95 @@ export default function AgentConfigForm({
   const [deliveryEnabled, setDeliveryEnabled] = useState(config.deliveryEnabled ?? true);
   const [deliveryStartHour, setDeliveryStartHour] = useState(config.deliveryStartHour ?? "14:00");
   const [productionHours, setProductionHours] = useState(config.productionHours ?? "");
+
+  // ─── AI provider state ────────────────────────────────────────────────────
+  // The provider select shows catalog ids; a stored value outside the catalog
+  // selects "Otro (personalizado)" and keeps the raw id editable.
+  const [aiProvider, setAiProvider] = useState(config.aiProvider);
+  const [providerChoice, setProviderChoice] = useState(() =>
+    config.aiProvider === ""
+      ? ""
+      : findAiProvider(config.aiProvider)
+        ? config.aiProvider
+        : CUSTOM_PROVIDER
+  );
+  const [customProvider, setCustomProvider] = useState(() =>
+    config.aiProvider && !findAiProvider(config.aiProvider) ? config.aiProvider : ""
+  );
+  const [aiBaseUrl, setAiBaseUrl] = useState(config.aiBaseUrl);
+  // Write-only probe value — the stored key never reaches the browser.
+  const [aiApiKey, setAiApiKey] = useState("");
+  const [aiModel, setAiModel] = useState(config.aiModel);
+  const [aiModelFast, setAiModelFast] = useState(config.aiModelFast);
+  const [aiModelVision, setAiModelVision] = useState(config.aiModelVision);
+  const [modelList, setModelList] = useState<ModelListState>({
+    source: "static",
+    models: findAiProvider(config.aiProvider)?.staticModels ?? [],
+  });
+  const [modelCustom, setModelCustom] = useState({
+    main: false,
+    fast: false,
+    vision: false,
+  });
+
+  const catalogEntry: AiProviderCatalogEntry | undefined =
+    providerChoice === CUSTOM_PROVIDER ? undefined : findAiProvider(aiProvider);
+
+  // Live model listing — refetches when provider/baseUrl/key change
+  // (debounced). The action resolves the probe key server-side: typed value →
+  // scope's stored key → env.
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const p = aiProvider.trim();
+      const staticModels = findAiProvider(p)?.staticModels ?? [];
+      if (!p) {
+        setModelList({ source: "static", models: [] });
+        return;
+      }
+      try {
+        const res = await listAiProviderModels({
+          provider: p,
+          baseUrl: aiBaseUrl.trim() || undefined,
+          apiKey: aiApiKey.trim() || undefined,
+          scope: scopeKey,
+        });
+        if (cancelled) return;
+        setModelList(
+          res.ok
+            ? { source: res.source, models: res.models }
+            : { source: "static", models: staticModels }
+        );
+      } catch {
+        if (!cancelled) {
+          setModelList({ source: "static", models: staticModels });
+        }
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [aiProvider, aiBaseUrl, aiApiKey, scopeKey]);
+
+  function onProviderSelect(value: string) {
+    setProviderChoice(value);
+    if (value === CUSTOM_PROVIDER) {
+      setAiProvider(customProvider);
+      return;
+    }
+    if (value === "") {
+      setAiProvider("");
+      return;
+    }
+    const entry = findAiProvider(value);
+    setAiProvider(value);
+    // Auto-fill the base URL only when the field is empty or still holds
+    // another catalog default — never clobber a manual URL.
+    if (entry && (!aiBaseUrl.trim() || isCatalogDefaultBaseUrl(aiBaseUrl))) {
+      setAiBaseUrl(entry.defaultBaseUrl);
+    }
+  }
 
   // ─── Toast notifications ────────────────────────────────────────────────────
 
@@ -643,12 +832,48 @@ export default function AgentConfigForm({
             <CardHeader>
               <CardTitle>Proveedor de IA</CardTitle>
               <CardDescription>
-                API key y modelos del agente. Funciona con OpenAI, OpenRouter,
-                DeepSeek, Groq, Together u otro endpoint compatible. Si lo dejás
-                vacío se usan las variables de entorno del servidor.
+                Proveedor, API key y modelos del agente. La lista de modelos se
+                trae en vivo del proveedor cuando hay una key; sin key se usa la
+                lista del catálogo. Si lo dejás vacío se usan las variables de
+                entorno del servidor.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="aiProviderSelect">Proveedor</Label>
+                {/* The select is catalog-only; the submitted value (catalog id
+                    or free-form custom id) rides the hidden input. */}
+                <input type="hidden" name="aiProvider" value={aiProvider} />
+                <Select
+                  id="aiProviderSelect"
+                  value={providerChoice}
+                  onChange={(e) => onProviderSelect(e.target.value)}
+                >
+                  <SelectOption value="">Sin configurar (env del servidor)</SelectOption>
+                  {AI_PROVIDERS.map((entry) => (
+                    <SelectOption key={entry.id} value={entry.id}>
+                      {entry.label}
+                    </SelectOption>
+                  ))}
+                  <SelectOption value={CUSTOM_PROVIDER}>Otro (personalizado)</SelectOption>
+                </Select>
+                {providerChoice === CUSTOM_PROVIDER && (
+                  <Input
+                    id="aiProviderCustom"
+                    value={customProvider}
+                    onChange={(e) => {
+                      setCustomProvider(e.target.value);
+                      setAiProvider(e.target.value);
+                    }}
+                    placeholder="ollama"
+                  />
+                )}
+                <p className="text-xs text-muted-foreground">
+                  {providerChoice === CUSTOM_PROVIDER
+                    ? "Id libre del proveedor — se consulta /models del endpoint."
+                    : "Proveedor del catálogo — autocompleta la Base URL y los modelos."}
+                </p>
+              </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="aiApiKey">API Key del proveedor</Label>
                 <Input
@@ -656,6 +881,8 @@ export default function AgentConfigForm({
                   name="aiApiKey"
                   type="password"
                   autoComplete="off"
+                  value={aiApiKey}
+                  onChange={(e) => setAiApiKey(e.target.value)}
                   placeholder={
                     config.aiApiKeySet
                       ? "•••••••• (guardada — dejar vacío para conservar, 'CLEAR' para borrar)"
@@ -664,7 +891,8 @@ export default function AgentConfigForm({
                 />
                 <p className="text-xs text-muted-foreground">
                   Nunca se muestra la clave guardada. Escribí una nueva para
-                  reemplazarla o <code>CLEAR</code> para borrarla.
+                  reemplazarla o <code>CLEAR</code> para borrarla. Con una key
+                  válida la lista de modelos se actualiza en vivo.
                 </p>
               </div>
               <div className="flex flex-col gap-1.5">
@@ -672,42 +900,55 @@ export default function AgentConfigForm({
                 <Input
                   id="aiBaseUrl"
                   name="aiBaseUrl"
-                  placeholder="https://api.openai.com/v1"
-                  defaultValue={config.aiBaseUrl}
+                  value={aiBaseUrl}
+                  onChange={(e) => setAiBaseUrl(e.target.value)}
+                  placeholder={catalogEntry?.defaultBaseUrl ?? "https://api.openai.com/v1"}
                 />
                 <p className="text-xs text-muted-foreground">
-                  OpenRouter: https://openrouter.ai/api/v1 · DeepSeek:
-                  https://api.deepseek.com · Groq: https://api.groq.com/openai/v1
+                  {catalogEntry
+                    ? `Base del proveedor. Por defecto: ${catalogEntry.defaultBaseUrl}`
+                    : "Base del proveedor o endpoint completo compatible con OpenAI."}
                 </p>
               </div>
+              <p className="text-xs text-muted-foreground">
+                {modelList.source === "live"
+                  ? "Lista de modelos obtenida en vivo del proveedor."
+                  : "Lista del catálogo — se actualiza en vivo con la API key."}
+              </p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="aiModel">Modelo principal</Label>
-                  <Input
-                    id="aiModel"
-                    name="aiModel"
-                    placeholder="deepseek-flash"
-                    defaultValue={config.aiModel}
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="aiModelFast">Modelo rápido</Label>
-                  <Input
-                    id="aiModelFast"
-                    name="aiModelFast"
-                    placeholder="gpt-5-mini"
-                    defaultValue={config.aiModelFast}
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="aiModelVision">Modelo de visión</Label>
-                  <Input
-                    id="aiModelVision"
-                    name="aiModelVision"
-                    placeholder="gpt-4o"
-                    defaultValue={config.aiModelVision}
-                  />
-                </div>
+                <ModelSelectField
+                  id="aiModel"
+                  name="aiModel"
+                  label="Modelo principal"
+                  value={aiModel}
+                  onChange={setAiModel}
+                  modelList={modelList}
+                  custom={modelCustom.main}
+                  onCustomChange={(v) => setModelCustom((c) => ({ ...c, main: v }))}
+                  placeholder={catalogEntry?.defaultModel || "nombre del modelo"}
+                />
+                <ModelSelectField
+                  id="aiModelFast"
+                  name="aiModelFast"
+                  label="Modelo rápido"
+                  value={aiModelFast}
+                  onChange={setAiModelFast}
+                  modelList={modelList}
+                  custom={modelCustom.fast}
+                  onCustomChange={(v) => setModelCustom((c) => ({ ...c, fast: v }))}
+                  placeholder={catalogEntry?.defaultModel || "modelo rápido"}
+                />
+                <ModelSelectField
+                  id="aiModelVision"
+                  name="aiModelVision"
+                  label="Modelo de visión"
+                  value={aiModelVision}
+                  onChange={setAiModelVision}
+                  modelList={modelList}
+                  custom={modelCustom.vision}
+                  onCustomChange={(v) => setModelCustom((c) => ({ ...c, vision: v }))}
+                  placeholder="modelo con visión"
+                />
               </div>
             </CardContent>
           </Card>

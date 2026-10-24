@@ -456,6 +456,7 @@ function legacyColumns() {
   const {
     channel: _channel,
     channelAccountId: _account,
+    aiProvider: _aiProvider,
     zernioApiKeyEnc: _zernioKey,
     zernioWebhookSecretEnc: _zernioSecret,
     kapsoApiKeyEnc: _kapsoKey,

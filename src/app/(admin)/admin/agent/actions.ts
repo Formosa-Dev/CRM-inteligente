@@ -6,8 +6,13 @@ import { agentConfig } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth/require-admin";
-import { encrypt } from "@/lib/encryption";
-import { invalidateAIConfigCache } from "@/lib/ai/config";
+import { decryptIfEncrypted, encrypt } from "@/lib/encryption";
+import { invalidateAIConfigCache, providerEnv } from "@/lib/ai/config";
+import {
+  fetchProviderModels,
+  findAiProvider,
+  providerBaseUrl,
+} from "@/lib/ai/providers-catalog";
 import { invalidateIntegrationSecretsCache } from "@/lib/integrations";
 import {
   findAgentConfigForScope,
@@ -90,6 +95,7 @@ const agentConfigSchema = z.object({
   businessWebsite: z.string().max(500).optional(),
   businessDescription: z.string().max(2000).optional(),
   // ─── AI provider — aiApiKey empty means "keep existing" ──────────────────
+  aiProvider: z.string().max(40).optional(),
   aiApiKey: z.string().max(500).optional(),
   aiBaseUrl: z.string().max(500).optional(),
   aiModel: z.string().max(120).optional(),
@@ -209,6 +215,7 @@ export async function saveAgentConfig(
     instagramHandle: (formData.get("instagramHandle") as string | null)?.replace(/^@/, "") || undefined,
     businessWebsite: formData.get("businessWebsite") || undefined,
     businessDescription: formData.get("businessDescription") || undefined,
+    aiProvider: formData.get("aiProvider") || undefined,
     aiApiKey: formData.get("aiApiKey") || undefined,
     aiBaseUrl: formData.get("aiBaseUrl") || undefined,
     aiModel: formData.get("aiModel") || undefined,
@@ -297,6 +304,7 @@ export async function saveAgentConfig(
           : parsed.data.aiApiKey
             ? encrypt(parsed.data.aiApiKey)
             : existing?.aiApiKey || null,
+      aiProvider: parsed.data.aiProvider ?? null,
       aiBaseUrl: parsed.data.aiBaseUrl ?? null,
       aiModel: parsed.data.aiModel ?? null,
       aiModelFast: parsed.data.aiModelFast ?? null,
@@ -432,6 +440,73 @@ export async function copyAgentConfig(
       message: "Error al copiar la configuración",
     };
   }
+}
+
+// ─── Live model listing ────────────────────────────────────────────────────
+
+const listProviderModelsSchema = z
+  .object({
+    provider: z.string().trim().min(1).max(40),
+    baseUrl: z.string().trim().max(2048).optional(),
+    apiKey: z.string().max(4096).optional(),
+    scope: z.string().trim().max(64).optional(),
+  })
+  .strict();
+
+export type ListAiProviderModelsResult =
+  | { ok: true; source: "live" | "static"; models: string[] }
+  | { ok: false; error: string };
+
+/**
+ * Lists a provider's real models for the /admin/agent selector. The probe key
+ * resolves the same chain the runtime uses: typed value → the edited scope's
+ * stored `ai_api_key` (decrypted in place, never returned) →
+ * `AGENT_AI_<PROVIDER>_API_KEY` → `AGENT_AI_API_KEY` → `OPENAI_API_KEY`.
+ * Falls back to the catalog's static list when the live call fails or
+ * returns nothing.
+ */
+export async function listAiProviderModels(
+  input: unknown
+): Promise<ListAiProviderModelsResult> {
+  if (!(await requireAdmin())) {
+    return { ok: false, error: "No autorizado" };
+  }
+  const parsed = listProviderModelsSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Datos inválidos" };
+  const { provider, baseUrl, apiKey } = parsed.data;
+  const scope = parseScopeKey(parsed.data.scope ?? "global");
+  if (scope == null) {
+    return { ok: false, error: "Ámbito de configuración inválido." };
+  }
+
+  const typedKey = apiKey?.trim();
+  let storedKey: string | undefined;
+  if (!typedKey) {
+    try {
+      const row = await findAgentConfigForScope(scope);
+      storedKey = decryptIfEncrypted(row?.aiApiKey).trim() || undefined;
+    } catch {
+      // Un-migrated/transient read — the probe just falls back to env.
+    }
+  }
+  const resolvedKey =
+    typedKey ||
+    storedKey ||
+    providerEnv(process.env, provider, "API_KEY") ||
+    process.env.AGENT_AI_API_KEY?.trim() ||
+    process.env.OPENAI_API_KEY?.trim() ||
+    undefined;
+
+  const entry = findAiProvider(provider);
+  const result = await fetchProviderModels(
+    provider,
+    providerBaseUrl(baseUrl) ?? entry?.defaultBaseUrl,
+    resolvedKey
+  );
+  if (result.ok && result.models.length > 0) {
+    return { ok: true, source: "live", models: result.models };
+  }
+  return { ok: true, source: "static", models: [...(entry?.staticModels ?? [])] };
 }
 
 export async function testAgentConnection(scopeKey?: string): Promise<{

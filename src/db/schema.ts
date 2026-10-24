@@ -189,6 +189,9 @@ export const agentConfig = pgTable("agent_config", {
   businessWebsite: text("business_website"),
   businessDescription: text("business_description"),
   // ─── AI Provider (OpenAI-compatible — editable desde admin) ────────────────
+  // Catalog id (deepseek, openai, anthropic, google, groq, openrouter,
+  // mistral, together, xai) or a free-form custom id; empty = env bootstrap.
+  aiProvider: varchar("ai_provider", { length: 40 }),
   aiApiKey: text("ai_api_key"),
   aiBaseUrl: text("ai_base_url"),
   aiModel: varchar("ai_model", { length: 120 }),

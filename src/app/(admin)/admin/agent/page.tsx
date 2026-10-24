@@ -56,6 +56,7 @@ const DEFAULT_CONFIG: AgentConfigFormData = {
   instagramHandle: "",
   businessWebsite: "",
   businessDescription: "",
+  aiProvider: "",
   aiApiKeySet: false,
   aiBaseUrl: "",
   aiModel: "",
@@ -122,6 +123,7 @@ function rowToFormData(row: Record<string, unknown> | undefined): AgentConfigFor
         businessWebsite: (row.businessWebsite as string) ?? "",
         businessDescription: (row.businessDescription as string) ?? "",
         // Secret fields never reach the client — only whether one exists.
+        aiProvider: (row.aiProvider as string) ?? "",
         aiApiKeySet: Boolean(row.aiApiKey),
         aiBaseUrl: (row.aiBaseUrl as string) ?? "",
         aiModel: (row.aiModel as string) ?? "",
