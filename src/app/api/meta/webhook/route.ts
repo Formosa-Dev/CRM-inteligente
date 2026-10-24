@@ -19,21 +19,28 @@ import {
   MAX_WEBHOOK_EVENTS,
   readBoundedBody,
 } from "@/lib/infra/webhook-guard";
-import { metaMessageToInboundEvent } from "./helpers";
+import {
+  metaEchoToInboundEvent,
+  metaMessageText,
+  metaMessageToInboundEvent,
+  metaStatusToInboundEvent,
+  type MetaMessageShape,
+  type MetaStatusShape,
+} from "./helpers";
 
 // Structural shapes for the Meta envelope fields this route reads.
-type MetaMessage = {
-  id?: string;
-  from?: string;
-  timestamp?: string;
-  text?: { body?: string };
-  caption?: string;
-};
+type MetaMessage = MetaMessageShape;
 type MetaValue = {
   messages?: MetaMessage[];
+  smb_message_echoes?: MetaMessage[];
+  statuses?: MetaStatusShape[];
   metadata?: { phone_number_id?: string; display_phone_number?: string };
   contacts?: { profile?: { name?: string } }[];
 };
+
+type PendingMeta =
+  | { kind: "message" | "echo"; msg: MetaMessage; value: MetaValue }
+  | { kind: "status"; status: MetaStatusShape; value: MetaValue };
 
 // Meta signs webhook payloads with X-Hub-Signature-256: sha256=<hmac>
 // computed over the raw body using the app secret.
@@ -93,32 +100,44 @@ export async function POST(req: NextRequest) {
     const body = JSON.parse(rawBody);
 
     // Collect work first so a single envelope can't exceed the event cap
-    // through unbounded entry/change/message nesting (F8).
-    const pending: { msg: MetaMessage; value: MetaValue }[] = [];
+    // through unbounded entry/change/message nesting (F8). Three payload
+    // kinds ride the same "messages" change: inbound `messages`,
+    // `smb_message_echoes` (human sends from the WhatsApp Business app in
+    // coexistence mode), and `statuses` (delivery receipts for our sends).
+    const pending: PendingMeta[] = [];
     const entries = body?.entry || [];
-    for (const entry of entries) {
-      if (pending.length >= MAX_WEBHOOK_EVENTS) break;
+    outer: for (const entry of entries) {
       const changes = entry?.changes || [];
       for (const change of changes) {
-        if (pending.length >= MAX_WEBHOOK_EVENTS) break;
+        if (pending.length >= MAX_WEBHOOK_EVENTS) break outer;
         if (change.field !== "messages") continue;
 
         const value = change.value;
-        const messages = value?.messages || [];
 
-        for (const msg of messages) {
-          if (pending.length >= MAX_WEBHOOK_EVENTS) break;
-          const from = msg.from; // phone number
-          const text = msg.text?.body || msg.caption || "";
-
-          if (!from || !text) continue;
-          pending.push({ msg, value });
+        for (const msg of value?.messages || []) {
+          if (pending.length >= MAX_WEBHOOK_EVENTS) break outer;
+          // id+from required for dedup/identity; text is optional (media
+          // messages may carry only a caption or no text at all).
+          if (!msg?.id || !msg?.from) continue;
+          pending.push({ kind: "message", msg, value });
+        }
+        for (const msg of value?.smb_message_echoes || []) {
+          if (pending.length >= MAX_WEBHOOK_EVENTS) break outer;
+          // Echo: from = business/operator, to = customer. Both required —
+          // `to` is the conversation routing key.
+          if (!msg?.id || !msg?.from || !msg?.to) continue;
+          pending.push({ kind: "echo", msg, value });
+        }
+        for (const status of value?.statuses || []) {
+          if (pending.length >= MAX_WEBHOOK_EVENTS) break outer;
+          if (!status?.id) continue;
+          pending.push({ kind: "status", status, value });
         }
       }
     }
 
-    for (const { msg, value } of pending) {
-      const text = msg.text?.body || msg.caption || "";
+    for (const item of pending) {
+      const value = item.value;
 
       // Account-aware attribution from the Meta routing keys. A
       // provisioned channel with no match is skipped (no null-account
@@ -180,14 +199,28 @@ export async function POST(req: NextRequest) {
         ctx = { channel: "whatsapp", account };
       }
 
-      const event = metaMessageToInboundEvent(msg, {
-        providerAccountId: String(
-          value?.metadata?.phone_number_id ?? candidates[0]
-        ),
-        senderName: value?.contacts?.[0]?.profile?.name,
-        text,
-        provider: metaProvider.id,
-      });
+      const providerAccountId = String(
+        value?.metadata?.phone_number_id ?? candidates[0]
+      );
+      const senderName = value?.contacts?.[0]?.profile?.name;
+      const event =
+        item.kind === "echo"
+          ? metaEchoToInboundEvent(item.msg, {
+              providerAccountId,
+              senderName,
+              provider: metaProvider.id,
+            })
+          : item.kind === "status"
+            ? metaStatusToInboundEvent(item.status, {
+                providerAccountId,
+                provider: metaProvider.id,
+              })
+            : metaMessageToInboundEvent(item.msg, {
+                providerAccountId,
+                senderName,
+                text: metaMessageText(item.msg),
+                provider: metaProvider.id,
+              });
       const response = await handleNormalizedEvent(event, ctx);
       statuses.push(response.status);
     }

@@ -1,15 +1,27 @@
 /**
- * Shared inbound pipeline (slice S12) — the per-event app logic extracted
- * verbatim from `src/app/api/whatsapp/webhook/route.ts` so both webhook
- * surfaces run the same code:
+ * Shared inbound pipeline — the per-event app logic run by every webhook
+ * surface:
  *
  * - `POST /api/whatsapp/webhook`            → handleNormalizedEvent(event)
  * - `POST /api/webhooks/ingress/<provider>` → handleNormalizedEvent(event, ctx)
+ * - `POST /api/meta/webhook`                → handleNormalizedEvent(event, ctx)
  *
  * `InboundContext` carries the resolved channel account: when it names a real
  * `channel_accounts` row its id is stamped on the conversations/messages this
  * event persists. Legacy callers pass nothing and every write stays null —
- * byte-for-byte identical to the pre-S12 pipeline.
+ * byte-for-byte identical to the pre-account pipeline.
+ *
+ * S3 — provider-agnostic + durable queue: the pipeline reads the NORMALIZED
+ * event contract (event.type/text/mediaRefs/sender/providerConversationId)
+ * instead of unwrapping `payload.whatsappInboundMessage`, so every provider
+ * the route admits for a whatsapp-channel event (ycloud, zernio, kapso,
+ * meta-normalized) flows through the same path. Turn dispatch goes through
+ * the `setInboundTurnDispatcher` seam: in-process debounce flush stays the
+ * fast path, while `agent_inbound_jobs` is the durable shadow — every
+ * persisted inbound claims a `turn:<conv>` job that a drain rebuilds from
+ * chat_messages after a crash. The ycloud-shaped protocol-artifact gate is
+ * scoped to `event.provider === "ycloud"` (meta events carry ycloud-shaped
+ * raws by construction); other providers' raws are not ycloud envelopes.
  *
  * Passive persistence: kinds with no conversation row (status/lifecycle/other
  * artifacts) persist to `channel_events` via `persistChannelEvent` — a
@@ -24,6 +36,7 @@ import { matchSenderToChannelAccount } from "./accounts";
 import { extractYCloudEchoMessage } from "./providers/ycloud";
 import {
   channelAccountRowId,
+  eventThreadId,
   logAckedWithoutPersistence,
   resolveIngressContext,
 } from "./ingress";
@@ -39,11 +52,13 @@ import {
   sendWhatsAppBubbles,
 } from "@/lib/buffer/response-sender";
 import {
+  checkRecentHumanActivity,
   findOrCreateConversation,
   insertMessage,
   isMessageDuplicate,
   getConversationMessages,
   notifyCustomerDeliveryArrived,
+  stampConversationThreadId,
   type MediaAttachment,
 } from "@/lib/channels/router";
 import { captureLeadIfNew } from "@/lib/whatsapp/lead-capture";
@@ -65,11 +80,23 @@ import {
 } from "@/lib/agent-config-scope";
 import { classifyError } from "./errors";
 import { downloadYCloudMedia, saveMediaLocally } from "@/lib/media/downloader";
+import { downloadInboundMedia, MAX_MEDIA_REFS } from "@/lib/media/inbound";
 import { transcribeAudio } from "@/lib/media/transcription";
 import { analyzeVideo } from "@/lib/media/video";
 import { extractDocumentText } from "@/lib/media/document";
-import { BufferManager } from "@/lib/buffer/manager";
-import { scheduleBufferProcessing } from "@/lib/buffer/processor";
+import {
+  BufferManager,
+  scheduleBufferProcessing,
+  type BufferedMessage,
+} from "./buffer";
+import {
+  drainInboundJobs,
+  enqueueInboundTurnJob,
+  inboundTurnJobDedupKey,
+  markInboundJobRunning,
+  settleInboundTurnJob,
+} from "./inbound-queue";
+import { canonicalExternalUserId } from "./conversation-identity";
 import { accountScopedInboundKey } from "./inbound-keys";
 import { buildSellerPrompt, internalSellerTools } from "@/lib/whatsapp/seller-prompt";
 import { generateText, stepCountIs } from "ai";
@@ -122,6 +149,118 @@ export interface InboundContext {
   account?: ChannelAccount;
   /** Precomputed numeric channel_accounts.id (else derived from account.id). */
   channelAccountId?: number;
+}
+
+// ─── Turn dispatch seam (S3) ────────────────────────────────────────────────
+
+/**
+ * One debounced conversation turn handed to the channel dispatcher — either
+ * by the in-process buffer flush (live path) or by `drainInboundJobs`
+ * rebuilding it from chat_messages after a restart (durable path).
+ */
+export interface InboundTurn {
+  channel: ChannelKind;
+  channelAccountId?: number | null;
+  conversationId: number;
+  /** Canonical customer identity (conversations.external_user_id_normalized). */
+  externalUserId: string;
+  /** Provider-addressable send target (customer phone / BSUID / social id). */
+  to: string;
+  /** Provider-native conversation/thread id when the provider is thread-scoped. */
+  providerConversationId?: string;
+  /** Channel account resolved at enqueue (live) or drain (rebuilt) time. */
+  account?: ChannelAccount;
+  messages: BufferedMessage[];
+}
+
+export interface InboundTurnDispatcher {
+  dispatch(turn: InboundTurn): Promise<void>;
+}
+
+/**
+ * Default until a channel dispatcher registers: dispatching nothing would
+ * silently drop turns, so it warns loudly instead. The module registers the
+ * WhatsApp sales dispatcher at load (bottom of file) — every entry point
+ * that imports this module gets the real agent path.
+ */
+const genericInboundTurnDispatcher: InboundTurnDispatcher = {
+  async dispatch(turn) {
+    console.warn(
+      `[pipeline] no inbound turn dispatcher for ${turn.channel} conv=${turn.conversationId} — turn skipped`
+    );
+  },
+};
+
+let turnDispatcher: InboundTurnDispatcher = genericInboundTurnDispatcher;
+
+/** Install the channel dispatcher — idempotent; last registration wins. */
+export function setInboundTurnDispatcher(
+  dispatcher: InboundTurnDispatcher
+): void {
+  turnDispatcher = dispatcher;
+}
+
+// ─── Queue drain (S3) ───────────────────────────────────────────────────────
+
+let lastDrainAt = 0;
+const DRAIN_TRIGGER_MIN_INTERVAL_MS = 10_000;
+
+/**
+ * PRIMARY drain trigger — fires at the top of every inbound webhook so the
+ * next delivery recovers jobs orphaned by a crash/restart. Throttled to one
+ * pass per process per interval; fire-and-forget (never delays the ack).
+ */
+function triggerInboundQueueDrain(): void {
+  const now = Date.now();
+  if (now - lastDrainAt < DRAIN_TRIGGER_MIN_INTERVAL_MS) return;
+  lastDrainAt = now;
+  void drainPendingInboundTurns().catch((error) => {
+    console.error("[queue] inbound drain trigger failed:", error);
+  });
+}
+
+/**
+ * Drain pass: claim due `agent_inbound_jobs`, rebuild each turn from
+ * chat_messages, dispatch through the registered channel dispatcher.
+ * Operator-active conversations skip — same gate as the live flush (a human
+ * replying during the window wins over a rebuilt turn).
+ */
+export async function drainPendingInboundTurns(
+  limit?: number
+): Promise<number> {
+  return drainInboundJobs(async (turn) => {
+    if (await checkRecentHumanActivity(turn.conversationId, 60)) {
+      return "skipped";
+    }
+    await turnDispatcher.dispatch(turn);
+    return "dispatched";
+  }, limit);
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+/**
+ * Location coordinates live outside the normalized contract — read them
+ * tolerantly from the raw envelope (ycloud `whatsappInboundMessage.location`,
+ * meta `whatsappInboundMessage.location`, kapso `message.location`, or a
+ * top-level `location` object).
+ */
+function extractInboundLocation(
+  payload: Record<string, unknown>
+):
+  | { latitude?: number; longitude?: number; name?: string; address?: string }
+  | undefined {
+  const candidates = [
+    (payload.whatsappInboundMessage as Record<string, unknown> | undefined)
+      ?.location,
+    payload.location,
+    (payload.message as Record<string, unknown> | undefined)?.location,
+  ];
+  for (const candidate of candidates) {
+    if (isRecord(candidate)) return candidate;
+  }
+  return undefined;
 }
 
 // ─── Echo handler ───────────────────────────────────────────────────────────
@@ -411,17 +550,12 @@ async function handleEcho(
 
 // ─── Delivery handler ───────────────────────────────────────────────────────
 async function handleDeliveryNotification(
-  payload: Record<string, unknown>,
+  event: NormalizedInboundEvent,
   config: typeof agentConfig.$inferSelect,
   ctx: InboundContext
 ): Promise<NextResponse> {
   try {
-    const message = payload.whatsappInboundMessage as Record<string, unknown> | undefined;
-    if (!message) {
-      return NextResponse.json({ ok: true }, { status: 200 });
-    }
-
-    const msgType = message.type as string;
+    const msgType = event.type;
     const deliveryPhone = config.deliveryPhoneNumber;
 
     if (!deliveryPhone) {
@@ -498,14 +632,18 @@ async function checkHumanOverride(conversationId: number): Promise<boolean> {
 /**
  * Per-event pipeline. The adapter already translated the envelope into
  * `NormalizedInboundEvent` (kind, dedup ids, sender, type, text, mediaRefs);
- * `event.raw` stays available for fields the contract can't carry (location
- * coordinates, per-type media extras like caption/fileSize). Everything
- * below is app logic identical to the pre-extraction inline flow.
+ * `event.raw` stays available only for fields the contract can't carry
+ * (location coordinates, provider-specific echo media extras).
  */
 export async function handleNormalizedEvent(
   event: NormalizedInboundEvent,
   ctx?: InboundContext
 ): Promise<NextResponse> {
+  // S3 — self-healing durable-queue drain: every inbound webhook is also a
+  // recovery pass for turns orphaned by a crash/restart. Fire-and-forget and
+  // throttled — it never delays the ack.
+  triggerInboundQueueDrain();
+
   // S12/S17 — every surface (canonical /api/whatsapp/webhook included)
   // resolves the event's channel account BEFORE any conversation lookup or
   // send. Callers may pass it; otherwise resolve it here. A provisioned
@@ -539,6 +677,7 @@ export async function handleNormalizedEvent(
   const channelAccountId =
     effectiveCtx.channelAccountId ??
     channelAccountRowId(effectiveCtx.account);
+  const channel = effectiveCtx.channel ?? "whatsapp";
   const payload = event.raw as Record<string, unknown>;
 
   // 2. Status/lifecycle/other events have no conversation row: persist them
@@ -549,7 +688,7 @@ export async function handleNormalizedEvent(
   if (event.kind !== "message.received" && event.kind !== "message.echo") {
     try {
       const persisted = await persistChannelEvent(event, {
-        channel: effectiveCtx.channel ?? "whatsapp",
+        channel,
         account: effectiveCtx.account,
         channelAccountId,
       });
@@ -578,8 +717,11 @@ export async function handleNormalizedEvent(
 
   // 2a. Protocol-eligibility gate: empty Business echoes are acknowledged
   //     with 200 and cause no conversation lookup, mutation, routing, or
-  //     reply. Non-empty echoes fall through to handleEcho.
-  if (isProtocolArtifact(payload)) {
+  //     reply. Non-empty echoes fall through to handleEcho. The gate parses
+  //     YCloud-shaped envelopes — scoped to provider "ycloud" (meta events
+  //     carry ycloud-shaped raws by construction); other providers' raws are
+  //     not ycloud envelopes and would false-positive.
+  if (event.provider === "ycloud" && isProtocolArtifact(payload)) {
     logAckedWithoutPersistence(event, "protocol artifact");
     return NextResponse.json({ ok: true }, { status: 200 });
   }
@@ -597,33 +739,71 @@ export async function handleNormalizedEvent(
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 
-  const message = payload.whatsappInboundMessage as
-    | Record<string, unknown>
-    | undefined;
-
   // Accept: text, image, audio, document, video, location — drop everything else
   const SUPPORTED_TYPES = ["text", "image", "audio", "document", "video", "location"] as const;
   type SupportedType = (typeof SUPPORTED_TYPES)[number];
 
-  if (
-    !message ||
-    !event.type ||
-    !SUPPORTED_TYPES.includes(event.type as SupportedType)
-  ) {
+  if (!event.type || !SUPPORTED_TYPES.includes(event.type as SupportedType)) {
     logAckedWithoutPersistence(event, `type '${event.type ?? "n/a"}' unsupported`);
     return NextResponse.json({ ok: true }, { status: 200 });
   }
 
   const msgType = event.type as SupportedType;
   const messageId = event.platformMessageId as string;
-  const customerPhone = event.sender.phone as string;
+  // Phone-first identity; BSUID/social fallbacks keep Meta phone-hiding and
+  // non-phone whatsapp senders routable instead of dropping the turn.
+  const customerPhone =
+    event.sender.phone ?? event.sender.bsuid ?? event.sender.socialId;
+  if (!customerPhone) {
+    logAckedWithoutPersistence(event, "message.received without sender identity");
+    return NextResponse.json({ ok: true }, { status: 200 });
+  }
   const customerName = event.sender.name ?? null;
+
+  // Durable turn shadow — claimed right after persistence for EVERY eligible
+  // turn (suppressed or not): suppression gates below re-check at dispatch
+  // time (AI enabled, human override, session state) and the rebuild
+  // watermark excludes already-answered inbound rows, so an early job can
+  // never resurrect a reply the gates rejected.
+  const ensureDurableTurnJob = async (convId: number): Promise<void> => {
+    await enqueueInboundTurnJob({
+      channel,
+      channelAccountId: channelAccountId ?? null,
+      conversationId: convId,
+      conversationKey: accountScopedInboundKey(channelAccountId, customerPhone),
+      payload: {
+        externalUserId: canonicalExternalUserId(channel, customerPhone),
+        to: customerPhone,
+        providerConversationId: eventThreadId(event) ?? null,
+      },
+    });
+  };
 
   // 3b. Durable inbound dedup BEFORE any conversation lookup or session
   //     work. A dedup failure fails closed: no routing and no output.
   try {
     if (!messageId || (await isMessageDuplicate(messageId))) {
-      if (messageId) console.log(`[webhook:wa] Duplicate message ${messageId} — skipping`);
+      if (messageId) {
+        console.log(`[webhook:wa] Duplicate message ${messageId} — skipping`);
+        // Re-arm the durable turn: a first delivery that persisted but
+        // crashed before enqueueing its job would otherwise lose the reply
+        // forever. The insert is onConflictDoNothing — a live job wins.
+        try {
+          const conv = await findOrCreateConversation(
+            channel,
+            customerPhone,
+            customerName ?? undefined,
+            customerPhone,
+            channelAccountId
+          );
+          await ensureDurableTurnJob(conv.id);
+        } catch (rearmError) {
+          console.warn(
+            "[webhook:wa] Turn re-arm on duplicate failed — continuing",
+            rearmError
+          );
+        }
+      }
       return NextResponse.json({ ok: true }, { status: 200 });
     }
   } catch (dedupError) {
@@ -635,7 +815,7 @@ export async function handleNormalizedEvent(
   }
 
   // Normalizar teléfono para operaciones DB
-  // customerPhone (raw) se usa para enviar mensajes a YCloud
+  // customerPhone (raw) se usa para enviar mensajes al proveedor
   // phone (normalizado) se usa para buscar en DB
   const phone = normalizePhone(customerPhone);
 
@@ -672,7 +852,7 @@ export async function handleNormalizedEvent(
     //    implicitly. A transient resolution failure is retryable (503).
     // ─────────────────────────────────────────────────────────────────────────
     const configScope: AgentConfigScope = {
-      channel: effectiveCtx.channel,
+      channel,
       channelAccountId,
       customerPhone: phone || undefined,
     };
@@ -716,7 +896,7 @@ export async function handleNormalizedEvent(
     const sellerIds = (config.sellerPhoneIds ?? []) as { name: string; phone: string }[];
     const actor = resolveWhatsAppActor(customerPhone, { deliveryPhoneNumber: deliveryPhoneRaw, sellerPhoneIds: sellerIds });
     if (actor === "delivery") {
-      return handleDeliveryNotification(payload, config, effectiveCtx);
+      return handleDeliveryNotification(event, config, effectiveCtx);
     }
 
     // Gate identities before creating a conversation or persisting a lead.
@@ -733,12 +913,20 @@ export async function handleNormalizedEvent(
       channel: convChannel,
       channelAccountId: convAccountId,
     } = await findOrCreateConversation(
-      "whatsapp",
+      channel,
       customerPhone,
       customerName ?? undefined,
       customerPhone,
       channelAccountId
     );
+
+    // Provider-native thread id (zernio conversation id, etc.): stamped so
+    // the dispatcher's sends can address thread-scoped providers. Best-effort
+    // — a stamp failure warns and keeps phone-addressed sends working.
+    const inboundThreadId = eventThreadId(event);
+    if (inboundThreadId) {
+      await stampConversationThreadId(conversationId, inboundThreadId);
+    }
 
     // S15 — resolve the conversation's channel_account binding once: every
     // deterministic outbound below (auto-reply, redirect, fixed reply) goes
@@ -904,12 +1092,7 @@ export async function handleNormalizedEvent(
 
     if (msgType === "location") {
       // ── LOCATION (pin de Maps) ──────────────────────────────────────────
-      const loc = message.location as {
-        latitude?: number;
-        longitude?: number;
-        name?: string;
-        address?: string;
-      } | undefined;
+      const loc = extractInboundLocation(payload);
 
       const address = loc?.address || loc?.name || "ubicación compartida";
       const coords = loc?.latitude && loc?.longitude
@@ -926,6 +1109,7 @@ export async function handleNormalizedEvent(
       const locResult = await insertMessage(conversationId, "user", agentText, contentAttributes, messageId, channelAccountId);
       if (locResult.wasDuplicate) {
         console.log(`[webhook:wa] Duplicate location message ${messageId} — skipping`);
+        await ensureDurableTurnJob(conversationId);
         return NextResponse.json({ ok: true }, { status: 200 });
       }
 
@@ -974,43 +1158,48 @@ export async function handleNormalizedEvent(
       policyText = agentText.trim().length > 0 ? agentText : null;
       const textInsert = await insertMessage(conversationId, "user", agentText, undefined, messageId, channelAccountId);
 
-      // Si el platformMessageId ya existía (duplicate webhook de YCloud),
+      // Si el platformMessageId ya existía (duplicate webhook del proveedor),
       // salir temprano — el otro webhook ya encoló al buffer
       if (textInsert.wasDuplicate) {
         console.log(`[webhook:wa] Duplicate text message ${messageId} — skipping buffer enqueue`);
+        await ensureDurableTurnJob(conversationId);
         return NextResponse.json({ ok: true }, { status: 200 });
       }
 
     } else {
       // ── MEDIA (image | audio | document | video) ──────────────────────────
-      const mediaObj = message[msgType] as {
-        id?: string;
-        caption?: string;
-        filename?: string;
-        voice?: boolean;
-      } | undefined;
-
-      if (!mediaObj?.id) {
+      const ref = event.mediaRefs?.slice(0, MAX_MEDIA_REFS)[0];
+      if (!ref || (!ref.id && !ref.url && !ref.refreshUrl)) {
         // Malformed payload — ack and move on
         return NextResponse.json({ ok: true }, { status: 200 });
       }
 
       try {
-        const apiKey = config.ycloudApiKey || "";
+        // Provider-neutral fetch: adapter resolves a downloadable URL (its
+        // own auth flow), the media module enforces the anchored allowlist,
+        // downloads, and persists the file. Failures are non-fatal — the
+        // catch below stores the placeholder so the turn still reaches the
+        // agent.
+        const { buffer, mimeType, fileName: filename, mediaUrl } =
+          await downloadInboundMedia({
+            provider: event.provider,
+            ref,
+            channel,
+            account: effectiveCtx.account,
+            providerAccountId: event.providerAccountId,
+            conversationId,
+            apiKey: config.ycloudApiKey || "",
+          });
 
-        // Download from YCloud
-        const { buffer, mimeType, filename } = await downloadYCloudMedia(mediaObj.id, apiKey);
-
-        // Persist to disk, get public URL
-        const mediaUrl = await saveMediaLocally(buffer, conversationId, filename, mimeType);
+        const caption = event.text?.trim() ? event.text.trim() : undefined;
 
         // Build contentAttributes entry
         const attachment: MediaAttachment = {
           type: msgType as MediaAttachment["type"],
           url: mediaUrl,
-          fileName: mediaObj.filename || filename,
+          fileName: ref.filename || filename,
           mimeType,
-          caption: mediaObj.caption,
+          caption,
         };
 
         // Transcribe audio — enriches both the attachment and the agent context
@@ -1032,6 +1221,7 @@ export async function handleNormalizedEvent(
           const audResult = await insertMessage(conversationId, "user", agentText, contentAttributes, messageId, channelAccountId);
           if (audResult.wasDuplicate) {
             console.log(`[webhook:wa] Duplicate audio message ${messageId} — skipping`);
+            await ensureDurableTurnJob(conversationId);
             return NextResponse.json({ ok: true }, { status: 200 });
           }
 
@@ -1043,6 +1233,7 @@ export async function handleNormalizedEvent(
           const imgResult = await insertMessage(conversationId, "user", "[Imagen recibida]", contentAttributes, messageId, channelAccountId);
           if (imgResult.wasDuplicate) {
             console.log(`[webhook:wa] Duplicate image message ${messageId} — skipping`);
+            await ensureDurableTurnJob(conversationId);
             return NextResponse.json({ ok: true }, { status: 200 });
           }
           const msgId = imgResult.id;
@@ -1056,11 +1247,8 @@ export async function handleNormalizedEvent(
             .limit(1);
 
           const attachmentId = att?.id || 0;
-          const captionCtx = mediaObj.caption ? `Caption del cliente: ${mediaObj.caption}` : undefined;
-          policyText =
-            typeof mediaObj.caption === "string" && mediaObj.caption.trim().length > 0
-              ? mediaObj.caption
-              : null;
+          const captionCtx = caption ? `Caption del cliente: ${caption}` : undefined;
+          policyText = caption ?? null;
 
           const visionResult = await processImageWithVision(buffer, mimeType, attachmentId, msgId, captionCtx);
           agentText = visionResult.agentText;
@@ -1072,17 +1260,15 @@ export async function handleNormalizedEvent(
 
         } else if (msgType === "video") {
           // Video → transcribe audio track + description
-          const clip = await analyzeVideo(buffer, filename, mimeType, mediaObj.caption);
+          const clip = await analyzeVideo(buffer, filename, mimeType, caption);
           attachment.transcription = clip.transcription ?? undefined;
           contentAttributes = [attachment];
           agentText = clip.agentText;
-          policyText =
-            typeof mediaObj.caption === "string" && mediaObj.caption.trim().length > 0
-              ? mediaObj.caption
-              : null;
+          policyText = caption ?? null;
           const vidResult = await insertMessage(conversationId, "user", agentText, contentAttributes, messageId, channelAccountId);
           if (vidResult.wasDuplicate) {
             console.log(`[webhook:wa] Duplicate video message ${messageId} — skipping`);
+            await ensureDurableTurnJob(conversationId);
             return NextResponse.json({ ok: true }, { status: 200 });
           }
 
@@ -1091,15 +1277,12 @@ export async function handleNormalizedEvent(
           const extractedText = mimeType === "application/pdf" || mimeType === "text/plain"
             ? await extractDocumentText(buffer, filename, mimeType)
             : null;
-          policyText =
-            typeof mediaObj.caption === "string" && mediaObj.caption.trim().length > 0
-              ? mediaObj.caption
-              : null;
+          policyText = caption ?? null;
 
           if (extractedText) {
-            agentText = `El cliente envió un documento "${mediaObj.filename || filename}". Contenido extraído:\n\n${extractedText}`;
+            agentText = `El cliente envió un documento "${ref.filename || filename}". Contenido extraído:\n\n${extractedText}`;
           } else {
-            agentText = `El cliente envió un documento: ${mediaObj.filename || filename}${mediaObj.caption ? ` — "${mediaObj.caption}"` : ""}`;
+            agentText = `El cliente envió un documento: ${ref.filename || filename}${caption ? ` — "${caption}"` : ""}`;
           }
 
           contentAttributes = [attachment];
@@ -1107,6 +1290,7 @@ export async function handleNormalizedEvent(
           const docResult = await insertMessage(conversationId, "user", agentText, contentAttributes, messageId, channelAccountId);
           if (docResult.wasDuplicate) {
             console.log(`[webhook:wa] Duplicate document message ${messageId} — skipping`);
+            await ensureDurableTurnJob(conversationId);
             return NextResponse.json({ ok: true }, { status: 200 });
           }
         }
@@ -1119,10 +1303,19 @@ export async function handleNormalizedEvent(
         const fallbackResult = await insertMessage(conversationId, "user", agentText, undefined, messageId, channelAccountId);
         if (fallbackResult.wasDuplicate) {
           console.log(`[webhook:wa] Duplicate message ${messageId} (fallback) — skipping`);
+          await ensureDurableTurnJob(conversationId);
           return NextResponse.json({ ok: true }, { status: 200 });
         }
       }
     }
+
+    // Durable turn claim — the job shadows the buffer enqueue below so a
+    // crash after persistence can never orphan the reply: the next drain
+    // rebuilds the batch from chat_messages and dispatches it. Suppression
+    // gates that return early still leave the job queued — the dispatcher
+    // re-checks them at dispatch time, and the rebuild watermark excludes
+    // inbound rows already answered by a deterministic reply.
+    await ensureDurableTurnJob(conversationId);
 
     // Optional storefront-first mode: persist the first inbound message, then
     // send one deterministic redirect instead of invoking the sales agent.
@@ -1293,34 +1486,135 @@ export async function handleNormalizedEvent(
     // ───────────────────────────────────────────────────────────────────────
 
     // Content-level dedup (Level 2) — catches exact resends within 5s
-    const isDuplContent = await BufferManager.isContentDuplicate("whatsapp", customerKey, agentText);
+    const isDuplContent = await BufferManager.isContentDuplicate(channel, customerKey, agentText);
     if (isDuplContent) {
       console.log(`[buffer:enqueue] Content duplicate detected for message ${messageId}, skipping`);
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
     console.log(`[webhook:wa] Enqueueing to buffer — conv ${conversationId}`);
-    await BufferManager.enqueue("whatsapp", customerKey, {
+    await BufferManager.enqueue(channel, customerKey, {
       content: agentText,
       messageId,
       timestamp: Date.now(),
       contentAttributes: contentAttributes ?? undefined,
     });
 
-    // Capture config values for the closure
-    // UI-managed key (agent_config, already decrypted above) takes precedence
-    // over the env var — a stale YCLOUD_API_KEY in the environment must not
-    // shadow the valid key saved from the admin panel.
-    const apiKey = config.ycloudApiKey || process.env.YCLOUD_API_KEY || "";
-    const botNumber = config.phoneNumber || process.env.WHATSAPP_PHONE_NUMBER || "";
-    const systemPrompt = config.systemPrompt || "";
-
-    console.log(`[webhook:wa] Config for agent — apiKey:${apiKey ? "SET" : "EMPTY"} botNumber:${botNumber ? "SET" : "EMPTY"} prompt:${systemPrompt ? "SET" : "EMPTY"}`);
+    // Queue-backed flush: the debounce callback claims the durable job before
+    // dispatch (a concurrent drain holding the row makes this return false so
+    // we never double-send), and settles it once the buffer is quiet — a
+    // crash in between leaves the row claimable for the drain's rebuild.
+    const jobDedupKey = inboundTurnJobDedupKey(conversationId);
+    const deadLettersBefore = (
+      await BufferManager.getDeadLetters(channel, customerKey)
+    ).length;
 
     // Fire-and-forget: webhook returns 200 immediately, processing happens in background
-    scheduleBufferProcessing("whatsapp", customerKey, async (bufferedMessages) => {
-      return runWithAgentConfigScope(configScope, async () => {
-      console.log(`[webhook:wa] Buffer callback fired — ${bufferedMessages.length} msgs for conv ${conversationId}${isSeller ? " (SELLER)" : ""}`);
+    scheduleBufferProcessing(channel, customerKey, async (bufferedMessages) => {
+      if (!(await markInboundJobRunning(jobDedupKey))) {
+        console.log(
+          `[webhook:wa] Turn job for conv ${conversationId} claimed by another process — skipping local dispatch`
+        );
+        return;
+      }
+      await turnDispatcher.dispatch({
+        channel,
+        channelAccountId,
+        conversationId,
+        externalUserId: canonicalExternalUserId(channel, customerPhone),
+        to: customerPhone,
+        providerConversationId: inboundThreadId,
+        account: effectiveCtx.account,
+        messages: bufferedMessages,
+      });
+    }).then(() =>
+      settleInboundTurnJob({
+        dedupKey: jobDedupKey,
+        channel,
+        userKey: customerKey,
+        deadLettersBefore,
+      })
+    ).catch((err) => console.error("[webhook:wa] Buffer processing error:", err));
+
+  } catch (error) {
+    console.error("[webhook] Error processing message:", error);
+    // Persistence/transport failures must be retryable, not acked/dropped.
+    // Durable dedup makes provider redelivery idempotent.
+    const kind = classifyError(error);
+    if (kind === "retryable-db") {
+      return NextResponse.json(
+        { error: "transient-failure" },
+        { status: 503 }
+      );
+    }
+    return NextResponse.json({ error: "processing-failed" }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true }, { status: 200 });
+}
+
+// ─── WhatsApp sales dispatcher (registered) ─────────────────────────────────
+// The real SC agent path, extracted from the old inline buffer callback so
+// BOTH callers share it: the live debounce flush and the durable-queue drain
+// (a rebuilt turn carries no intake closure — config, actor, and gates are
+// all re-resolved at dispatch time).
+const whatsAppInboundTurnDispatcher: InboundTurnDispatcher = {
+  async dispatch(turn) {
+    const { conversationId } = turn;
+    const customerPhone = turn.to;
+    const channelAccountId = turn.channelAccountId ?? null;
+    const bufferedMessages = turn.messages;
+
+    const configScope: AgentConfigScope = {
+      channel: turn.channel,
+      channelAccountId: channelAccountId ?? undefined,
+      customerPhone: normalizePhone(customerPhone) || undefined,
+    };
+
+    await runWithAgentConfigScope(configScope, async () => {
+      console.log(`[webhook:wa] Turn dispatch fired — ${bufferedMessages.length} msgs for conv ${conversationId}`);
+
+      // Re-resolve config at dispatch time: a drained turn has no intake
+      // closure, and config may have changed during the debounce window. A
+      // db-error throws so a drain reschedules the job instead of silently
+      // skipping the turn.
+      const configResolution = await resolveAgentConfigStrict(configScope);
+      if (configResolution.kind === "db-error") {
+        throw new Error(
+          `agent-config resolution failed for conv ${conversationId} (retryable)`
+        );
+      }
+      const config =
+        configResolution.kind === "resolved"
+          ? configResolution.row
+          : await resolveAgentConfig(configScope);
+      if (!config) {
+        throw new Error(`no agent config for conv ${conversationId}`);
+      }
+
+      // UI-managed key (agent_config, stored encrypted) takes precedence
+      // over the env var — a stale YCLOUD_API_KEY in the environment must
+      // not shadow the valid key saved from the admin panel.
+      const { decryptIfEncrypted } = await import("@/lib/encryption");
+      const apiKey =
+        decryptIfEncrypted(config.ycloudApiKey) || process.env.YCLOUD_API_KEY || "";
+      const botNumber = config.phoneNumber || process.env.WHATSAPP_PHONE_NUMBER || "";
+
+      // Kill-switch re-checked at dispatch: turns persisted while the AI was
+      // disabled (intake gate) or disabled mid-window must produce no output.
+      if (config.enabled !== true) {
+        console.log(`[webhook:wa] AI disabled at dispatch — conv ${conversationId} turn skipped`);
+        return;
+      }
+
+      const actor = resolveWhatsAppActor(customerPhone, {
+        deliveryPhoneNumber: config.deliveryPhoneNumber?.trim(),
+        sellerPhoneIds: (config.sellerPhoneIds ?? []) as { name: string; phone: string }[],
+      });
+      if (actor === "delivery") {
+        return; // delivery notifications are never buffered turns
+      }
+      const isSeller = actor === "seller";
 
       // S15 — honor the conversation's channel-account binding (echoes stamp
       // it): replies go out as that account. A bound-but-unresolvable account
@@ -1335,11 +1629,11 @@ export async function handleNormalizedEvent(
         .from(conversations)
         .where(eq(conversations.id, conversationId))
         .limit(1);
-      const replyChannel = convBinding?.channel ?? "whatsapp";
+      const replyChannel = convBinding?.channel ?? turn.channel;
       // A-14 — provider-native thread id. Conversation-scoped providers
       // (zernio) cannot send to `to` directly: every outbound send below
       // must carry this as providerConversationId.
-      const replyThreadId = convBinding?.externalThreadId ?? undefined;
+      const replyThreadId = convBinding?.externalThreadId ?? turn.providerConversationId;
 
       // A-11 — per-bubble persistence: each bubble is inserted the moment
       // its send succeeds, carrying its own providerMessageId. A failed
@@ -1433,7 +1727,6 @@ export async function handleNormalizedEvent(
       }
 
       // Verificar si el humano respondió en los últimos 60s (echo que llegó durante buffer)
-      const { checkRecentHumanActivity } = await import("@/lib/channels/router");
       const recentHuman = await checkRecentHumanActivity(conversationId, 60);
       if (recentHuman) {
         console.log(`[webhook:wa] Human activity detected in last 60s for conv ${conversationId} — aborting AI to avoid conflict`);
@@ -1442,9 +1735,13 @@ export async function handleNormalizedEvent(
 
       // Re-read persisted boundary state and override after debounce.
       // Any race or read failure fails closed: no GPT/tools, no reply.
+      // `sessionState` doubles as the agent's sessionContext when present —
+      // the durable rebuild path gets the same facts the live path threaded
+      // from its intake transition.
+      let sessionState: Awaited<ReturnType<typeof loadSessionState>> = null;
       try {
-        const gated = await loadSessionState(conversationId);
-        if (gated?.mode === "handed_off") {
+        sessionState = await loadSessionState(conversationId);
+        if (sessionState?.mode === "handed_off") {
           console.log(`[webhook:wa] Session handed_off for conv ${conversationId} — aborting AI`);
           return;
         }
@@ -1478,8 +1775,9 @@ export async function handleNormalizedEvent(
       // W1 — thread the boundary routing into the agent: commercial paths
       // carry the validated compact session facts plus an explicit
       // allow_agent kind, so fixed/handoff/blocked can never fall through to
-      // GPT/tools here (they already returned above). Legacy preserved: when
-      // there is no session decision, the call keeps its original shape.
+      // GPT/tools here (they already returned above / were never buffered).
+      // Legacy preserved: when there is no session state, the call keeps its
+      // original shape.
       const { text: responseText, pendingMedia } = await runWhatsAppAgent({
         conversationId,
         customerPhone,
@@ -1487,8 +1785,8 @@ export async function handleNormalizedEvent(
         turnMessageIds: bufferedMessages
           .map((m) => m.messageId)
           .filter((id): id is string => typeof id === "string" && id.length > 0),
-        ...(sessionDecision && sessionDecision.kind === "allow_agent"
-          ? { routingKind: "allow_agent" as const, sessionContext: toSessionContext(sessionDecision.state) }
+        ...(sessionState
+          ? { routingKind: "allow_agent" as const, sessionContext: toSessionContext(sessionState) }
           : {}),
       });
 
@@ -1551,22 +1849,11 @@ export async function handleNormalizedEvent(
       }
 
       console.log(`[webhook:wa] Response sent — conv ${conversationId}`);
-      });
-    }).catch((err) => console.error("[webhook:wa] Buffer processing error:", err));
+    });
+  },
+};
 
-  } catch (error) {
-    console.error("[webhook] Error processing message:", error);
-    // Persistence/transport failures must be retryable, not acked/dropped.
-    // Durable dedup makes provider redelivery idempotent.
-    const kind = classifyError(error);
-    if (kind === "retryable-db") {
-      return NextResponse.json(
-        { error: "transient-failure" },
-        { status: 503 }
-      );
-    }
-    return NextResponse.json({ error: "processing-failed" }, { status: 500 });
-  }
-
-  return NextResponse.json({ ok: true }, { status: 200 });
-}
+// The module self-registers: every entry point that imports this module
+// (whatsapp webhook, unified ingress, meta webhook, instrumentation drain)
+// gets the real sales-agent path — the generic default only warns.
+setInboundTurnDispatcher(whatsAppInboundTurnDispatcher);

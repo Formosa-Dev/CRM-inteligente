@@ -56,10 +56,12 @@ describe("providerConversationId threading (A-14)", () => {
     assert.match(sendCall, /providerConversationId: params\.providerConversationId/);
   });
 
-  it("every send in the buffer callback carries the stored externalThreadId", () => {
+  it("every send in the turn dispatcher carries the stored externalThreadId", () => {
     const pipeline = readFileSync("src/lib/messaging/inbound-pipeline.ts", "utf8");
-    const cbStart = pipeline.indexOf("scheduleBufferProcessing(");
-    const cb = pipeline.slice(cbStart, pipeline.indexOf("}).catch(", cbStart));
+    // S3: the send logic lives in the registered turn dispatcher — the buffer
+    // callback and the durable-queue drain both route through it.
+    const cbStart = pipeline.indexOf("whatsAppInboundTurnDispatcher: InboundTurnDispatcher");
+    const cb = pipeline.slice(cbStart, pipeline.indexOf("setInboundTurnDispatcher(", cbStart));
     // The callback re-reads the persisted provider thread id...
     assert.match(cb, /externalThreadId: conversations\.externalThreadId/);
     assert.match(cb, /replyThreadId = convBinding\?\.externalThreadId/);
