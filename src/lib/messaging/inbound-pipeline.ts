@@ -100,7 +100,8 @@ import { canonicalExternalUserId } from "./conversation-identity";
 import { accountScopedInboundKey } from "./inbound-keys";
 import { buildSellerPrompt, internalSellerTools } from "@/lib/whatsapp/seller-prompt";
 import { generateText, stepCountIs } from "ai";
-import { openai, type OpenAILanguageModelChatOptions } from "@ai-sdk/openai";
+import type { OpenAILanguageModelChatOptions } from "@ai-sdk/openai";
+import { getAIConfig, getMainChatModel, isOpenAIBaseUrl } from "@/lib/ai/config";
 import {
   isProtocolArtifact,
   resolveSessionPersistence,
@@ -1687,19 +1688,30 @@ const whatsAppInboundTurnDispatcher: InboundTurnDispatcher = {
             content: m.content,
           }));
 
-        const SELLER_MODEL = "gpt-5.4-mini";
-        console.log(`[webhook:wa] Seller agent using model: ${SELLER_MODEL} (parallelToolCalls:false)`);
+        const [sellerModel, aiConfig] = await Promise.all([
+          getMainChatModel(),
+          getAIConfig(),
+        ]);
+        // OpenAI-only request options (developer role, parallel_tool_calls)
+        // break other OpenAI-compatible providers — send them only when the
+        // resolved base URL is api.openai.com.
+        const sellerProviderOptions = isOpenAIBaseUrl(aiConfig.baseUrl)
+          ? {
+              openai: {
+                systemMessageMode: "developer",
+                parallelToolCalls: false,
+              } satisfies OpenAILanguageModelChatOptions,
+            }
+          : undefined;
+        console.log(
+          `[webhook:wa] Seller agent using model: ${aiConfig.model} (parallelToolCalls:false)`
+        );
         const result = await generateText({
-          model: openai.chat(SELLER_MODEL),
+          model: sellerModel,
           system: await buildSellerPrompt(),
           messages: aiMessages,
           tools: internalSellerTools,
-          providerOptions: {
-            openai: {
-              systemMessageMode: "developer",
-              parallelToolCalls: false,
-            } satisfies OpenAILanguageModelChatOptions,
-          },
+          providerOptions: sellerProviderOptions,
           stopWhen: stepCountIs(10),
         });
         const reply = result.text || "Disculpá, no pude procesar eso.";

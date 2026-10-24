@@ -1,0 +1,1 @@
+ALTER TABLE "agent_config" ADD COLUMN "ai_provider" varchar(40);

@@ -190,6 +190,13 @@
       "when": 1792811169819,
       "tag": "0026_s0_schema_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792843745502,
+      "tag": "0027_amused_satana",
+      "breakpoints": true
     }
   ]
 }
