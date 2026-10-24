@@ -1,14 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { db } from "@/db";
 import { conversations, chatMessages, leads, attachments } from "@/db/schema";
 import { eq, and, desc, isNull, or, sql } from "drizzle-orm";
 import { normalizePhone } from "@/lib/phone-utils";
+import {
+  decideCustomerWindowSend,
+  type WindowSendDecision,
+} from "@/lib/whatsapp/outbound-window";
 import {
   resolveConversationIdentity,
   isPhoneChannel,
   type ConversationIdentityRepository,
 } from "@/lib/messaging/conversation-identity";
 import { ensureLeadIdentity } from "@/lib/messaging/lead-identity";
-import { isSchemaNotReady } from "@/lib/messaging/errors";
+import { errorCode, isSchemaNotReady } from "@/lib/messaging/errors";
 import { notifyDeliveryArrived } from "@/lib/whatsapp/delivery-notify";
 import type { DeliveryNotifyResult } from "@/lib/whatsapp/delivery-notify";
 import type { ChannelAccount, ChannelKind, OutboundMessage } from "@/lib/messaging/types";
@@ -270,56 +275,131 @@ export interface InsertMessageResult {
   wasDuplicate: boolean;
 }
 
+/**
+ * Honest-attribution columns (S0/S5). `role` stays dual-written for backward
+ * compat; these columns carry the real direction/sender/delivery truth.
+ * Callers may override any field — the defaults derive from the legacy role.
+ */
+export interface MessageAttribution {
+  direction?: "inbound" | "outbound";
+  senderKind?: "customer" | "agent" | "operator";
+  senderRef?: string | null;
+  deliveryState?: "received" | "queued" | "sent" | "failed" | "imported";
+  providerConversationId?: string | null;
+  contentType?: "text" | "image" | "audio" | "document" | "video" | "system";
+}
+
+type MessageRole = "user" | "assistant" | "system" | "human";
+
+// Legacy role → canonical attribution. `user` is the only inbound role;
+// `human` (provider echo / operator reply) and `system` are business-side
+// outbound, so they map to operator/agent — never to customer.
+const ROLE_ATTRIBUTION: Record<MessageRole, MessageAttribution> = {
+  user: {
+    direction: "inbound",
+    senderKind: "customer",
+    deliveryState: "received",
+    contentType: "text",
+  },
+  assistant: {
+    direction: "outbound",
+    senderKind: "agent",
+    deliveryState: "sent",
+    contentType: "text",
+  },
+  human: {
+    direction: "outbound",
+    senderKind: "operator",
+    deliveryState: "sent",
+    contentType: "text",
+  },
+  system: {
+    direction: "outbound",
+    senderKind: "agent",
+    deliveryState: "sent",
+    contentType: "system",
+  },
+};
+
 // Insert a message into chat_messages table
 // Handles unique constraint violation on platformMessageId gracefully
 // (race condition from duplicate YCloud webhook calls)
 export async function insertMessage(
   conversationId: number,
-  role: "user" | "assistant" | "system" | "human",
+  role: MessageRole,
   content: string,
   contentAttributes?: MediaAttachment[],
   platformMessageId?: string,
-  channelAccountId?: number | null
+  channelAccountId?: number | null,
+  attribution?: MessageAttribution
 ): Promise<InsertMessageResult> {
   const preview = content.slice(0, 250);
 
-  let msg: { id: number };
+  const baseValues = {
+    conversationId,
+    role,
+    content,
+    contentAttributes: contentAttributes || [],
+    platformMessageId: platformMessageId || null,
+    channelAccountId: channelAccountId ?? null,
+  };
+  const defaults = ROLE_ATTRIBUTION[role];
+  const senderValues = {
+    direction: attribution?.direction ?? defaults.direction,
+    senderKind: attribution?.senderKind ?? defaults.senderKind,
+    senderRef: attribution?.senderRef ?? null,
+    deliveryState: attribution?.deliveryState ?? defaults.deliveryState,
+    providerConversationId: attribution?.providerConversationId ?? null,
+    contentType:
+      attribution?.contentType ??
+      contentAttributes?.[0]?.type ??
+      defaults.contentType,
+  };
+
+  let msg: { id: number } | undefined;
+
+  const insertValues = (
+    values: typeof baseValues & Partial<typeof senderValues>
+  ) =>
+    db.insert(chatMessages).values(values).returning({ id: chatMessages.id });
 
   try {
-    [msg] = await db
-      .insert(chatMessages)
-      .values({
-        conversationId,
-        role,
-        content,
-        contentAttributes: contentAttributes || [],
-        platformMessageId: platformMessageId || null,
-        channelAccountId: channelAccountId ?? null,
-      })
-      .returning({ id: chatMessages.id });
-  } catch (err: unknown) {
-    // P0001 / 23505 = unique_violation on (coalesce(channel_account_id, -1),
-    // platform_message_id). If this is a duplicate platformMessageId in THIS
-    // account's partition, return the existing message ID — another account's
-    // identical platform id lives in its own partition and must not match.
-    if (platformMessageId && (err as { code?: string } | null)?.code === "23505") {
-      const [existing] = await db
-        .select({ id: chatMessages.id })
-        .from(chatMessages)
-        .where(
-          and(
-            eq(chatMessages.platformMessageId, platformMessageId),
-            sql`coalesce(${chatMessages.channelAccountId}, -1) = coalesce(${sql.param(channelAccountId ?? null)}, -1)`
-          )
-        )
-        .limit(1);
-      if (existing) {
-        console.log(`[router] Duplicate platformMessageId ${platformMessageId} — returning existing msg ${existing.id}`);
-        return { id: existing.id, wasDuplicate: true };
+    [msg] = await insertValues({ ...baseValues, ...senderValues });
+  } catch (firstError: unknown) {
+    let lastError = firstError;
+    if (isSchemaNotReady(firstError)) {
+      // Positively identified un-migrated install: the S0 sender columns
+      // don't exist — retry the legacy role-only write, unchanged.
+      try {
+        [msg] = await insertValues(baseValues);
+      } catch (legacyError) {
+        lastError = legacyError;
       }
     }
-    // If it's NOT a duplicate on platformMessageId, re-throw
-    throw err;
+    if (!msg) {
+      // P0001 / 23505 = unique_violation on (coalesce(channel_account_id, -1),
+      // platform_message_id). If this is a duplicate platformMessageId in THIS
+      // account's partition, return the existing message ID — another account's
+      // identical platform id lives in its own partition and must not match.
+      if (platformMessageId && errorCode(lastError) === "23505") {
+        const [existing] = await db
+          .select({ id: chatMessages.id })
+          .from(chatMessages)
+          .where(
+            and(
+              eq(chatMessages.platformMessageId, platformMessageId),
+              sql`coalesce(${chatMessages.channelAccountId}, -1) = coalesce(${sql.param(channelAccountId ?? null)}, -1)`
+            )
+          )
+          .limit(1);
+        if (existing) {
+          console.log(`[router] Duplicate platformMessageId ${platformMessageId} — returning existing msg ${existing.id}`);
+          return { id: existing.id, wasDuplicate: true };
+        }
+      }
+      // If it's NOT a duplicate on platformMessageId, re-throw
+      throw lastError;
+    }
   }
 
   // Update conversation last message
@@ -741,55 +821,208 @@ export async function stampConversationThreadId(
   }
 }
 
-// Send outbound message via the correct channel
-export async function sendOutboundMessage(
-  conversationId: number,
-  content: string,
-  role: "assistant" | "human" = "human",
-  mediaUrl?: string,
-  mediaType?: "image" | "document"
+// ─── Outbound send (persist-before-send, S5 port) ────────────────────────────
+
+export interface SendOutboundOptions {
+  /**
+   * Authenticated operator id (session user id) stamped as `sender_ref` on
+   * operator replies — the transcript must distinguish a human reply from an
+   * AI one, which the legacy `human→assistant` role squash cannot express.
+   */
+  operatorRef?: string | null;
+}
+
+type TransportOutcome =
+  | { ok: true; platformMessageId: string }
+  | { ok: false; error: string; retryable: boolean };
+
+/**
+ * Marks the persisted fact after delivery: final state plus the provider's
+ * real platform id (stamping it is what lets a provider echo dedup against
+ * this row instead of persisting a second operator message). If the echo beat
+ * us to the id (23505 race), the echo row IS the same send — the pending
+ * op-reply row is folded into it rather than left next to it in the
+ * transcript. Any other failure degrades to state-only: the fact must never
+ * be left "queued" for a delivery that already resolved.
+ */
+async function stampDeliveryResult(
+  messageId: number,
+  outcome: TransportOutcome,
+  channelAccountId: number | null
 ): Promise<void> {
-  // Get conversation to know channel
-  const [conv] = await db
-    .select()
-    .from(conversations)
-    .where(eq(conversations.id, conversationId))
-    .limit(1);
+  const deliveryState = outcome.ok ? "sent" : "failed";
+  const platformMessageId =
+    outcome.ok && outcome.platformMessageId
+      ? outcome.platformMessageId
+      : undefined;
+  const stamp = (patch: Record<string, unknown>) =>
+    db.update(chatMessages).set(patch).where(eq(chatMessages.id, messageId));
 
-  if (!conv) throw new Error(`Conversation ${conversationId} not found`);
+  try {
+    await stamp({
+      deliveryState,
+      ...(platformMessageId ? { platformMessageId } : {}),
+    });
+    return;
+  } catch (error) {
+    if (isSchemaNotReady(error)) {
+      // Un-migrated install: no delivery_state column — stamp only the
+      // provider id; a 23505 still means the echo won and owns the fact.
+      if (platformMessageId) {
+        await stamp({ platformMessageId }).catch(async (legacyError) => {
+          if (errorCode(legacyError) === "23505") {
+            await foldIntoEcho(messageId, platformMessageId, channelAccountId);
+          }
+        });
+      }
+      return;
+    }
+    if (errorCode(error) === "23505" && platformMessageId) {
+      if (await foldIntoEcho(messageId, platformMessageId, channelAccountId)) {
+        return;
+      }
+    }
+    // State-only fallback — never leave a resolved send "queued".
+    await stamp({ deliveryState }).catch(() => {});
+  }
+}
 
-  const channel: ChannelKind = conv.channel || "whatsapp";
+/**
+ * A provider echo that already persisted the platform id in the same
+ * conversation/account partition IS this send — delete the pending row so the
+ * transcript keeps a single fact.
+ */
+async function foldIntoEcho(
+  messageId: number,
+  platformMessageId: string,
+  channelAccountId: number | null
+): Promise<boolean> {
+  try {
+    const [echo] = await db
+      .select({
+        id: chatMessages.id,
+        conversationId: chatMessages.conversationId,
+      })
+      .from(chatMessages)
+      .where(
+        and(
+          eq(chatMessages.platformMessageId, platformMessageId),
+          sql`coalesce(${chatMessages.channelAccountId}, -1) = coalesce(${sql.param(channelAccountId)}, -1)`
+        )
+      )
+      .limit(1);
+    const [pending] = await db
+      .select({ conversationId: chatMessages.conversationId })
+      .from(chatMessages)
+      .where(eq(chatMessages.id, messageId))
+      .limit(1);
+    if (echo && pending && echo.conversationId === pending.conversationId) {
+      await db
+        .delete(chatMessages)
+        .where(eq(chatMessages.id, messageId))
+        .catch(() => {});
+      return true;
+    }
+  } catch {
+    // Fold is best-effort; a miss leaves both rows (pre-S5 behavior).
+  }
+  return false;
+}
 
-  // S15 — three delivery surfaces, resolved in this order:
-  //   1. telegram conversations → internal bot (outside the provider model)
-  //   2. unbound whatsapp conversations → legacy credentials path, verbatim
-  //      (channel_accounts empty/unmigrated ⇒ identical behavior to before)
-  //   3. account-bound or non-whatsapp messenger conversations →
-  //      channel_accounts resolution + messenger.send({account}) — fail
-  //      closed: an unresolvable account or unregistered channel throws and
-  //      the caller surfaces it, never a silent drop or wrong-sender send.
+function buildOutboundMessage(
+  to: string,
+  content: string,
+  mediaUrl: string | undefined,
+  mediaType: "image" | "document" | undefined,
+  windowDecision: WindowSendDecision,
+  externalThreadId: string | null
+): OutboundMessage {
+  const idempotencyKey = `op-reply:${to}:${randomUUID()}`;
+  const msg: OutboundMessage =
+    windowDecision.kind === "template"
+      ? {
+          to,
+          type: "template",
+          template: windowDecision.template,
+          idempotencyKey,
+        }
+      : mediaUrl && mediaType
+        ? {
+            to,
+            type: mediaType,
+            mediaUrl,
+            text: content || undefined,
+            idempotencyKey,
+          }
+        : { to, type: "text", text: content || " ", idempotencyKey };
+  // Conversation-scoped providers (zernio) send into the stored thread;
+  // when it is absent the adapter opens a conversation to `to` instead.
+  if (externalThreadId) {
+    msg.providerConversationId = externalThreadId;
+  }
+  return msg;
+}
+
+/**
+ * Provider delivery for an already-persisted outbound fact. Three surfaces,
+ * same order as before S5:
+ *   1. telegram conversations → internal bot (outside the provider model)
+ *   2. unbound whatsapp conversations → legacy credentials path, verbatim
+ *      (channel_accounts empty/unmigrated ⇒ identical behavior to before)
+ *   3. account-bound or non-whatsapp messenger conversations →
+ *      channel_accounts resolution + messenger.send({account}) — fail
+ *      closed: an unresolvable account or unregistered channel is a
+ *      non-retryable outcome, never a silent drop or wrong-sender send.
+ */
+async function deliverOutbound(
+  conv: typeof conversations.$inferSelect,
+  channel: ChannelKind,
+  content: string,
+  mediaUrl: string | undefined,
+  mediaType: "image" | "document" | undefined,
+  windowDecision: WindowSendDecision
+): Promise<TransportOutcome> {
   if (channel === "telegram") {
     const { sendTelegramMessage, getTelegramConfigFromDB } = await import(
       "@/lib/telegram/bot"
     );
     const tgConfig = await getTelegramConfigFromDB();
     if (!tgConfig?.botToken || !conv.externalUserId) {
-      throw new Error(
-        `Conversation ${conversationId} has no resolvable Telegram bot/chat`
-      );
+      return {
+        ok: false,
+        error: `Conversation ${conv.id} has no resolvable Telegram bot/chat`,
+        retryable: false,
+      };
     }
-    await sendTelegramMessage(
+    const sent = await sendTelegramMessage(
       tgConfig.botToken,
       Number(conv.externalUserId),
-      content || (mediaUrl || "")
+      content || mediaUrl || ""
     );
-  } else if (channel === "whatsapp" && conv.channelAccountId == null) {
+    return sent.ok
+      ? { ok: true, platformMessageId: "" }
+      : {
+          ok: false,
+          error: sent.error ?? "telegram_send_failed",
+          retryable: false,
+        };
+  }
+
+  // Channels outside the messenger provider model can never send — the
+  // persisted fact flips to failed with a graceful unsupported marker.
+  if (channel === "reddit") {
+    return { ok: false, error: "channel_unsupported", retryable: false };
+  }
+
+  if (channel === "whatsapp" && conv.channelAccountId == null) {
     const { messenger } = await import("@/lib/messaging");
     const to = conv.customerPhone ?? conv.externalUserId ?? "";
     if (!to) {
-      throw new Error(
-        `Conversation ${conversationId} has no recipient address for WhatsApp`
-      );
+      return {
+        ok: false,
+        error: `Conversation ${conv.id} has no recipient address for WhatsApp`,
+        retryable: false,
+      };
     }
 
     // Unbound conversation: resolve the sender by phone/active account first.
@@ -801,76 +1034,187 @@ export async function sendOutboundMessage(
       resolveLegacyCredentials: resolveLegacyWhatsAppCredentials,
     });
     if (decision.kind === "fail") {
-      const error = new Error(
-        `Conversation ${conversationId} has no safe WhatsApp sender: ${decision.reason}`
-      ) as Error & { retryable?: boolean };
-      error.retryable = decision.retryable;
-      throw error;
+      return {
+        ok: false,
+        error: `Conversation ${conv.id} has no safe WhatsApp sender: ${decision.reason}`,
+        retryable: decision.retryable,
+      };
     }
 
-    const sendWithAccount = decision.kind === "account";
-    const options = sendWithAccount
-      ? { channel: "whatsapp" as const, account: decision.account }
-      : { credentials: decision.credentials };
-    if (mediaUrl && mediaType === "image") {
-      const res = await messenger.send(
-        { to, type: "image", mediaUrl, text: content || undefined },
-        options
-      );
-      if (!res.ok) throw new Error(res.error);
-    } else if (mediaUrl && mediaType === "document") {
-      const res = await messenger.send(
-        { to, type: "document", mediaUrl, text: content || undefined },
-        options
-      );
-      if (!res.ok) throw new Error(res.error);
-    } else {
-      const res = await messenger.send(
-        { to, type: "text", text: content || " " },
-        options
-      );
-      if (!res.ok) throw new Error(res.error);
+    const options =
+      decision.kind === "account"
+        ? { channel: "whatsapp" as const, account: decision.account }
+        : { credentials: decision.credentials };
+    const res = await messenger.send(
+      buildOutboundMessage(
+        to,
+        content,
+        mediaUrl,
+        mediaType,
+        windowDecision,
+        conv.externalThreadId
+      ),
+      options
+    );
+    if (!res.ok) {
+      return { ok: false, error: res.error, retryable: res.retryable };
     }
-  } else {
-    const { messenger } = await import("@/lib/messaging");
-    const {
-      resolveChannelAccount,
-      resolveChannelAccountById,
-    } = await import("@/lib/messaging");
-
-    const account = conv.channelAccountId != null
-      ? await resolveChannelAccountById(conv.channelAccountId)
-      : await resolveChannelAccount(channel);
-    if (!account) {
-      throw new Error(
-        conv.channelAccountId != null
-          ? `Channel account #${conv.channelAccountId} is not resolvable for conversation ${conversationId} (missing, inactive, or provider unregistered)`
-          : `No messaging provider registered for channel '${channel}'`
+    if (windowDecision.kind === "text" && !windowDecision.windowOpen) {
+      console.warn(
+        `[router] 24h window closed and wa_template_fallback is not configured — text send attempted, delivery may be rejected (conv ${conv.id})`
       );
     }
-    const to = conv.customerPhone ?? conv.externalUserId ?? "";
-    if (!to) {
-      throw new Error(
-        `Conversation ${conversationId} has no recipient address for channel '${channel}'`
-      );
-    }
-    const msg: OutboundMessage =
-      mediaUrl && mediaType
-        ? { to, type: mediaType, mediaUrl, text: content || undefined }
-        : { to, type: "text", text: content || " " };
-    // Conversation-scoped providers (zernio) send into the stored thread;
-    // when it is absent the adapter opens a conversation to `to` instead.
-    if (conv.externalThreadId) {
-      msg.providerConversationId = conv.externalThreadId;
-    }
-    const res = await messenger.send(msg, { channel, account });
-    if (!res.ok) throw new Error(res.error);
+    return { ok: true, platformMessageId: res.providerMessageId };
   }
 
-  // Save the outbound message with contentAttributes if media attached
+  const { messenger } = await import("@/lib/messaging");
+  const {
+    resolveChannelAccount,
+    resolveChannelAccountById,
+  } = await import("@/lib/messaging");
+
+  const account = conv.channelAccountId != null
+    ? await resolveChannelAccountById(conv.channelAccountId)
+    : await resolveChannelAccount(channel);
+  if (!account) {
+    return {
+      ok: false,
+      error:
+        conv.channelAccountId != null
+          ? `Channel account #${conv.channelAccountId} is not resolvable for conversation ${conv.id} (missing, inactive, or provider unregistered)`
+          : `No messaging provider registered for channel '${channel}'`,
+      retryable: false,
+    };
+  }
+  // messenger routes through the account's own provider — a conversation for
+  // channel X bound to an account whose channel is Y is a provisioning bug:
+  // drop it, never send on the wrong surface.
+  if (account.channel !== channel) {
+    return { ok: false, error: "account_provider_mismatch", retryable: false };
+  }
+  const to = conv.customerPhone ?? conv.externalUserId ?? "";
+  if (!to) {
+    return {
+      ok: false,
+      error: `Conversation ${conv.id} has no recipient address for channel '${channel}'`,
+      retryable: false,
+    };
+  }
+  const msg = buildOutboundMessage(
+    to,
+    content,
+    mediaUrl,
+    mediaType,
+    windowDecision,
+    conv.externalThreadId
+  );
+  const res = await messenger.send(msg, { channel, account });
+  if (!res.ok) {
+    return { ok: false, error: res.error, retryable: res.retryable };
+  }
+  if (windowDecision.kind === "text" && !windowDecision.windowOpen) {
+    console.warn(
+      `[router] 24h window closed and wa_template_fallback is not configured — text send attempted, delivery may be rejected (conv ${conv.id})`
+    );
+  }
+  return { ok: true, platformMessageId: res.providerMessageId };
+}
+
+// Send outbound message via the correct channel. The outbound fact is
+// persisted BEFORE the provider call (delivery_state 'queued' → 'sent' /
+// 'failed'): a reply that cannot be persisted is never sent, and a crash
+// never leaves an invisible reply.
+export async function sendOutboundMessage(
+  conversationId: number,
+  content: string,
+  role: "assistant" | "human" = "human",
+  mediaUrl?: string,
+  mediaType?: "image" | "document",
+  options: SendOutboundOptions = {}
+): Promise<void> {
+  // Get conversation to know channel
+  const [conv] = await db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.id, conversationId))
+    .limit(1);
+
+  if (!conv) throw new Error(`Conversation ${conversationId} not found`);
+
+  const channel: ChannelKind = conv.channel || "whatsapp";
+  const mediaSend = Boolean(mediaUrl && mediaType);
+
+  // F-02 gate (whatsapp text sends): outside the 24h customer window Meta
+  // rejects free-form text — the configured fallback template goes out
+  // instead. Decided BEFORE persisting so the fact records how the send
+  // actually went out. A decision failure degrades to "window open" — never
+  // blocks a reply. Media sends keep their historical ungated behavior.
+  const windowDecision: WindowSendDecision =
+    channel === "whatsapp" && !mediaSend
+      ? await decideCustomerWindowSend(conversationId, {
+          channelAccountId: conv.channelAccountId,
+        }).catch(() => ({ kind: "text", windowOpen: true }) as WindowSendDecision)
+      : { kind: "text", windowOpen: true };
+
+  // Persist the outbound fact first (queued). A template send cannot carry
+  // the operator's literal text — the transcript records the template name
+  // so the row never pretends the text itself was delivered.
   const dbRole = role === "human" ? "assistant" : role;
-  const attrs = mediaUrl && mediaType ? [{ type: mediaType, url: mediaUrl }] : undefined;
-  await insertMessage(conversationId, dbRole, content || "[Media]", attrs);
+  const persisted = await insertMessage(
+    conversationId,
+    dbRole,
+    windowDecision.kind === "template"
+      ? `[template:${windowDecision.template.name}] ${content || ""}`.trim()
+      : content || "[Media]",
+    mediaSend
+      ? [{ type: mediaType as "image" | "document", url: mediaUrl as string }]
+      : undefined,
+    `op-reply:${conversationId}:${randomUUID()}`,
+    conv.channelAccountId ?? null,
+    {
+      direction: "outbound",
+      senderKind: role === "human" ? "operator" : "agent",
+      senderRef:
+        role === "human"
+          ? options.operatorRef ?? "operator"
+          : options.operatorRef ?? "agent",
+      deliveryState: "queued",
+      providerConversationId: conv.externalThreadId ?? null,
+      contentType: mediaSend ? mediaType : "text",
+    }
+  );
+
+  let outcome: TransportOutcome;
+  try {
+    outcome = await deliverOutbound(
+      conv,
+      channel,
+      content,
+      mediaUrl,
+      mediaType,
+      windowDecision
+    );
+  } catch (error) {
+    // Resolution-layer throws (agent-config/credential errors) surface as a
+    // transport failure — the persisted fact still flips to failed.
+    outcome = {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      retryable:
+        (error as { retryable?: boolean } | null)?.retryable === true,
+    };
+  }
+  await stampDeliveryResult(
+    persisted.id,
+    outcome,
+    conv.channelAccountId ?? null
+  );
+
+  if (!outcome.ok) {
+    const error = new Error(outcome.error) as Error & { retryable?: boolean };
+    error.retryable = outcome.retryable;
+    throw error;
+  }
 
   // If a human sent this from the admin panel, set humanOverrideUntil
   if (role === "human") {
