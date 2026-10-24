@@ -425,26 +425,24 @@ describe("H3 — conversation-context writes stamp leads.channel_account_id", ()
 });
 
 describe("M1 — delivery notification resolves the conversation's sender", () => {
-  it("bound conversation + blank scoped key fails explicitly, never global/env", async () => {
+  it("bound conversation + blank scoped key inherits the global credential (S2)", async () => {
+    // S2/R4-MED-2: the account-scoped row only carries scope membership —
+    // its blank ycloudApiKey inherits the global row's key instead of
+    // failing closed (pre-S2 this case degraded to a delivery warn).
     seedAccountRow(20);
     seedScopedConfig(20, 20, "");
     seedConversation(201, "+15550201", 20);
     fake.rows("leads").push({ id: 50, phone: "15550201", channelAccountId: 20, status: "contacted" });
     const sendBase = sends.length;
-    const warnBase = warns.length;
 
     const text = await runCreateOrder(201, "+15550201");
     assert.match(text, /Pedido #/);
-    await until(
-      () =>
-        sends.length > sendBase ||
-        warns.slice(warnBase).some((w) => w.includes("[delivery]"))
-    );
-    const deliveryWarn = warns
-      .slice(warnBase)
-      .find((w) => w.includes("[delivery]"));
-    assert.match(deliveryWarn ?? "", /not resolvable|no usable ycloudApiKey/);
-    assert.equal(sends.length, sendBase);
+    await until(() => sends.length > sendBase);
+    const sent = sends[sendBase];
+    assert.equal(sent?.to, "+15550004444");
+    const options = sent?.options as { channel?: string; account?: { id?: string } };
+    assert.equal(options?.channel, "whatsapp");
+    assert.equal(options?.account?.id, "20");
   });
 
   it("bound conversation + valid scoped key sends as that account", async () => {

@@ -113,8 +113,11 @@ describe("legacy null-account identity fallback", () => {
   });
 });
 
-describe("scoped credential fail-closed", () => {
-  it("does not fall back to the global/env key when a scoped account key is blank", async () => {
+describe("scoped credential chain (S2)", () => {
+  it("a scoped row blank on credentials inherits the parent's per-field", async () => {
+    // S2/R4-MED-2: the account row below only toggles scope membership —
+    // its blank credential fields inherit from the global row instead of
+    // hiding it (pre-S2 a blank scoped key failed closed here).
     fake.rows("channel_accounts").push({
       id: 2,
       tenantId: "default",
@@ -145,9 +148,46 @@ describe("scoped credential fail-closed", () => {
     const { resolveChannelAccountByIdStrict } =
       require("./accounts") as typeof import("./accounts");
     const resolution = await resolveChannelAccountByIdStrict(2);
+    assert.equal(resolution.kind, "resolved");
+    if (resolution.kind === "resolved") {
+      assert.equal(
+        resolution.account.credentials.apiKey,
+        "fake-ycloud-key",
+        "blank account-scope key inherits the global row's key"
+      );
+      assert.equal(
+        resolution.account.credentials.webhookSecret,
+        ROUTE_SECRET,
+        "blank account-scope secret inherits the global row's secret"
+      );
+    }
+  });
+
+  it("fails closed when no scope and no env supplies the send credential", async () => {
+    fake.rows("channel_accounts").push({
+      id: 3,
+      tenantId: "default",
+      provider: "kapso",
+      channel: "whatsapp",
+      providerAccountId: "15550003333",
+      senderAddress: "+15550003333",
+      displayName: null,
+      credentialsRef: "agent_config",
+      agentConfigId: null,
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    delete process.env.KAPSO_API_KEY;
+    delete process.env.KAPSO_ACCESS_TOKEN;
+
+    const { resolveChannelAccountByIdStrict } =
+      require("./accounts") as typeof import("./accounts");
+    const resolution = await resolveChannelAccountByIdStrict(3);
     assert.equal(resolution.kind, "mismatch");
     if (resolution.kind === "mismatch") {
-      assert.match(resolution.reason, /no usable ycloudApiKey/);
+      assert.match(resolution.reason, /no usable credential/);
+      assert.match(resolution.reason, /kapso/);
     }
   });
 });

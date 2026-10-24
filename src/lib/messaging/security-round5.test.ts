@@ -319,7 +319,7 @@ describe("MEDIUM — env/unknown credentialsRef fail closed", () => {
     const resolution = await resolveChannelAccountByIdStrict(90, "ycloud");
     assert.equal(resolution.kind, "mismatch");
     if (resolution.kind === "mismatch") {
-      assert.match(resolution.reason, /no usable ycloudApiKey/);
+      assert.match(resolution.reason, /no usable credential/);
       assert.match(resolution.reason, /empty credentials/);
     }
   });
