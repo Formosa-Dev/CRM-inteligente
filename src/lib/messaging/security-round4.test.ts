@@ -251,9 +251,9 @@ describe("H2 — account-scoped inbound keys", () => {
     assert.match(src, /accountScopedInboundKey\(channelAccountId, phone\)/);
     assert.match(src, /accountScopedInboundKey\(channelAccountId, customerPhone\)/);
     assert.match(src, /checkRateLimit\(`wa-inbound:\$\{phoneKey\}`/);
-    assert.match(src, /BufferManager\.isContentDuplicate\("whatsapp", customerKey/);
-    assert.match(src, /BufferManager\.enqueue\("whatsapp", customerKey/);
-    assert.match(src, /scheduleBufferProcessing\("whatsapp", customerKey/);
+    assert.match(src, /BufferManager\.isContentDuplicate\(channel, customerKey/);
+    assert.match(src, /BufferManager\.enqueue\(channel, customerKey/);
+    assert.match(src, /scheduleBufferProcessing\(channel, customerKey/);
   });
 });
 

@@ -70,6 +70,18 @@ import type {
 } from "../types";
 
 const API_BASE = "https://zernio.com/api/v1";
+/**
+ * Hosts a zernio-resolved media URL may legitimately point at: the re-mint
+ * endpoint lives on zernio.com; minted/download links may land on Meta's
+ * CDN family. Fed to the downloader via `extraAllowedDomains` — the
+ * anchored check lives in `@/lib/media/inbound`.
+ */
+export const ZERNIO_MEDIA_DOMAINS = [
+  "zernio.com",
+  "lookaside.fbsbx.com",
+  "cdninstagram.com",
+  "fbcdn.net",
+] as const;
 const SIGNATURE_HEADERS = ["x-zernio-signature", "x-late-signature"];
 const EVENT_ID_HEADERS = ["x-zernio-event-id", "x-late-event-id"];
 const EVENT_NAME_HEADER = "x-zernio-event";
